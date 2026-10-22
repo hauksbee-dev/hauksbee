@@ -2,3 +2,6219 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP388: Bosch Sensortec digital barometric pressure sensor, 10-pin metal-lid
+# LGA 2.0 x 2.0 x 0.75 mm.
+#
+# Source: Bosch Sensortec "BMP388 Datasheet", document BST-BMP388-DS001-07,
+#   revision 1.7, November 2020 (technical reference code 0 273 300 511). Page
+#   numbers below are the printed page numbers. Table 2 (pp.7-8) operating
+#   conditions, Table 3 (p.9) absolute maximum ratings, Table 21 (p.26) current
+#   consumption, Table 24 (pp.30-31) memory map, Section 5.1 (p.40) interface
+#   selection, Section 5.2 (p.40-41) I2C address, Table 47 (p.43) interface
+#   parameters, Table 50 (p.46) pin description.
+#
+# LEVELS: Table 47 prints Vil, Vih, Vol and Voh as fractions of VDDIO and never
+# in volts. The volts below are those fractions evaluated at the Table 2 typical
+# VDDIO = 1.8 V (the printed fractions are kept as characteristic records). They
+# are wrong by the ratio on a board with another interface rail; Vol and Voh are
+# printed at a test current (3 mA, 1 mA) without a VDDIO, so they are also
+# evaluated at 1.8 V and are rows of a loaded level (the loader turns them into the
+# rail behind an output resistance, the rail ASSUMED because no light-load row
+# is printed).
+#
+# THERMAL: the datasheet prints no theta_JA / theta_JC for the LGA package
+# (searched Tables 2, 3 and Section 7); the field is left ABSENT.
+#
+# BUS MODEL: I2C only (CSB high selects I2C, SDO selects 0x76 or 0x77). The
+# registers are the full Table 24 map except the NVM trimming block 0x31-0x45
+# (device specific, not printed) and the reserved gaps, which read 0xFF. The
+# data registers answer from two RAW 24-bit ADC count inputs (press_raw,
+# temp_raw), because the printed conversion needs the unprinted per-device
+# trimming coefficients; with the enables clear they read the Table 24 reset
+# value 0x800000 (output skipped).
+#
+# Renode (MIT, Antmicro) was not consulted for this part: the register map and
+# every value are from the datasheet only.
+[[models]]
+id = "bmp388"
+kind = "digital"
+description = "Bosch BMP388 barometric pressure sensor, 10-pin LGA (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw pressure/temperature data); no compensation"
+
+[models.match]
+# Bare part number; the Bosch reference code 0 273 300 511 is not a value
+# spelling. BMP390 (chip id 0x60, different die), BMP280, BMP581 and BMP180 are
+# different parts and are excluded by the anchored number.
+value_re = "(?i)^BMP388$"
+
+[models.params]
+voh   = { min = 1.44, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOH = 1 mA (SDI, SDO, INT); 0.8 x VDDIO", basis = "Table 47 p.43, Voh 0.8 x VDDIO min; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vol   = { max = 0.36, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOL = 3 mA (SDI, SDO, INT); 0.2 x VDDIO", basis = "Table 47 p.43, Vol 0.2 x VDDIO max; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vih   = 1.26     # Table 47 p.43, Vih 0.7 x VDDIO min (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+vil   = 0.45     # Table 47 p.43, Vil 0.25 x VDDIO max (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+supply_static_ua = 46.4    # Table 21 p.26, highest resolution (x32 / x2) at 1 Hz forced mode, typ; the
+                           # largest duty-cycled figure tabulated (ultra low power is 3.4 uA). The
+                           # conversion peak is 700 uA typ / 800 uA max (Table 2) and is not carried.
+supply_pin = "10"          # VDD
+gnd_pin    = "3"           # VSS
+
+[models.pins]
+# Table 50 Pin description, all 10 pads. SCK/SDI use the bus vocabulary.
+"1"  = "vddio"   # digital interface supply, 1.2 to 3.6 V
+"2"  = "scl"     # SCK: I2C SCL / SPI SCK
+"3"  = "gnd"
+"4"  = "sda"     # SDI: I2C SDA / SPI SDI (3-wire SDI/SDO)
+"5"  = "sdo"     # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6"  = "csb"     # chip select; VDDIO selects I2C (Section 5.1)
+"7"  = "int"     # interrupt output
+"8"  = "gnd2"
+"9"  = "gnd3"
+"10" = "vdd"     # analog supply, 1.65 to 3.6 V
+
+[models.ratings]
+# Table 3 p.9: VDD and VDDIO pins -0.3 to 3.8 V; interface pins Vss -0.3 V to
+# VDDIO + 0.3 V; storage -45 to +85 C; ESD HBM class 2 (2 kV).
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 3.8
+basis = "Bosch BST-BMP388-DS001-07, Table 2 p.7 Sensor supply voltage VDD row (ripple max 50 mVpp); Table 3 p.9 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 3.8
+basis = "Bosch BST-BMP388-DS001-07, Table 2 p.7 Interface supply voltage VDDIO row; Table 3 p.9 supply pin maximum"
+
+# Section 5.1 (p.40): "If CSB is connected to VDDIO, the I2C interface is
+# active." Section 5.2 (p.40): SDO to GND gives 1110110 (0x76), SDO to VDDIO
+# gives 1110111 (0x77); "The SDO pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BMP388"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW 24-bit ADC counts. The datasheet's compensation needs the per-device NVM
+# trimming coefficients (Table 23, registers 0x31-0x45) which are not printed, so
+# the registers report the uncompensated counts. 8388608 = 0x800000 is the Table
+# 24 reset value of DATA_2 / DATA_5 (output skipped).
+[[sensor.input]]
+name = "press_raw"
+default = 8388608.0
+
+[[sensor.input]]
+name = "temp_raw"
+default = 8388608.0
+
+# Table 24 memory map (pp.30-31), reset values as printed.
+# 0x00 CHIP_ID, reset 0x50.
+[[sensor.register]]
+addr = 0x00
+const = [0x50]
+
+# 0x02 ERR_REG, reset 0x00 (fatal_err, cmd_err, conf_err clear).
+[[sensor.register]]
+addr = 0x02
+const = [0x00]
+
+# 0x03 STATUS (Table 27 p.32): cmd_rdy bit 4 (1 = command decoder ready), drdy_press
+# bit 5, drdy_temp bit 6. Table 24 prints the reset value 0x00 for the instant before
+# the decoder is ready; an idle device reads cmd_rdy = 1, so 0x10 is carried (ASSUMED
+# from the Table 27 bit meaning). The data-ready bits are set while a measurement mode
+# is selected and the channel is enabled; conversion time and clear-on-read are not
+# modelled.
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "16 + if(mode > 0, 32 * press_en + 64 * temp_en, 0)"
+
+# 0x04-0x06 DATA_0..DATA_2 pressure (XLSB, LSB, MSB), 0x07-0x09 DATA_3..DATA_5
+# temperature. Reset 00 00 80 / 00 00 80.
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "if(press_en > 0, press_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 65536), 128)"
+
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "if(temp_en > 0, temp_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 65536), 128)"
+
+# 0x0C-0x0E SENSORTIME_0..2, reset 0x00 (the free-running counter is not modelled).
+[[sensor.register]]
+addr = 0x0C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0E
+const = [0x00]
+
+# 0x10 EVENT, reset 0x01 (por_detected after power-up).
+[[sensor.register]]
+addr = 0x10
+const = [0x01]
+
+# 0x11 INT_STATUS, 0x12 FIFO_LENGTH_0, 0x13 FIFO_LENGTH_1, 0x14 FIFO_DATA: reset 0x00
+# (FIFO empty; the FIFO is not modelled).
+[[sensor.register]]
+addr = 0x11
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x12
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x13
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x14
+const = [0x00]
+
+# 0x15 FIFO_WTM_0, reset 0x01.
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "fifo_wtm_0"
+default = 1.0
+
+# 0x16 FIFO_WTM_1, reset 0x00.
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "fifo_wtm_1"
+default = 0.0
+
+# 0x17 FIFO_CONFIG_1, reset 0x02.
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "fifo_config_1"
+default = 2.0
+
+# 0x18 FIFO_CONFIG_2, reset 0x02.
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "fifo_config_2"
+default = 2.0
+
+# 0x19 INT_CTRL, reset 0x02 (int_level high-active bit 1 per the reset value).
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "int_ctrl"
+default = 2.0
+
+# 0x1A IF_CONF, reset 0x00 (spi3 bit 0, i2c_wdt_en bit 1, i2c_wdt_sel bit 2).
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "if_conf"
+default = 0.0
+
+# 0x1B PWR_CTRL, reset 0x00: press_en bit 0, temp_en bit 1, mode bits 5:4
+# (00 sleep, 01 and 10 forced, 11 normal).
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "pwr_ctrl"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "press_en"
+bits = [0, 0]
+
+[[sensor.write_register.field]]
+name = "temp_en"
+bits = [1, 1]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [5, 4]
+
+# 0x1C OSR, reset 0x02: osr_p bits 2:0, osr_t bits 5:3.
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "osr"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "osr_p"
+bits = [2, 0]
+
+[[sensor.write_register.field]]
+name = "osr_t"
+bits = [5, 3]
+
+# 0x1D ODR, reset 0x00: odr_sel bits 4:0.
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "odr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "odr_sel"
+bits = [4, 0]
+
+# 0x1F CONFIG, reset 0x00: iir_filter bits 3:1.
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "iir_filter"
+bits = [3, 1]
+
+# 0x7E CMD, reset 0x00 (write-only; the soft-reset and fifo_flush commands are not modelled).
+[[sensor.write_register]]
+addr = 0x7E
+encoding = "u8"
+store = "cmd"
+default = 0.0
+
+# Readback of the stored write registers: a read returns the last value written (or
+# the reset value before any write), as the register map's R/W registers do.
+[[sensor.register]]
+addr = 0x15
+encoding = "u8"
+expr = "fifo_wtm_0"
+
+[[sensor.register]]
+addr = 0x16
+encoding = "u8"
+expr = "fifo_wtm_1"
+
+[[sensor.register]]
+addr = 0x17
+encoding = "u8"
+expr = "fifo_config_1"
+
+[[sensor.register]]
+addr = 0x18
+encoding = "u8"
+expr = "fifo_config_2"
+
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "int_ctrl"
+
+[[sensor.register]]
+addr = 0x1A
+encoding = "u8"
+expr = "if_conf"
+
+[[sensor.register]]
+addr = 0x1B
+encoding = "u8"
+expr = "pwr_ctrl"
+
+[[sensor.register]]
+addr = 0x1C
+encoding = "u8"
+expr = "osr"
+
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "odr"
+
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "config"
+
+[[sensor.register]]
+addr = 0x7E
+encoding = "u8"
+expr = "cmd"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.65   # Table 2 p.7, VDD min
+idle_a = 0.0000464            # Table 21 p.26, highest resolution at 1 Hz forced, typ
+read_a = 0.0000464
+write_a = 0.0000464
+low_power_a = 0.000002        # Table 2 p.7, IDD,sleep typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_pressure_temperature_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "nvm_trimming_coefficients", "compensated_pressure_temperature", "forced_mode_return_to_sleep", "data_ready_clear_on_read", "measurement_timing", "fifo", "interrupt_engine", "soft_reset_command", "sensor_time_counter", "iir_filter", "conversion_peak_current", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp388-ds001.pdf"
+title = "Bosch Sensortec BMP388 Datasheet, BST-BMP388-DS001-07, revision 1.7, November 2020"
+locator = "Table 2 pp.7-8; Table 3 p.9; Table 21 p.26; Table 24 memory map pp.30-31; Table 27 p.32; Sections 5.1-5.2 pp.40-41; Table 47 p.43; Table 50 Pin description p.46"
+sha256 = "1ab21c90aaf15542751be6b970d53dc57893a4ea948f45f9fe96e844789fdec2"
+
+[[models.source.pinout]]
+package = "LGA-10 2.0 x 2.0 mm metal lid"
+pins = { "1" = "VDDIO", "2" = "SCK", "3" = "VSS", "4" = "SDI", "5" = "SDO", "6" = "CSB", "7" = "INT", "8" = "VSS", "9" = "VSS", "10" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil input low level (SCK, SDI, CSB)"
+max = 0.25
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 47 p.43, 0.25 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih input high level (SCK, SDI, CSB)"
+min = 0.7
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 47 p.43, 0.7 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol output low level (SDI, SDO, INT)"
+max = 0.2
+unit = "VDDIO"
+conditions = "IOL = 3 mA"
+basis = "Table 47 p.43, 0.2 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDI, SDO, INT)"
+min = 0.8
+unit = "VDDIO"
+conditions = "IOH = 1 mA"
+basis = "Table 47 p.43, 0.8 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rcsb CSB internal pull-up to VDDIO"
+min = 75
+typ = 100
+max = 125
+unit = "kOhm"
+conditions = "internal pull-up resistance to VDDIO"
+basis = "Table 47 p.43"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % rel. H."
+basis = "Table 3 p.9"
+
+[[models.source.characteristic]]
+parameter = "Ipeak supply current during pressure measurement"
+typ = 700
+max = 800
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDT supply current during temperature measurement"
+typ = 300
+max = 400
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 2 p.8"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP390: Bosch Sensortec digital barometric pressure sensor, 10-pin metal-lid
+# LGA 2.0 x 2.0 x 0.75 mm. Same pad order and I2C addressing as the BMP388 but a
+# different die (CHIP_ID 0x60, REV_ID register 0x01, short_in bit in CONFIG),
+# tighter supply absolute maximum (3.6 V) and different electrical figures.
+#
+# Source: Bosch Sensortec "BMP390 Datasheet", document BST-BMP390-DS002-07,
+#   revision 1.7, March 2021 (technical reference code 0 273 017 014). Page
+#   numbers are the printed page numbers. Table 2 (pp.7-8), Table 3 (p.9),
+#   Table 22 (p.26) current consumption, memory map (pp.30-31), Table 49 (p.43)
+#   interface parameters, Table 52 (p.46) pin description.
+#
+# Levels, thermal and the bus model follow the BMP388 notes above: fractions of
+# VDDIO evaluated at the Table 2 typical 1.8 V; no theta_JA printed (left absent);
+# I2C only; raw 24-bit count inputs because the NVM trimming block is unprinted.
+# Renode was not consulted; every value is from the datasheet.
+[[models]]
+id = "bmp390"
+kind = "digital"
+description = "Bosch BMP390 barometric pressure sensor, 10-pin LGA (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw pressure/temperature data); no compensation"
+
+[models.match]
+value_re = "(?i)^BMP390$"
+
+[models.params]
+voh   = { min = 1.44, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOH = 1 mA (SDI, SDO, INT); 0.8 x VDDIO", basis = "Table 49 p.43, Voh 0.8 x VDDIO min; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vol   = { max = 0.36, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOL = 3 mA (SDI, SDO, INT); 0.2 x VDDIO", basis = "Table 49 p.43, Vol 0.2 x VDDIO max; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vih   = 1.26     # Table 49 p.43, Vih 0.7 x VDDIO min (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+vil   = 0.45     # Table 49 p.43, Vil 0.25 x VDDIO max (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+supply_static_ua = 46.4    # Table 22 p.26, highest resolution (x32 / x2) at 1 Hz forced mode, typ; the
+                           # largest duty-cycled figure tabulated (ultra low power is 3.2 uA). The
+                           # conversion peak is 660 uA typ / 730 uA max (Table 2) and is not carried.
+supply_pin = "10"          # VDD
+gnd_pin    = "3"           # VSS
+
+[models.pins]
+# Table 52 Pin description, all 10 pads (same as the BMP388).
+"1"  = "vddio"   # digital interface supply, 1.2 to 3.6 V
+"2"  = "scl"     # SCK: I2C SCL / SPI SCK
+"3"  = "gnd"
+"4"  = "sda"     # SDI: I2C SDA / SPI SDI (3-wire SDI/SDO)
+"5"  = "sdo"     # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6"  = "csb"     # chip select; VDDIO selects I2C
+"7"  = "int"     # interrupt output
+"8"  = "gnd2"
+"9"  = "gnd3"
+"10" = "vdd"     # analog supply, 1.65 to 3.6 V
+
+[models.ratings]
+# Table 3 p.9: VDD and VDDIO pins -0.3 to 3.6 V; interface pins Vss -0.3 V to
+# VDDIO + 0.3 V; storage -45 to +85 C; ESD HBM class 2 (2 kV).
+max_voltage_v = 3.6
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 3.6
+basis = "Bosch BST-BMP390-DS002-07, Table 2 p.7 Sensor supply voltage VDD row (ripple max 50 mVpp); Table 3 p.9 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 3.6
+basis = "Bosch BST-BMP390-DS002-07, Table 2 p.7 Interface supply voltage VDDIO row; Table 3 p.9 supply pin maximum"
+
+# Sections 5.1 and 5.2 (pp.40-41): CSB to VDDIO selects I2C; SDO to GND gives
+# 0x76, SDO to VDDIO gives 0x77; SDO cannot be left floating.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BMP390"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW 24-bit ADC counts (see the BMP388 note: the trimming block is unprinted).
+# 8388608 = 0x800000, the Table 25 reset value of DATA_2 / DATA_5.
+[[sensor.input]]
+name = "press_raw"
+default = 8388608.0
+
+[[sensor.input]]
+name = "temp_raw"
+default = 8388608.0
+
+# Memory map (pp.30-31), reset values as printed.
+# 0x00 CHIP_ID, reset 0x60.
+[[sensor.register]]
+addr = 0x00
+const = [0x60]
+
+# 0x01 REV_ID, reset 0x01 (rev_id_major / rev_id_minor).
+[[sensor.register]]
+addr = 0x01
+const = [0x01]
+
+# 0x02 ERR_REG, reset 0x00.
+[[sensor.register]]
+addr = 0x02
+const = [0x00]
+
+# 0x03 STATUS: cmd_rdy bit 4, drdy_press bit 5, drdy_temp bit 6. The memory map prints the
+# reset value 0x00 for the instant before the decoder is ready; an idle device reads
+# cmd_rdy = 1, so 0x10 is carried (ASSUMED from the bit meaning). Data-ready bits follow the
+# channel enables while a measurement mode is selected.
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "16 + if(mode > 0, 32 * press_en + 64 * temp_en, 0)"
+
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "if(press_en > 0, press_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 65536), 128)"
+
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "if(temp_en > 0, temp_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 65536), 128)"
+
+# 0x0C-0x0E SENSORTIME_0..2, reset 0x00 (counter not modelled).
+[[sensor.register]]
+addr = 0x0C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0E
+const = [0x00]
+
+# 0x10 EVENT, reset 0x01 (por_detected).
+[[sensor.register]]
+addr = 0x10
+const = [0x01]
+
+# 0x11 INT_STATUS, 0x12-0x13 FIFO_LENGTH, 0x14 FIFO_DATA: reset 0x00 (FIFO not modelled).
+[[sensor.register]]
+addr = 0x11
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x12
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x13
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x14
+const = [0x00]
+
+# 0x15 FIFO_WTM_0 reset 0x01; 0x16 FIFO_WTM_1 reset 0x00; 0x17 FIFO_CONFIG_1 reset 0x02;
+# 0x18 FIFO_CONFIG_2 reset 0x02; 0x19 INT_CTRL reset 0x02; 0x1A IF_CONF reset 0x00.
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "fifo_wtm_0"
+default = 1.0
+
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "fifo_wtm_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "fifo_config_1"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "fifo_config_2"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "int_ctrl"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "if_conf"
+default = 0.0
+
+# 0x1B PWR_CTRL, reset 0x00: press_en bit 0, temp_en bit 1, mode bits 5:4.
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "pwr_ctrl"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "press_en"
+bits = [0, 0]
+
+[[sensor.write_register.field]]
+name = "temp_en"
+bits = [1, 1]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [5, 4]
+
+# 0x1C OSR, reset 0x02: osr_p bits 2:0, osr_t bits 5:3.
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "osr"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "osr_p"
+bits = [2, 0]
+
+[[sensor.write_register.field]]
+name = "osr_t"
+bits = [5, 3]
+
+# 0x1D ODR, reset 0x00: odr_sel bits 4:0.
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "odr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "odr_sel"
+bits = [4, 0]
+
+# 0x1F CONFIG, reset 0x00: iir_filter bits 3:1, short_in bit 0.
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "iir_filter"
+bits = [3, 1]
+
+[[sensor.write_register.field]]
+name = "short_in"
+bits = [0, 0]
+
+# 0x7E CMD, reset 0x00 (commands not modelled).
+[[sensor.write_register]]
+addr = 0x7E
+encoding = "u8"
+store = "cmd"
+default = 0.0
+
+# Readback of the stored write registers: a read returns the last value written (or
+# the reset value before any write), as the register map's R/W registers do.
+[[sensor.register]]
+addr = 0x15
+encoding = "u8"
+expr = "fifo_wtm_0"
+
+[[sensor.register]]
+addr = 0x16
+encoding = "u8"
+expr = "fifo_wtm_1"
+
+[[sensor.register]]
+addr = 0x17
+encoding = "u8"
+expr = "fifo_config_1"
+
+[[sensor.register]]
+addr = 0x18
+encoding = "u8"
+expr = "fifo_config_2"
+
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "int_ctrl"
+
+[[sensor.register]]
+addr = 0x1A
+encoding = "u8"
+expr = "if_conf"
+
+[[sensor.register]]
+addr = 0x1B
+encoding = "u8"
+expr = "pwr_ctrl"
+
+[[sensor.register]]
+addr = 0x1C
+encoding = "u8"
+expr = "osr"
+
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "odr"
+
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "config"
+
+[[sensor.register]]
+addr = 0x7E
+encoding = "u8"
+expr = "cmd"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.65   # Table 2 p.7, VDD min
+idle_a = 0.0000464            # Table 22 p.26, highest resolution at 1 Hz forced, typ
+read_a = 0.0000464
+write_a = 0.0000464
+low_power_a = 0.0000014       # Table 2 p.7, IDDSL typ at VDD = VDDIO = 1.8 V
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_pressure_temperature_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "nvm_trimming_coefficients", "compensated_pressure_temperature", "forced_mode_return_to_sleep", "data_ready_clear_on_read", "measurement_timing", "fifo", "interrupt_engine", "soft_reset_command", "sensor_time_counter", "iir_filter", "conversion_peak_current", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp390-ds002.pdf"
+title = "Bosch Sensortec BMP390 Datasheet, BST-BMP390-DS002-07, revision 1.7, March 2021"
+locator = "Table 2 pp.7-8; Table 3 p.9; Table 22 p.26; memory map pp.30-31; Sections 5.1-5.2 pp.40-41; Table 49 p.43; Table 52 Pin description p.46"
+sha256 = "8dcf0f74449cb1627e865c7f24d328b76c204d8b9621091ede8c6869fb393e48"
+
+[[models.source.pinout]]
+package = "LGA-10 2.0 x 2.0 mm metal lid"
+pins = { "1" = "VDDIO", "2" = "SCK", "3" = "VSS", "4" = "SDI", "5" = "SDO", "6" = "CSB", "7" = "INT", "8" = "VSS", "9" = "VSS", "10" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil input low level (SCK, SDI, CSB)"
+max = 0.25
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 49 p.43, 0.25 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih input high level (SCK, SDI, CSB)"
+min = 0.7
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 49 p.43, 0.7 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol output low level (SDI, SDO, INT)"
+max = 0.2
+unit = "VDDIO"
+conditions = "IOL = 3 mA"
+basis = "Table 49 p.43, 0.2 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDI, SDO, INT)"
+min = 0.8
+unit = "VDDIO"
+conditions = "IOH = 1 mA"
+basis = "Table 49 p.43, 0.8 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rcsb CSB internal pull-up to VDDIO"
+min = 75
+typ = 100
+max = 125
+unit = "kOhm"
+conditions = "internal pull-up resistance to VDDIO"
+basis = "Table 49 p.43"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % rel. H."
+basis = "Table 3 p.9"
+
+[[models.source.characteristic]]
+parameter = "Ipeak supply current during pressure measurement"
+typ = 660
+max = 730
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDT supply current during temperature measurement"
+typ = 240
+max = 320
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.8 V and VDDIO > 1.8 V"
+basis = "Table 2 p.8"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BME680: Bosch Sensortec gas / humidity / pressure / temperature sensor, LGA-8
+# 3.0 x 3.0 x 0.93 mm metal lid.
+#
+# Source: Bosch Sensortec "BME680 Data sheet", document BST-BME680-DS001-09,
+#   revision 1.9, February 2024 (marking "S" = 0 273 141 229, "E" = 0 273 141
+#   312). Table 1 (p.7) electrical parameters, Table 2 (p.8) gas sensor, Table 9
+#   (p.13) absolute maximum ratings, Table 20 (p.28) memory map, Sections 6.1-6.3
+#   (p.38) interface selection and I2C address, Table 21 (p.41) interface
+#   parameters, Table 24 (p.44) pin description.
+#
+# TWO CARDS, ONE DIE FAMILY: the BME688 datasheet (BST-BME688-DS000-03) differs
+# (extra Variant_Id register 0xF0, parallel-mode data fields, Gas_wait_shared),
+# so the BME688 has its own card below.
+#
+# LEVELS: Table 21 prints Vil, Vih, Vol, Voh as percentages of VDDIO. VIH/VIL are
+# those fractions evaluated at the Table 1 typical VDDIO = 1.6 V; VOH/VOL are the
+# rows at their printed VDDIO = 1.62 V (loaded levels; the loader turns them into
+# the rail behind an output resistance, ASSUMED because no light-load row is
+# printed). Wrong by the ratio on another interface rail.
+#
+# THERMAL: no theta_JA or theta_JC is printed for the LGA package; left ABSENT.
+#
+# BUS MODEL: I2C only. Registers are the Table 20 map: Id 0xD0 (0x61), status,
+# Config, Ctrl_meas, Ctrl_hum, Ctrl_gas_0/1, heater set-points and the data
+# registers. The data registers answer from RAW ADC count inputs (adc_press,
+# adc_temp, adc_hum, adc_gas, gas_range) because the compensation parameters are
+# device specific and unprinted. Reserved addresses are undeclared: a single
+# read returns 0xFF and a BURST read hops to the next declared register, so a
+# 17-byte field read from 0x1D is misaligned (SCHEMA GAP, see the report).
+#
+# Renode (MIT, Antmicro) was not consulted; every value is from the datasheet.
+[[models]]
+id = "bme680"
+kind = "digital"
+description = "Bosch BME680 gas, humidity, pressure and temperature sensor, LGA-8 (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw sensor data); no compensation"
+
+[models.match]
+value_re = "(?i)^BME680([-_ ].*)?$"
+
+[models.params]
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 0.8 x VDDIO", basis = "Table 21 p.41, Voh 0.8 x VDDIO min (0.8 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row relaxes to 0.6 x VDDIO" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 0.2 x VDDIO", basis = "Table 21 p.41, Vol_SDI 0.2 x VDDIO max (0.2 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row is 0.23 x VDDIO" }
+vih   = 1.28     # Vih_si 0.8 x VDDIO min, derived at the Table 1 typical VDDIO = 1.6 V
+vil   = 0.32     # Vil_si 0.2 x VDDIO max, derived at VDDIO = 1.6 V
+supply_static_ua = 3.7     # p.3 key features, 3.7 uA at 1 Hz humidity, pressure and temperature (typ);
+                           # excludes the gas heater (IDD 12 mA typ with the heater on, Table 2 p.8).
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 24 Pin description, LGA-8. Numbering direction follows the
+# datasheet's connection diagram (see the BME280 entry in digital.toml for the
+# direction caveat); SDI/SCK use the bus vocabulary.
+"1" = "gnd"
+"2" = "csb"      # chip select; VDDIO selects I2C
+"3" = "sda"      # SDI: I2C SDA / SPI SDI
+"4" = "scl"      # SCK: I2C SCL / SPI SCK
+"5" = "sdo"      # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6" = "vddio"    # interface supply, 1.2 to 3.6 V
+"7" = "gnd2"
+"8" = "vdd"      # supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 9 p.13: VDD and VDDIO pins -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V;
+# storage -45 to +85 C; ESD HBM 2 kV.
+max_voltage_v = 4.25
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME680-DS001-09, Table 1 p.7 Supply Voltage Internal Domains VDD row (ripple max 50 mVpp); Table 9 p.13 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME680-DS001-09, Table 1 p.7 Supply Voltage I/O Domain VDDIO row; Table 9 p.13 supply pin maximum"
+
+# Section 6.2 (p.38): "If CSB is connected to VDDIO, the I2C interface is active."
+# SDO to GND gives 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77); "The SDO
+# pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BME680"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW ADC counts (the Bosch compensation needs the per-device calibration
+# parameters in registers 0x89-0xA1 / 0xE1-0xEE and 0x00-0x02, which the
+# datasheet does not print values for). Defaults are the Table 20 reset values:
+# 524288 = 0x80000 (press, temp), 32768 = 0x8000 (hum), gas 0.
+[[sensor.input]]
+name = "adc_press"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_temp"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_hum"
+default = 32768.0
+
+[[sensor.input]]
+name = "adc_gas"
+default = 0.0
+
+[[sensor.input]]
+name = "gas_range"
+default = 0.0
+
+# 0x1D eas_status_0 (reset 0x00): new_data_0 bit 7 is set while a measurement mode is selected (instant conversion; measuring and gas_measuring stay 0).
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# 0x1F-0x21 press_msb/lsb/xlsb<7:4>, reset 80 00 00; oversampling 000 skips the channel (output 0x80000).
+[[sensor.register]]
+addr = 0x1F
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# 0x22-0x24 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x22
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# 0x25-0x26 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x25
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# 0x2A-0x2B gas_r_msb (gas_r<9:2>) / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00; valid and stable are set while run_gas = 1.
+[[sensor.register]]
+addr = 0x2A
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# 0x73 status (spi_mem_page), reset 0x00; irrelevant on I2C.
+[[sensor.register]]
+addr = 0x73
+const = [0x00]
+
+# 0xD0 Id (chip_id), reset 0x61.
+[[sensor.register]]
+addr = 0xD0
+const = [0x61]
+
+# Idac_heat_x 0x50-0x59, Res_heat_x 0x5A-0x63, Gas_wait_x 0x64-0x6D: ten set-points each,
+# reset 0x00 (Table 'Memory map'); the heater itself is not modelled.
+[[sensor.write_register]]
+addr = 0x50
+encoding = "u8"
+store = "idac_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x51
+encoding = "u8"
+store = "idac_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x52
+encoding = "u8"
+store = "idac_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x53
+encoding = "u8"
+store = "idac_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x54
+encoding = "u8"
+store = "idac_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x55
+encoding = "u8"
+store = "idac_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "idac_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "idac_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "idac_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "idac_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "res_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "res_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "res_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "res_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "res_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "res_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x60
+encoding = "u8"
+store = "res_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x61
+encoding = "u8"
+store = "res_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "res_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x63
+encoding = "u8"
+store = "res_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x64
+encoding = "u8"
+store = "gas_wait_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x65
+encoding = "u8"
+store = "gas_wait_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x66
+encoding = "u8"
+store = "gas_wait_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x67
+encoding = "u8"
+store = "gas_wait_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x68
+encoding = "u8"
+store = "gas_wait_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "gas_wait_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6A
+encoding = "u8"
+store = "gas_wait_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6B
+encoding = "u8"
+store = "gas_wait_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6C
+encoding = "u8"
+store = "gas_wait_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6D
+encoding = "u8"
+store = "gas_wait_9"
+default = 0.0
+
+# 0x70 Ctrl_gas_0, reset 0x00: heat_off bit 3.
+[[sensor.write_register]]
+addr = 0x70
+encoding = "u8"
+store = "ctrl_gas_0"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "heat_off"
+bits = [3, 3]
+
+# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 4, nb_conv bits 3:0.
+[[sensor.write_register]]
+addr = 0x71
+encoding = "u8"
+store = "ctrl_gas_1"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "run_gas"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "nb_conv"
+bits = [3, 0]
+
+# 0x72 Ctrl_hum, reset 0x00: spi_3w_int_en bit 6, osrs_h bits 2:0.
+[[sensor.write_register]]
+addr = 0x72
+encoding = "u8"
+store = "ctrl_hum"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "spi_3w_int_en"
+bits = [6, 6]
+
+[[sensor.write_register.field]]
+name = "osrs_h"
+bits = [2, 0]
+
+# 0x74 Ctrl_meas, reset 0x00: osrs_t bits 7:5, osrs_p bits 4:2, mode bits 1:0 (00 sleep, 01 forced).
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "ctrl_meas"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "osrs_t"
+bits = [7, 5]
+
+[[sensor.write_register.field]]
+name = "osrs_p"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [1, 0]
+
+# 0x75 Config, reset 0x00: filter bits 4:2, spi_3w_en bit 0.
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "filter"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "spi_3w_en"
+bits = [0, 0]
+
+# 0xE0 Reset, reset 0x00 (writing 0xB6 requests a soft reset; the reset itself is not modelled).
+[[sensor.write_register]]
+addr = 0xE0
+encoding = "u8"
+store = "reset_cmd"
+default = 0.0
+
+# Readback of the stored write registers: a read returns the last value written (or
+# the reset value before any write), as the register map's R/W registers do.
+[[sensor.register]]
+addr = 0x50
+encoding = "u8"
+expr = "idac_heat_0"
+
+[[sensor.register]]
+addr = 0x51
+encoding = "u8"
+expr = "idac_heat_1"
+
+[[sensor.register]]
+addr = 0x52
+encoding = "u8"
+expr = "idac_heat_2"
+
+[[sensor.register]]
+addr = 0x53
+encoding = "u8"
+expr = "idac_heat_3"
+
+[[sensor.register]]
+addr = 0x54
+encoding = "u8"
+expr = "idac_heat_4"
+
+[[sensor.register]]
+addr = 0x55
+encoding = "u8"
+expr = "idac_heat_5"
+
+[[sensor.register]]
+addr = 0x56
+encoding = "u8"
+expr = "idac_heat_6"
+
+[[sensor.register]]
+addr = 0x57
+encoding = "u8"
+expr = "idac_heat_7"
+
+[[sensor.register]]
+addr = 0x58
+encoding = "u8"
+expr = "idac_heat_8"
+
+[[sensor.register]]
+addr = 0x59
+encoding = "u8"
+expr = "idac_heat_9"
+
+[[sensor.register]]
+addr = 0x5A
+encoding = "u8"
+expr = "res_heat_0"
+
+[[sensor.register]]
+addr = 0x5B
+encoding = "u8"
+expr = "res_heat_1"
+
+[[sensor.register]]
+addr = 0x5C
+encoding = "u8"
+expr = "res_heat_2"
+
+[[sensor.register]]
+addr = 0x5D
+encoding = "u8"
+expr = "res_heat_3"
+
+[[sensor.register]]
+addr = 0x5E
+encoding = "u8"
+expr = "res_heat_4"
+
+[[sensor.register]]
+addr = 0x5F
+encoding = "u8"
+expr = "res_heat_5"
+
+[[sensor.register]]
+addr = 0x60
+encoding = "u8"
+expr = "res_heat_6"
+
+[[sensor.register]]
+addr = 0x61
+encoding = "u8"
+expr = "res_heat_7"
+
+[[sensor.register]]
+addr = 0x62
+encoding = "u8"
+expr = "res_heat_8"
+
+[[sensor.register]]
+addr = 0x63
+encoding = "u8"
+expr = "res_heat_9"
+
+[[sensor.register]]
+addr = 0x64
+encoding = "u8"
+expr = "gas_wait_0"
+
+[[sensor.register]]
+addr = 0x65
+encoding = "u8"
+expr = "gas_wait_1"
+
+[[sensor.register]]
+addr = 0x66
+encoding = "u8"
+expr = "gas_wait_2"
+
+[[sensor.register]]
+addr = 0x67
+encoding = "u8"
+expr = "gas_wait_3"
+
+[[sensor.register]]
+addr = 0x68
+encoding = "u8"
+expr = "gas_wait_4"
+
+[[sensor.register]]
+addr = 0x69
+encoding = "u8"
+expr = "gas_wait_5"
+
+[[sensor.register]]
+addr = 0x6A
+encoding = "u8"
+expr = "gas_wait_6"
+
+[[sensor.register]]
+addr = 0x6B
+encoding = "u8"
+expr = "gas_wait_7"
+
+[[sensor.register]]
+addr = 0x6C
+encoding = "u8"
+expr = "gas_wait_8"
+
+[[sensor.register]]
+addr = 0x6D
+encoding = "u8"
+expr = "gas_wait_9"
+
+[[sensor.register]]
+addr = 0x70
+encoding = "u8"
+expr = "ctrl_gas_0"
+
+[[sensor.register]]
+addr = 0x71
+encoding = "u8"
+expr = "ctrl_gas_1"
+
+[[sensor.register]]
+addr = 0x72
+encoding = "u8"
+expr = "ctrl_hum"
+
+[[sensor.register]]
+addr = 0x74
+encoding = "u8"
+expr = "ctrl_meas"
+
+[[sensor.register]]
+addr = 0x75
+encoding = "u8"
+expr = "config"
+
+[[sensor.register]]
+addr = 0xE0
+encoding = "u8"
+expr = "reset_cmd"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1 p.7, VDD min
+idle_a = 0.0000037            # p.3 key features, 3.7 uA at 1 Hz H+P+T, typ (no gas heater)
+read_a = 0.0000037
+write_a = 0.0000037
+low_power_a = 0.00000015      # Table 1 p.7, IDDSL sleep current typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v6_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_humidity_pressure_temperature_gas_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "calibration_parameters", "compensated_values", "forced_mode_return_to_sleep", "measurement_timing", "gas_heater_supply_current", "heater_profile_execution", "iir_filter", "soft_reset_command", "reserved_register_reads", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme680-ds001.pdf"
+title = "Bosch Sensortec BME680 Data sheet, BST-BME680-DS001-09, revision 1.9, February 2024"
+locator = "p.3 Key features; Table 1 p.7; Table 2 p.8; Table 9 p.13; Table 20 Memory map p.28; Sections 6.1-6.2 p.38; Table 21 Interface parameters p.41; Table 24 Pin description p.44"
+sha256 = "8e42b591a9cabd84ae3377f2ea11e794120e4140dc4f0e4f29a30be3d1f6c9f6"
+
+[[models.source.pinout]]
+package = "LGA-8 3.0 x 3.0 mm metal lid"
+pins = { "1" = "GND", "2" = "CSB", "3" = "SDI", "4" = "SCK", "5" = "SDO", "6" = "VDDIO", "7" = "GND", "8" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil_si input low level"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 21 p.41, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih_si input high level"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 21 p.41, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI output low level I2C"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Iol=3 mA"
+basis = "Table 21 p.41, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI_1.2 output low level I2C"
+max = 0.23
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Iol=3 mA"
+basis = "Table 21 p.41, 23 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDO, SDI)"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Ioh=1 mA"
+basis = "Table 21 p.41, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Voh_1.2 output high level (SDO, SDI)"
+min = 0.6
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Ioh=1 mA"
+basis = "Table 21 p.41, 60 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rpull internal CSB pull-up to VDDIO"
+min = 70
+typ = 120
+max = 190
+unit = "kOhm"
+conditions = "internal CSB pull-up resistor to VDDIO"
+basis = "Table 21 p.41"
+
+[[models.source.characteristic]]
+parameter = "IDDH supply current during humidity measurement"
+typ = 340
+max = 450
+unit = "uA"
+conditions = "max value at 85 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDP supply current during pressure measurement"
+typ = 714
+max = 849
+unit = "uA"
+conditions = "max value at -40 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDD gas heater supply current"
+min = 9
+typ = 12
+max = 13
+unit = "mA"
+conditions = "heater target 320 C, constant operation (VDD <= 1.8 V, 25 C)"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "IPeak peak supply current when switching on the hotplate"
+min = 15
+typ = 17
+max = 18
+unit = "mA"
+conditions = "within the first ms of switching on the hotplate"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % r.H."
+basis = "Table 9 p.13"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BME688: Bosch Sensortec gas sensor with AI, LGA-8 3.0 x 3.0 x 0.9 mm metal lid.
+#
+# Source: Bosch Sensortec "BME688 Datasheet", document BST-BME688-DS000-03,
+#   revision 1.3, February 2024 (technical reference code 0 273 017 016). Table 1
+#   (p.7), Table 2 (p.8), Table 11 (p.15) absolute maximum ratings, Table 22
+#   (pp.33-34) memory map, Section 5.3.2.1 (p.36) Variant_Id, Section 6 (p.45)
+#   interface selection and I2C address, Table 23 (p.48) interface parameters,
+#   Table 26 (p.51) pin description.
+#
+# SEPARATE CARD FROM THE BME680 because the memory map differs: Variant_Id
+# (0xF0, reset 0x01) separates the BME688 from the BME680 at the same chip id
+# 0x61, Gas_wait_shared (0x6E) is new, Status resets to 0x01 as printed, and
+# parallel mode (mode 10) adds data fields 1 and 2 at 0x2E-0x3E and 0x3F-0x4F.
+# Levels, thermal row and the I2C-only bus model follow the BME680 notes: Table 23
+# fractions evaluated at the Table 1 typical VDDIO = 1.6 V (VOH/VOL at their
+# printed 1.62 V); no theta_JA printed (left ABSENT); data registers answer from
+# RAW ADC count inputs shared by all three fields.
+#
+# Renode (MIT, Antmicro) was not consulted; every value is from the datasheet.
+[[models]]
+id = "bme688"
+kind = "digital"
+description = "Bosch BME688 gas sensor with AI (gas, humidity, pressure, temperature), LGA-8 (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values incl. Variant_Id and three data fields, raw sensor data); no compensation"
+
+[models.match]
+value_re = "(?i)^BME688([-_ ].*)?$"
+
+[models.params]
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 0.8 x VDDIO", basis = "Table 23 p.48, Voh 0.8 x VDDIO min (0.8 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row relaxes to 0.6 x VDDIO" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 0.2 x VDDIO", basis = "Table 23 p.48, Vol_SDI 0.2 x VDDIO max (0.2 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row is 0.23 x VDDIO" }
+vih   = 1.28     # Vih_si 0.8 x VDDIO min, derived at the Table 1 typical VDDIO = 1.6 V
+vil   = 0.32     # Vil_si 0.2 x VDDIO max, derived at VDDIO = 1.6 V
+supply_static_ua = 3.7     # p.3 key features, 3.7 uA at 1 Hz humidity, pressure and temperature (typ);
+                           # excludes the gas heater (IDD 12 mA typ with the heater on, Table 2 p.8).
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 26 Pin description, LGA-8. Numbering direction follows the
+# datasheet's connection diagram (see the BME280 entry in digital.toml for the
+# direction caveat); SDI/SCK use the bus vocabulary.
+"1" = "gnd"
+"2" = "csb"      # chip select; VDDIO selects I2C
+"3" = "sda"      # SDI: I2C SDA / SPI SDI
+"4" = "scl"      # SCK: I2C SCL / SPI SCK
+"5" = "sdo"      # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6" = "vddio"    # interface supply, 1.2 to 3.6 V
+"7" = "gnd2"
+"8" = "vdd"      # supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 11 p.15: VDD and VDDIO pins -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V;
+# storage -45 to +85 C; ESD HBM 2 kV.
+max_voltage_v = 4.25
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME688-DS000-03, Table 1 p.7 Supply Voltage Internal Domains VDD row (ripple max 50 mVpp); Table 11 p.15 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME688-DS000-03, Table 1 p.7 Supply Voltage I/O Domain VDDIO row; Table 11 p.15 supply pin maximum"
+
+# Sections 6.1-6.2 (p.45): "If CSB is connected to VDDIO, the I2C interface is active."
+# SDO to GND gives 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77); "The SDO
+# pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BME688"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW ADC counts (the Bosch compensation needs per-device calibration
+# parameters the datasheet does not print values for). Defaults are the Table 22
+# reset values: 524288 = 0x80000 (press, temp), 32768 = 0x8000 (hum), gas 0. All
+# three parallel-mode data fields report the same inputs (the sequencer is not
+# modelled).
+[[sensor.input]]
+name = "adc_press"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_temp"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_hum"
+default = 32768.0
+
+[[sensor.input]]
+name = "adc_gas"
+default = 0.0
+
+[[sensor.input]]
+name = "gas_range"
+default = 0.0
+
+# Field 0 0x1D meas_status_0 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 0 0x1E sub_meas_index_0, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x1E
+const = [0x00]
+
+# Field 0 0x1F-0x21 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x1F
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 0 0x22-0x24 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x22
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 0 0x25-0x26 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x25
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 0 0x2C-0x2D gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x2C
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# Field 1 0x2E meas_status_1 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x2E
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 1 0x2F sub_meas_index_1, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x2F
+const = [0x00]
+
+# Field 1 0x30-0x32 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x30
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 1 0x33-0x35 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x33
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 1 0x36-0x37 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x36
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 1 0x3D-0x3E gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x3D
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# Field 2 0x3F meas_status_2 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x3F
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 2 0x40 sub_meas_index_2, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x40
+const = [0x00]
+
+# Field 2 0x41-0x43 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x41
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 2 0x44-0x46 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x44
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 2 0x47-0x48 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x47
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 2 0x4E-0x4F gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x4E
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# 0x73 Status (spi_mem_page), reset 0x01 as printed in Table 22 (the BME680 prints 0x00); irrelevant on I2C.
+[[sensor.register]]
+addr = 0x73
+const = [0x01]
+
+# 0xD0 Chip_Id, reset 0x61 (same value as the BME680).
+[[sensor.register]]
+addr = 0xD0
+const = [0x61]
+
+# 0xF0 Variant_Id, reset 0x01: Section 5.3.2.1 'For BME688 - 0x01' distinguishes the BME688 from the BME680 at the same chip id.
+[[sensor.register]]
+addr = 0xF0
+const = [0x01]
+
+# Idac_heat_x 0x50-0x59, Res_heat_x 0x5A-0x63, Gas_wait_x 0x64-0x6D: ten set-points each,
+# reset 0x00 (Table 'Memory map'); the heater itself is not modelled.
+[[sensor.write_register]]
+addr = 0x50
+encoding = "u8"
+store = "idac_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x51
+encoding = "u8"
+store = "idac_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x52
+encoding = "u8"
+store = "idac_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x53
+encoding = "u8"
+store = "idac_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x54
+encoding = "u8"
+store = "idac_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x55
+encoding = "u8"
+store = "idac_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "idac_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "idac_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "idac_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "idac_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "res_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "res_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "res_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "res_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "res_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "res_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x60
+encoding = "u8"
+store = "res_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x61
+encoding = "u8"
+store = "res_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "res_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x63
+encoding = "u8"
+store = "res_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x64
+encoding = "u8"
+store = "gas_wait_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x65
+encoding = "u8"
+store = "gas_wait_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x66
+encoding = "u8"
+store = "gas_wait_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x67
+encoding = "u8"
+store = "gas_wait_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x68
+encoding = "u8"
+store = "gas_wait_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "gas_wait_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6A
+encoding = "u8"
+store = "gas_wait_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6B
+encoding = "u8"
+store = "gas_wait_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6C
+encoding = "u8"
+store = "gas_wait_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6D
+encoding = "u8"
+store = "gas_wait_9"
+default = 0.0
+
+# 0x6E Gas_wait_shared, reset 0x00 (Section 5.3.2.2: step 0.477 ms; not modelled).
+[[sensor.write_register]]
+addr = 0x6E
+encoding = "u8"
+store = "gas_wait_shared"
+default = 0.0
+
+# 0x70 Ctrl_gas_0, reset 0x00: heat_off bit 3.
+[[sensor.write_register]]
+addr = 0x70
+encoding = "u8"
+store = "ctrl_gas_0"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "heat_off"
+bits = [3, 3]
+
+# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 4, nb_conv bits 3:0.
+[[sensor.write_register]]
+addr = 0x71
+encoding = "u8"
+store = "ctrl_gas_1"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "run_gas"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "nb_conv"
+bits = [3, 0]
+
+# 0x72 Ctrl_hum, reset 0x00: spi_3w_int_en bit 6, osrs_h bits 2:0.
+[[sensor.write_register]]
+addr = 0x72
+encoding = "u8"
+store = "ctrl_hum"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "spi_3w_int_en"
+bits = [6, 6]
+
+[[sensor.write_register.field]]
+name = "osrs_h"
+bits = [2, 0]
+
+# 0x74 Ctrl_meas, reset 0x00: osrs_t bits 7:5, osrs_p bits 4:2, mode bits 1:0 (00 sleep, 01 forced, 10 parallel).
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "ctrl_meas"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "osrs_t"
+bits = [7, 5]
+
+[[sensor.write_register.field]]
+name = "osrs_p"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [1, 0]
+
+# 0x75 Config, reset 0x00: filter bits 4:2, spi_3w_en bit 0.
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "filter"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "spi_3w_en"
+bits = [0, 0]
+
+# 0xE0 Reset, reset 0x00 (writing 0xB6 requests a soft reset; the reset itself is not modelled).
+[[sensor.write_register]]
+addr = 0xE0
+encoding = "u8"
+store = "reset_cmd"
+default = 0.0
+
+# Readback of the stored write registers: a read returns the last value written (or
+# the reset value before any write), as the register map's R/W registers do.
+[[sensor.register]]
+addr = 0x50
+encoding = "u8"
+expr = "idac_heat_0"
+
+[[sensor.register]]
+addr = 0x51
+encoding = "u8"
+expr = "idac_heat_1"
+
+[[sensor.register]]
+addr = 0x52
+encoding = "u8"
+expr = "idac_heat_2"
+
+[[sensor.register]]
+addr = 0x53
+encoding = "u8"
+expr = "idac_heat_3"
+
+[[sensor.register]]
+addr = 0x54
+encoding = "u8"
+expr = "idac_heat_4"
+
+[[sensor.register]]
+addr = 0x55
+encoding = "u8"
+expr = "idac_heat_5"
+
+[[sensor.register]]
+addr = 0x56
+encoding = "u8"
+expr = "idac_heat_6"
+
+[[sensor.register]]
+addr = 0x57
+encoding = "u8"
+expr = "idac_heat_7"
+
+[[sensor.register]]
+addr = 0x58
+encoding = "u8"
+expr = "idac_heat_8"
+
+[[sensor.register]]
+addr = 0x59
+encoding = "u8"
+expr = "idac_heat_9"
+
+[[sensor.register]]
+addr = 0x5A
+encoding = "u8"
+expr = "res_heat_0"
+
+[[sensor.register]]
+addr = 0x5B
+encoding = "u8"
+expr = "res_heat_1"
+
+[[sensor.register]]
+addr = 0x5C
+encoding = "u8"
+expr = "res_heat_2"
+
+[[sensor.register]]
+addr = 0x5D
+encoding = "u8"
+expr = "res_heat_3"
+
+[[sensor.register]]
+addr = 0x5E
+encoding = "u8"
+expr = "res_heat_4"
+
+[[sensor.register]]
+addr = 0x5F
+encoding = "u8"
+expr = "res_heat_5"
+
+[[sensor.register]]
+addr = 0x60
+encoding = "u8"
+expr = "res_heat_6"
+
+[[sensor.register]]
+addr = 0x61
+encoding = "u8"
+expr = "res_heat_7"
+
+[[sensor.register]]
+addr = 0x62
+encoding = "u8"
+expr = "res_heat_8"
+
+[[sensor.register]]
+addr = 0x63
+encoding = "u8"
+expr = "res_heat_9"
+
+[[sensor.register]]
+addr = 0x64
+encoding = "u8"
+expr = "gas_wait_0"
+
+[[sensor.register]]
+addr = 0x65
+encoding = "u8"
+expr = "gas_wait_1"
+
+[[sensor.register]]
+addr = 0x66
+encoding = "u8"
+expr = "gas_wait_2"
+
+[[sensor.register]]
+addr = 0x67
+encoding = "u8"
+expr = "gas_wait_3"
+
+[[sensor.register]]
+addr = 0x68
+encoding = "u8"
+expr = "gas_wait_4"
+
+[[sensor.register]]
+addr = 0x69
+encoding = "u8"
+expr = "gas_wait_5"
+
+[[sensor.register]]
+addr = 0x6A
+encoding = "u8"
+expr = "gas_wait_6"
+
+[[sensor.register]]
+addr = 0x6B
+encoding = "u8"
+expr = "gas_wait_7"
+
+[[sensor.register]]
+addr = 0x6C
+encoding = "u8"
+expr = "gas_wait_8"
+
+[[sensor.register]]
+addr = 0x6D
+encoding = "u8"
+expr = "gas_wait_9"
+
+[[sensor.register]]
+addr = 0x6E
+encoding = "u8"
+expr = "gas_wait_shared"
+
+[[sensor.register]]
+addr = 0x70
+encoding = "u8"
+expr = "ctrl_gas_0"
+
+[[sensor.register]]
+addr = 0x71
+encoding = "u8"
+expr = "ctrl_gas_1"
+
+[[sensor.register]]
+addr = 0x72
+encoding = "u8"
+expr = "ctrl_hum"
+
+[[sensor.register]]
+addr = 0x74
+encoding = "u8"
+expr = "ctrl_meas"
+
+[[sensor.register]]
+addr = 0x75
+encoding = "u8"
+expr = "config"
+
+[[sensor.register]]
+addr = 0xE0
+encoding = "u8"
+expr = "reset_cmd"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1 p.7, VDD min
+idle_a = 0.0000037            # p.3 key features, 3.7 uA at 1 Hz H+P+T, typ (no gas heater)
+read_a = 0.0000037
+write_a = 0.0000037
+low_power_a = 0.00000015      # Table 1 p.7, IDDSL sleep current typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v6_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_humidity_pressure_temperature_gas_data", "bus_coupled_active_current", "supply_voltage_gating", "variant_id_read", "three_data_fields"]
+missing = ["spi_register_map", "calibration_parameters", "compensated_values", "forced_mode_return_to_sleep", "measurement_timing", "gas_heater_supply_current", "heater_profile_execution", "iir_filter", "soft_reset_command", "reserved_register_reads", "thermal_resistance_not_printed", "parallel_mode_sequencer", "gas_wait_shared_timing"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme688-ds000.pdf"
+title = "Bosch Sensortec BME688 Datasheet, BST-BME688-DS000-03, revision 1.3, February 2024"
+locator = "p.3 Key features; Table 1 p.7; Table 2 p.8; Table 11 p.15; Table 22 Memory map pp.33-34; Section 5.3.2.1 p.36; Section 6 p.45; Table 23 p.48; Table 26 Pin description p.51"
+sha256 = "fce73ae028a985b3265ce3dbc17ab5b7bea1ae31b7ea84c6698c7694083e2478"
+
+[[models.source.pinout]]
+package = "LGA-8 3.0 x 3.0 mm metal lid"
+pins = { "1" = "GND", "2" = "CSB", "3" = "SDI", "4" = "SCK", "5" = "SDO", "6" = "VDDIO", "7" = "GND", "8" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil_si input low level"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 23 p.48, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih_si input high level"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 23 p.48, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI output low level I2C"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Iol=3 mA"
+basis = "Table 23 p.48, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI_1.2 output low level I2C"
+max = 0.23
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Iol=3 mA"
+basis = "Table 23 p.48, 23 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDO, SDI)"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Ioh=1 mA"
+basis = "Table 23 p.48, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Voh_1.2 output high level (SDO, SDI)"
+min = 0.6
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Ioh=1 mA"
+basis = "Table 23 p.48, 60 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rpull internal CSB pull-up to VDDIO"
+min = 70
+typ = 120
+max = 190
+unit = "kOhm"
+conditions = "internal CSB pull-up resistor to VDDIO"
+basis = "Table 23 p.48"
+
+[[models.source.characteristic]]
+parameter = "IDDH supply current during humidity measurement"
+typ = 340
+max = 450
+unit = "uA"
+conditions = "max value at 85 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDP supply current during pressure measurement"
+typ = 714
+max = 849
+unit = "uA"
+conditions = "max value at -40 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDD gas heater supply current"
+min = 9
+typ = 12
+max = 13
+unit = "mA"
+conditions = "heater target 320 C, constant operation (VDD <= 1.8 V, 25 C)"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "IPeak peak supply current when switching on the hotplate"
+min = 15
+typ = 17
+max = 18
+unit = "mA"
+conditions = "within the first ms of switching on the hotplate"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % r.H."
+basis = "Table 11 p.15"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TMP117 (DRV): Texas Instruments high-accuracy digital temperature sensor,
+# WSON-6 (DRV) 2.0 x 2.0 mm.
+#
+# Source: TI "TMP117 High-Accuracy, Low-Power, Digital Temperature Sensor With SMBus- and
+#   I2C-Compatible Interface", SNOSD82D, June 2018, revised September 2022. Page numbers
+#   below are the printed footers. Table 5-1 (p.4) pins, Sections 6.1 to 6.4 (p.5) ratings,
+#   operating conditions and thermal metrics, Section 6.5 (pp.6-7) electrical characteristics,
+#   Table 7-2 (p.21) addresses, Table 7-3 (p.25) register map, Section 7.6 (pp.26-32) register
+#   fields, Packaging Information (ordering codes).
+#
+# VARIANTS: the DRV (WSON-6) and YBG (DSBGA-6) bodies number their pads differently, so
+# each is its own card in the tmp117 variant family. A bare "TMP117" names neither and the
+# set stays unresolved until the ordering code (AIDRV.. / AIYBG..), the footprint, or the
+# fitted pad names select one. Grades: TMP117 and TMP117N operate -55 to 150 C, TMP117M
+# 0 to 85 C with the same electrical rows; the grade is not an electrical card parameter.
+#
+# LEVELS: VIH and VIL are printed as 0.7 and 0.3 of V+; the volts below evaluate them at the
+# 3.3 V nominal supply (derived). VOL is printed in volts (0.4 V at 3 mA). SDA and ALERT
+# are open drain, so no output-high level is carried.
+#
+# THERMAL: RthetaJA 70.7 C/W for WSON-6 (Section 6.4 p.5). The DRV thermal pad is
+# not a numbered pad, is to be left unsoldered for accuracy, and if soldered must float or be
+# grounded (Section 10.1 p.35); it is therefore not mapped.
+#
+# BUS MODEL: Temp_Result, Configuration, THigh/TLow limits, EEPROM_UL, Temp_Offset and
+# Device_ID are carried. EEPROM1, EEPROM2 and EEPROM3 (reset values printed as xxxx, the NIST
+# traceability scratch words) are NOT read from the datasheet and are left absent.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "tmp117_drv"
+kind = "digital"
+description = "TI TMP117 digital temperature sensor, WSON-6 (DRV) 2.0 x 2.0 mm (four-level ADD0 address strap, pad map, V+ logic levels, register map with reset values and a settable die temperature); no alert engine"
+variant_of = "tmp117"
+
+[models.match]
+# One shared family match: the bare number and every real ordering code. TMP116, TMP117 look-alikes
+# (TMP1075, TMP1175) are different parts and fall outside the anchored number.
+value_re = "(?i)^TMP117(?:[MN]?AI(?:DRV|YBG)(?:RG4|R|T)?(?:\\.A)?)?$"
+
+[models.variant]
+orderable_re = '^TMP117[MN]?AIDRV(R|RG4)?(\.A)?$'
+orderable = ["TMP117AIDRVR", "TMP117AIDRVRG4", "TMP117MAIDRVR", "TMP117NAIDRVR"]
+package = "WSON-6"
+basis = "TI SNOSD82D Packaging Information table; Table 5-1 p.4 (pin numbering per package)"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "IOL = 3 mA on SDA and ALERT", basis = "TI SNOSD82D Section 6.5 p.6, VOL 0.4 V max" }
+vih   = 2.31     # Section 6.5 p.6, VIH 0.7 x V+ min (SCL, SDA), derived at the 3.3 V nominal V+
+vil   = 0.99     # Section 6.5 p.6, VIL 0.3 x V+ max (SCL, SDA), derived at the 3.3 V nominal V+
+supply_static_ua = 16.0   # Section 6.5 p.6, IQ typ at 1 Hz with 8 averages (the factory 0220h configuration),
+                          # bus inactive; 22 uA max. Conversion peak 135 uA typ is not carried.
+supply_pin = "5"
+gnd_pin    = "2"
+
+[models.pins]
+# Table 5-1 Pin Functions, WSON-6, all six pads.
+"1" = "scl"   # SCL
+"2" = "gnd"   # GND
+"3" = "alert" # ALERT
+"4" = "add0"  # ADD0
+"5" = "vdd"   # V+
+"6" = "sda"   # SDA
+
+[models.ratings]
+# Section 6.1 p.5: V+ -0.3 to 6 V; SCL, SDA, ALERT, ADD0 -0.3 to 6 V; TJ -55 to 155 C.
+max_voltage_v = 6.0
+max_junction_temp_c = 155.0
+theta_ja_c_per_w = 70.7      # Section 6.4 p.5, DRV (WSON-6)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SNOSD82D, Section 6.3 p.5 V+ 1.8 to 5.5 V over -55 to 150 C (1.7 V is allowed only over -55 to 70 C); Section 6.1 p.5 supply absolute maximum"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "TMP117 DRV"
+bus = "i2c"
+i2c_address = 0x48
+
+# WSON-6 (DRV) 2.0 x 2.0 mm pad map (Table 5-1 p.4), the same as [models.pins].
+[sensor.pins]
+1 = "scl"
+2 = "gnd"
+3 = "alert"
+4 = "add0"
+5 = "vdd"
+6 = "sda"
+
+# Table 7-2 Address Pin and Slave Addresses (p.21): ADD0 to GND 1001000, V+ 1001001,
+# SDA 1001010, SCL 1001011. An ADD0 that is floating or on another net takes 0x48 as
+# an ASSUMED address.
+[[sensor.address_select]]
+address = 0x48
+straps = { add0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { add0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { add0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { add0 = "scl" }
+
+# The die temperature in degrees C. The default 25 C is a nominal ambient; the device
+# itself reads 8000h (-256 C) until its first conversion completes (Section 7.6.2
+# p.26), which is not modelled because no conversion latency is.
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Temp_Result (00h, Section 7.6.2 p.26): 16-bit two's complement, 7.8125 m C per LSB (1/128 C). The Temp_Offset register is added after linearisation (Section 7.6.9 p.31).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "temp_c * 128 + temp_offset"
+
+# Configuration (01h, Section 7.6.3 pp.27-28), reset 0220h. Reads back the stored value with the read-only flags HIGH_Alert/LOW_Alert/Data_Ready/EEPROM_Busy (bits 15:12) replaced by 0 0 1 0 and Soft_Reset (bit 1) reading 0. Data_Ready reads 1 permanently because no conversion latency is modelled: the Temp_Result register always holds the current temperature, so a firmware that polls Data_Ready proceeds at once. Clear-on-read of the flag and the alert flags are not modelled.
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config - 4096 * cfg_ro - 2 * cfg_soft_reset + 8192"
+
+# THigh_Limit (02h, Section 7.6.4 p.29) reads back, reset 6000h (192 C).
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "thigh_limit"
+
+# TLow_Limit (03h, Section 7.6.5 p.29) reads back, reset 8000h (-256 C).
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "tlow_limit"
+
+# EEPROM_UL (04h, Section 7.6.6) reads back, reset 0000h.
+[[sensor.register]]
+addr = 0x04
+encoding = "u16_be"
+expr = "eeprom_ul"
+
+# Temp_Offset (07h, Section 7.6.9 p.31) reads back, reset 0000h.
+[[sensor.register]]
+addr = 0x07
+encoding = "i16_be"
+expr = "temp_offset"
+
+# Device_ID (0Fh, Table 7-15 p.32): DID[11:0] = 117h; Rev[3:0] reads 0h in the field table (0117h in the Table 7-3 register map).
+[[sensor.register]]
+addr = 0x0F
+const = [0x01, 0x17]
+
+# Configuration reset 0220h = MOD 00 (continuous), CONV 100 (1 s), AVG 01 (8 averages). cfg_ro = bits 15:12 (read-only flags), cfg_soft_reset = bit 1 (reads 0).
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 544.0
+
+[[sensor.write_register.field]]
+name = "cfg_ro"
+bits = [15, 12]
+
+[[sensor.write_register.field]]
+name = "cfg_mod"
+bits = [11, 10]
+
+[[sensor.write_register.field]]
+name = "cfg_conv"
+bits = [9, 7]
+
+[[sensor.write_register.field]]
+name = "cfg_avg"
+bits = [6, 5]
+
+[[sensor.write_register.field]]
+name = "cfg_tna"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "cfg_pol"
+bits = [3, 3]
+
+[[sensor.write_register.field]]
+name = "cfg_dr_alert"
+bits = [2, 2]
+
+[[sensor.write_register.field]]
+name = "cfg_soft_reset"
+bits = [1, 1]
+
+# THigh_Limit reset 6000h (Table 7-3 p.25).
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "thigh_limit"
+default = 24576.0
+
+# TLow_Limit reset 8000h (Table 7-3 p.25).
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "tlow_limit"
+default = -32768.0
+
+# EEPROM_UL reset 0000h (Table 7-3 p.25); the EEPROM programming sequence is not modelled.
+[[sensor.write_register]]
+addr = 0x04
+encoding = "u16_be"
+store = "eeprom_ul"
+default = 0.0
+
+# Temp_Offset reset 0000h (Table 7-3 p.25); the offset enters Temp_Result.
+[[sensor.write_register]]
+addr = 0x07
+encoding = "i16_be"
+store = "temp_offset"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.6    # Section 6.5 p.7, VPOR rising, typ
+idle_a = 0.000016             # Section 6.5 p.6, IQ typ, 1 Hz with 8 averages
+read_a = 0.000016
+write_a = 0.000016
+low_power_a = 0.00000015      # Section 6.5 p.6, shutdown current typ, TA = 25 C
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3", "duty_cycled_supply_current", "absolute_ratings", "supply_range", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "device_id_read", "reset_values", "config_register_readback", "temperature_result_from_die_temperature", "temperature_offset", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["alert_pin_engine", "high_low_alert_flags", "therm_mode", "data_ready_clear_on_read", "conversion_timing_and_modes", "averaging", "one_shot_and_shutdown_modes", "eeprom_program_sequence", "eeprom1_eeprom2_eeprom3_values_not_printed", "soft_reset_and_general_call_reset", "first_conversion_reset_temperature", "conversion_peak_current", "grade_temperature_range"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tmp117.pdf"
+title = "Texas Instruments TMP117 High-Accuracy, Low-Power, Digital Temperature Sensor With SMBus- and I2C-Compatible Interface, SNOSD82D, June 2018, revised September 2022"
+locator = "Table 5-1 p.4; Sections 6.1-6.4 p.5; Section 6.5 pp.6-7; Table 7-2 p.21; Table 7-3 p.25; Sections 7.6.2-7.6.11 pp.26-32; Section 10.1 p.35; Packaging Information"
+sha256 = "4002364bdbb5c4c47e42b828939e12daf17f5249ae162866ca0a445b730f66c9"
+
+[[models.source.pinout]]
+package = "WSON-6 (DRV) 2.0 x 2.0 mm"
+pins = { "1" = "SCL", "2" = "GND", "3" = "ALERT", "4" = "ADD0", "5" = "V+", "6" = "SDA" }
+
+[[models.source.characteristic]]
+parameter = "V+ supply voltage"
+min = 1.8
+typ = 3.3
+max = 5.5
+unit = "V"
+conditions = "TA = -55 C to 150 C; 3.3 V nominal"
+basis = "TI SNOSD82D Section 6.3 p.5, Recommended Operating Conditions"
+
+[[models.source.characteristic]]
+parameter = "V+ supply voltage (restricted temperature)"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "TA = -55 C to 70 C"
+basis = "TI SNOSD82D Section 6.3 p.5, Recommended Operating Conditions"
+
+[[models.source.characteristic]]
+parameter = "V+ supply absolute maximum"
+min = -0.3
+max = 6
+unit = "V"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5, Absolute Maximum Ratings"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA, ALERT, ADD0 voltage absolute maximum"
+min = -0.3
+max = 6
+unit = "V"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5, Absolute Maximum Ratings"
+
+[[models.source.characteristic]]
+parameter = "VI/O SCL, SDA, ALERT, ADD0 operating voltage"
+min = 0
+max = 5.5
+unit = "V"
+conditions = "recommended"
+basis = "TI SNOSD82D Section 6.3 p.5"
+
+[[models.source.characteristic]]
+parameter = "Operating junction temperature"
+min = -55
+max = 155
+unit = "C"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -65
+max = 155
+unit = "C"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5"
+
+[[models.source.characteristic]]
+parameter = "Operating free-air temperature (TMP117, TMP117N)"
+min = -55
+max = 150
+unit = "C"
+conditions = "recommended; TMP117M is 0 to 85 C"
+basis = "TI SNOSD82D Section 6.3 p.5; Packaging Information table"
+
+[[models.source.characteristic]]
+parameter = "RthetaJA junction-to-ambient, DRV"
+typ = 70.7
+unit = "C/W"
+conditions = "WSON-6, 6 pins; DRV with the thermal pad unsoldered"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "RthetaJC(top) junction-to-case (top), DRV"
+typ = 82.3
+unit = "C/W"
+conditions = "DRV WSON, 6 pins"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "RthetaJC(bot) junction-to-case (bottom), DRV"
+typ = 11.7
+unit = "C/W"
+conditions = "DRV WSON, 6 pins"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "RthetaJB junction-to-board, DRV"
+typ = 35.4
+unit = "C/W"
+conditions = "DRV WSON, 6 pins"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "Thermal mass MT"
+typ = 5.1
+unit = "mJ/C"
+conditions = "WSON-6"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "VIH input logic high level (SCL, SDA)"
+min = 0.7
+unit = "V+"
+conditions = "fraction of V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VIL input logic low level (SCL, SDA)"
+max = 0.3
+unit = "V+"
+conditions = "fraction of V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VOL SDA and ALERT output low level"
+min = 0
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA (printed -3 mA)"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IIN input leakage current"
+min = -0.1
+max = 0.1
+unit = "uA"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Input capacitance"
+typ = 4
+unit = "pF"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, 8 averages (the factory configuration)"
+typ = 16
+max = 22
+unit = "uA"
+conditions = "serial bus inactive, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, averaging off"
+typ = 3.5
+max = 5
+unit = "uA"
+conditions = "serial bus inactive, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, averaging off, bus active"
+typ = 15
+unit = "uA"
+conditions = "SCL = 400 kHz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ_ACTIVE quiescent current during active conversion"
+typ = 135
+max = 220
+unit = "uA"
+conditions = "serial bus inactive"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "ISB standby current"
+typ = 1.25
+max = 3.1
+unit = "uA"
+conditions = "serial bus inactive, SCL, SDA, ADD0 = V+, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Shutdown current"
+typ = 0.15
+max = 0.5
+unit = "uA"
+conditions = "serial bus inactive, SCL, SDA, ADD0 = V+, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "ISD shutdown current"
+max = 5
+unit = "uA"
+conditions = "serial bus inactive, TA = 150 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Shutdown current, bus active"
+typ = 17
+unit = "uA"
+conditions = "SCL = 400 kHz, ADD0 = V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IEE EEPROM write quiescent current"
+typ = 240
+unit = "uA"
+conditions = "ADC conversion off; serial bus inactive"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold"
+typ = 1.6
+unit = "V"
+conditions = "supply rising"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "Brownout detect"
+typ = 1.1
+unit = "V"
+conditions = "supply falling"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "tRESET reset time"
+typ = 1.5
+unit = "ms"
+conditions = "time required by the device to reset"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -20 C to 50 C"
+min = -0.1
+typ = 0.05
+max = 0.1
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -40 C to 70 C"
+min = -0.15
+typ = 0.05
+max = 0.15
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -40 C to 100 C"
+min = -0.2
+typ = 0.1
+max = 0.2
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -55 C to 125 C"
+min = -0.25
+typ = 0.1
+max = 0.25
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -55 C to 150 C"
+min = -0.3
+typ = 0.1
+max = 0.3
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature resolution (LSB)"
+typ = 7.8125
+unit = "mC"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, one-shot"
+min = 13
+typ = 15.5
+max = 17.5
+unit = "ms"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TMP117 (YBG): Texas Instruments high-accuracy digital temperature sensor,
+# DSBGA-6 (YBG) 2 x 3 ball grid.
+#
+# Source: TI "TMP117 High-Accuracy, Low-Power, Digital Temperature Sensor With SMBus- and
+#   I2C-Compatible Interface", SNOSD82D, June 2018, revised September 2022. Page numbers
+#   below are the printed footers. Table 5-1 (p.4) pins, Sections 6.1 to 6.4 (p.5) ratings,
+#   operating conditions and thermal metrics, Section 6.5 (pp.6-7) electrical characteristics,
+#   Table 7-2 (p.21) addresses, Table 7-3 (p.25) register map, Section 7.6 (pp.26-32) register
+#   fields, Packaging Information (ordering codes).
+#
+# VARIANTS: the DRV (WSON-6) and YBG (DSBGA-6) bodies number their pads differently, so
+# each is its own card in the tmp117 variant family. A bare "TMP117" names neither and the
+# set stays unresolved until the ordering code (AIDRV.. / AIYBG..), the footprint, or the
+# fitted pad names select one. Grades: TMP117 and TMP117N operate -55 to 150 C, TMP117M
+# 0 to 85 C with the same electrical rows; the grade is not an electrical card parameter.
+#
+# LEVELS: VIH and VIL are printed as 0.7 and 0.3 of V+; the volts below evaluate them at the
+# 3.3 V nominal supply (derived). VOL is printed in volts (0.4 V at 3 mA). SDA and ALERT
+# are open drain, so no output-high level is carried.
+#
+# THERMAL: RthetaJA 133.2 C/W for DSBGA-6 (Section 6.4 p.5). The DRV thermal pad is
+# not a numbered pad, is to be left unsoldered for accuracy, and if soldered must float or be
+# grounded (Section 10.1 p.35); it is therefore not mapped.
+#
+# BUS MODEL: Temp_Result, Configuration, THigh/TLow limits, EEPROM_UL, Temp_Offset and
+# Device_ID are carried. EEPROM1, EEPROM2 and EEPROM3 (reset values printed as xxxx, the NIST
+# traceability scratch words) are NOT read from the datasheet and are left absent.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "tmp117_ybg"
+kind = "digital"
+description = "TI TMP117 digital temperature sensor, DSBGA-6 (YBG) 2 x 3 ball grid (four-level ADD0 address strap, pad map, V+ logic levels, register map with reset values and a settable die temperature); no alert engine"
+variant_of = "tmp117"
+
+[models.match]
+# One shared family match: the bare number and every real ordering code. TMP116, TMP117 look-alikes
+# (TMP1075, TMP1175) are different parts and fall outside the anchored number.
+value_re = "(?i)^TMP117(?:[MN]?AI(?:DRV|YBG)(?:RG4|R|T)?(?:\\.A)?)?$"
+
+[models.variant]
+orderable_re = '^TMP117[MN]?AIYBG(R|T)?(\.A)?$'
+orderable = ["TMP117AIYBGR", "TMP117AIYBGT", "TMP117MAIYBGR", "TMP117MAIYBGT", "TMP117NAIYBGR", "TMP117NAIYBGT"]
+package = "DSBGA-6"
+basis = "TI SNOSD82D Packaging Information table; Table 5-1 p.4 (pin numbering per package)"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "IOL = 3 mA on SDA and ALERT", basis = "TI SNOSD82D Section 6.5 p.6, VOL 0.4 V max" }
+vih   = 2.31     # Section 6.5 p.6, VIH 0.7 x V+ min (SCL, SDA), derived at the 3.3 V nominal V+
+vil   = 0.99     # Section 6.5 p.6, VIL 0.3 x V+ max (SCL, SDA), derived at the 3.3 V nominal V+
+supply_static_ua = 16.0   # Section 6.5 p.6, IQ typ at 1 Hz with 8 averages (the factory 0220h configuration),
+                          # bus inactive; 22 uA max. Conversion peak 135 uA typ is not carried.
+supply_pin = "B1"
+gnd_pin    = "B2"
+
+[models.pins]
+# Table 5-1 Pin Functions, DSBGA-6, all six pads.
+"A1" = "sda"  # SDA
+"A2" = "scl"  # SCL
+"B1" = "vdd"  # V+
+"B2" = "gnd"  # GND
+"C1" = "add0" # ADD0
+"C2" = "alert"# ALERT
+
+[models.ratings]
+# Section 6.1 p.5: V+ -0.3 to 6 V; SCL, SDA, ALERT, ADD0 -0.3 to 6 V; TJ -55 to 155 C.
+max_voltage_v = 6.0
+max_junction_temp_c = 155.0
+theta_ja_c_per_w = 133.2      # Section 6.4 p.5, YBG (DSBGA-6)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SNOSD82D, Section 6.3 p.5 V+ 1.8 to 5.5 V over -55 to 150 C (1.7 V is allowed only over -55 to 70 C); Section 6.1 p.5 supply absolute maximum"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "TMP117 YBG"
+bus = "i2c"
+i2c_address = 0x48
+
+# DSBGA-6 (YBG) 2 x 3 ball grid pad map (Table 5-1 p.4), the same as [models.pins].
+[sensor.pins]
+A1 = "sda"
+A2 = "scl"
+B1 = "vdd"
+B2 = "gnd"
+C1 = "add0"
+C2 = "alert"
+
+# Table 7-2 Address Pin and Slave Addresses (p.21): ADD0 to GND 1001000, V+ 1001001,
+# SDA 1001010, SCL 1001011. An ADD0 that is floating or on another net takes 0x48 as
+# an ASSUMED address.
+[[sensor.address_select]]
+address = 0x48
+straps = { add0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { add0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { add0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { add0 = "scl" }
+
+# The die temperature in degrees C. The default 25 C is a nominal ambient; the device
+# itself reads 8000h (-256 C) until its first conversion completes (Section 7.6.2
+# p.26), which is not modelled because no conversion latency is.
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Temp_Result (00h, Section 7.6.2 p.26): 16-bit two's complement, 7.8125 m C per LSB (1/128 C). The Temp_Offset register is added after linearisation (Section 7.6.9 p.31).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "temp_c * 128 + temp_offset"
+
+# Configuration (01h, Section 7.6.3 pp.27-28), reset 0220h. Reads back the stored value with the read-only flags HIGH_Alert/LOW_Alert/Data_Ready/EEPROM_Busy (bits 15:12) replaced by 0 0 1 0 and Soft_Reset (bit 1) reading 0. Data_Ready reads 1 permanently because no conversion latency is modelled: the Temp_Result register always holds the current temperature, so a firmware that polls Data_Ready proceeds at once. Clear-on-read of the flag and the alert flags are not modelled.
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config - 4096 * cfg_ro - 2 * cfg_soft_reset + 8192"
+
+# THigh_Limit (02h, Section 7.6.4 p.29) reads back, reset 6000h (192 C).
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "thigh_limit"
+
+# TLow_Limit (03h, Section 7.6.5 p.29) reads back, reset 8000h (-256 C).
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "tlow_limit"
+
+# EEPROM_UL (04h, Section 7.6.6) reads back, reset 0000h.
+[[sensor.register]]
+addr = 0x04
+encoding = "u16_be"
+expr = "eeprom_ul"
+
+# Temp_Offset (07h, Section 7.6.9 p.31) reads back, reset 0000h.
+[[sensor.register]]
+addr = 0x07
+encoding = "i16_be"
+expr = "temp_offset"
+
+# Device_ID (0Fh, Table 7-15 p.32): DID[11:0] = 117h; Rev[3:0] reads 0h in the field table (0117h in the Table 7-3 register map).
+[[sensor.register]]
+addr = 0x0F
+const = [0x01, 0x17]
+
+# Configuration reset 0220h = MOD 00 (continuous), CONV 100 (1 s), AVG 01 (8 averages). cfg_ro = bits 15:12 (read-only flags), cfg_soft_reset = bit 1 (reads 0).
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 544.0
+
+[[sensor.write_register.field]]
+name = "cfg_ro"
+bits = [15, 12]
+
+[[sensor.write_register.field]]
+name = "cfg_mod"
+bits = [11, 10]
+
+[[sensor.write_register.field]]
+name = "cfg_conv"
+bits = [9, 7]
+
+[[sensor.write_register.field]]
+name = "cfg_avg"
+bits = [6, 5]
+
+[[sensor.write_register.field]]
+name = "cfg_tna"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "cfg_pol"
+bits = [3, 3]
+
+[[sensor.write_register.field]]
+name = "cfg_dr_alert"
+bits = [2, 2]
+
+[[sensor.write_register.field]]
+name = "cfg_soft_reset"
+bits = [1, 1]
+
+# THigh_Limit reset 6000h (Table 7-3 p.25).
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "thigh_limit"
+default = 24576.0
+
+# TLow_Limit reset 8000h (Table 7-3 p.25).
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "tlow_limit"
+default = -32768.0
+
+# EEPROM_UL reset 0000h (Table 7-3 p.25); the EEPROM programming sequence is not modelled.
+[[sensor.write_register]]
+addr = 0x04
+encoding = "u16_be"
+store = "eeprom_ul"
+default = 0.0
+
+# Temp_Offset reset 0000h (Table 7-3 p.25); the offset enters Temp_Result.
+[[sensor.write_register]]
+addr = 0x07
+encoding = "i16_be"
+store = "temp_offset"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.6    # Section 6.5 p.7, VPOR rising, typ
+idle_a = 0.000016             # Section 6.5 p.6, IQ typ, 1 Hz with 8 averages
+read_a = 0.000016
+write_a = 0.000016
+low_power_a = 0.00000015      # Section 6.5 p.6, shutdown current typ, TA = 25 C
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v3", "duty_cycled_supply_current", "absolute_ratings", "supply_range", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "device_id_read", "reset_values", "config_register_readback", "temperature_result_from_die_temperature", "temperature_offset", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["alert_pin_engine", "high_low_alert_flags", "therm_mode", "data_ready_clear_on_read", "conversion_timing_and_modes", "averaging", "one_shot_and_shutdown_modes", "eeprom_program_sequence", "eeprom1_eeprom2_eeprom3_values_not_printed", "soft_reset_and_general_call_reset", "first_conversion_reset_temperature", "conversion_peak_current", "grade_temperature_range"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tmp117.pdf"
+title = "Texas Instruments TMP117 High-Accuracy, Low-Power, Digital Temperature Sensor With SMBus- and I2C-Compatible Interface, SNOSD82D, June 2018, revised September 2022"
+locator = "Table 5-1 p.4; Sections 6.1-6.4 p.5; Section 6.5 pp.6-7; Table 7-2 p.21; Table 7-3 p.25; Sections 7.6.2-7.6.11 pp.26-32; Section 10.1 p.35; Packaging Information"
+sha256 = "4002364bdbb5c4c47e42b828939e12daf17f5249ae162866ca0a445b730f66c9"
+
+[[models.source.pinout]]
+package = "DSBGA-6 (YBG) 2 x 3 ball grid"
+pins = { "A1" = "SDA", "A2" = "SCL", "B1" = "V+", "B2" = "GND", "C1" = "ADD0", "C2" = "ALERT" }
+
+[[models.source.characteristic]]
+parameter = "V+ supply voltage"
+min = 1.8
+typ = 3.3
+max = 5.5
+unit = "V"
+conditions = "TA = -55 C to 150 C; 3.3 V nominal"
+basis = "TI SNOSD82D Section 6.3 p.5, Recommended Operating Conditions"
+
+[[models.source.characteristic]]
+parameter = "V+ supply voltage (restricted temperature)"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "TA = -55 C to 70 C"
+basis = "TI SNOSD82D Section 6.3 p.5, Recommended Operating Conditions"
+
+[[models.source.characteristic]]
+parameter = "V+ supply absolute maximum"
+min = -0.3
+max = 6
+unit = "V"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5, Absolute Maximum Ratings"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA, ALERT, ADD0 voltage absolute maximum"
+min = -0.3
+max = 6
+unit = "V"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5, Absolute Maximum Ratings"
+
+[[models.source.characteristic]]
+parameter = "VI/O SCL, SDA, ALERT, ADD0 operating voltage"
+min = 0
+max = 5.5
+unit = "V"
+conditions = "recommended"
+basis = "TI SNOSD82D Section 6.3 p.5"
+
+[[models.source.characteristic]]
+parameter = "Operating junction temperature"
+min = -55
+max = 155
+unit = "C"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -65
+max = 155
+unit = "C"
+conditions = "stress rating"
+basis = "TI SNOSD82D Section 6.1 p.5"
+
+[[models.source.characteristic]]
+parameter = "Operating free-air temperature (TMP117, TMP117N)"
+min = -55
+max = 150
+unit = "C"
+conditions = "recommended; TMP117M is 0 to 85 C"
+basis = "TI SNOSD82D Section 6.3 p.5; Packaging Information table"
+
+[[models.source.characteristic]]
+parameter = "RthetaJA junction-to-ambient, YBG"
+typ = 133.2
+unit = "C/W"
+conditions = "DSBGA-6, 6 pins; DRV with the thermal pad unsoldered"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "RthetaJC(top) junction-to-case (top), YBG"
+typ = 1.0
+unit = "C/W"
+conditions = "YBG DSBGA, 6 pins"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "RthetaJB junction-to-board, YBG"
+typ = 40.9
+unit = "C/W"
+conditions = "YBG DSBGA, 6 pins"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "Thermal mass MT"
+typ = 0.8
+unit = "mJ/C"
+conditions = "DSBGA-6"
+basis = "TI SNOSD82D Section 6.4 p.5, Thermal Information"
+
+[[models.source.characteristic]]
+parameter = "VIH input logic high level (SCL, SDA)"
+min = 0.7
+unit = "V+"
+conditions = "fraction of V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VIL input logic low level (SCL, SDA)"
+max = 0.3
+unit = "V+"
+conditions = "fraction of V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VOL SDA and ALERT output low level"
+min = 0
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA (printed -3 mA)"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IIN input leakage current"
+min = -0.1
+max = 0.1
+unit = "uA"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Input capacitance"
+typ = 4
+unit = "pF"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, 8 averages (the factory configuration)"
+typ = 16
+max = 22
+unit = "uA"
+conditions = "serial bus inactive, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, averaging off"
+typ = 3.5
+max = 5
+unit = "uA"
+conditions = "serial bus inactive, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current, 1 Hz, averaging off, bus active"
+typ = 15
+unit = "uA"
+conditions = "SCL = 400 kHz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IQ_ACTIVE quiescent current during active conversion"
+typ = 135
+max = 220
+unit = "uA"
+conditions = "serial bus inactive"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "ISB standby current"
+typ = 1.25
+max = 3.1
+unit = "uA"
+conditions = "serial bus inactive, SCL, SDA, ADD0 = V+, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Shutdown current"
+typ = 0.15
+max = 0.5
+unit = "uA"
+conditions = "serial bus inactive, SCL, SDA, ADD0 = V+, TA = 25 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "ISD shutdown current"
+max = 5
+unit = "uA"
+conditions = "serial bus inactive, TA = 150 C"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Shutdown current, bus active"
+typ = 17
+unit = "uA"
+conditions = "SCL = 400 kHz, ADD0 = V+"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "IEE EEPROM write quiescent current"
+typ = 240
+unit = "uA"
+conditions = "ADC conversion off; serial bus inactive"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold"
+typ = 1.6
+unit = "V"
+conditions = "supply rising"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "Brownout detect"
+typ = 1.1
+unit = "V"
+conditions = "supply falling"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "tRESET reset time"
+typ = 1.5
+unit = "ms"
+conditions = "time required by the device to reset"
+basis = "TI SNOSD82D Section 6.5 p.7"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -20 C to 50 C"
+min = -0.1
+typ = 0.05
+max = 0.1
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -40 C to 70 C"
+min = -0.15
+typ = 0.05
+max = 0.15
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -40 C to 100 C"
+min = -0.2
+typ = 0.1
+max = 0.2
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -55 C to 125 C"
+min = -0.25
+typ = 0.1
+max = 0.25
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature accuracy (TMP117), -55 C to 150 C"
+min = -0.3
+typ = 0.1
+max = 0.3
+unit = "C"
+conditions = "8 averages, 1 Hz"
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Temperature resolution (LSB)"
+typ = 7.8125
+unit = "mC"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, one-shot"
+min = 13
+typ = 15.5
+max = 17.5
+unit = "ms"
+conditions = ""
+basis = "TI SNOSD82D Section 6.5 p.6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TSL2591: ams very-high-sensitivity light-to-digital converter, ODFN-6 (FN).
+#
+# Source: ams "TSL2591 Datasheet - Apr. 2013 - ams163.5". Page numbers below are the printed
+#   "TSL2591 - n" footers: pin diagram and description p.3, ordering p.4, absolute maximum
+#   p.4, recommended operating conditions and operating characteristics p.5, ALS characteristics
+#   p.6, AC timing p.7, register summary p.10, registers pp.11-17.
+#
+# ORDERING: TSL25911FN (I2C bus level = VDD) is the part carried. TSL25913FN (bus level 1.8 V,
+# "contact factory for availability", p.4) has the same pad map but 1.8 V interface levels the
+# datasheet does not print, so it is NOT resolved to this card.
+#
+# LEVELS: VIH and VIL are printed as 0.7 and 0.3 of VDD; the volts below evaluate them at the
+# 3 V typical supply (derived). VOL is printed in volts (0.4 V at 3 mA, 0.6 V at 6 mA). INT and
+# SDA are open drain, so no output-high level is carried.
+#
+# THERMAL: the datasheet prints no theta_JA / theta_JC (searched the whole document); the
+# fields are left ABSENT.
+#
+# BUS MODEL: command-byte pointer framing (CMD bit 7 and TRANSACTION = 01 in the first byte;
+# every register is declared at 0xA0 + address). The channel data registers answer from two RAW
+# count inputs (ch0_counts, ch1_counts) because lux needs an empirical formula; they read 0 until
+# PON and AEN are set and clamp at the ATIME maximum count.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "tsl2591"
+kind = "digital"
+description = "ams TSL2591 very-high-sensitivity light sensor, ODFN-6 (fixed 0x29 address, pad map, VDD logic levels, command-byte register map with reset values, raw channel counts); no interrupt engine"
+
+[models.match]
+# TSL25911FN and the bare TSL2591 a breakout board prints. TSL25913FN (1.8 V bus) and the
+# unrelated TSL2561/TSL2560/TSL2571 families are excluded by the anchored number.
+value_re = "(?i)^TSL2591(?:1(?:FN)?)?$"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "3 mA sink on INT and SDA, VDD = 3 V, TA = 25 C", basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5, VOL 0.4 V max at 3 mA (0.6 V at 6 mA)" }
+vih   = 2.1      # Figure TSL2591-8 p.5, VIH 0.7 x VDD min (SCL, SDA), derived at the 3 V typical VDD
+vil   = 0.9      # Figure TSL2591-8 p.5, VIL 0.3 x VDD max (SCL, SDA), derived at the 3 V typical VDD
+supply_static_ua = 275.0   # Figure TSL2591-8 p.5, IDD active typ (325 uA max); sleep is 2.3 uA typ
+supply_pin = "5"           # VDD
+gnd_pin    = "3"           # GND
+
+[models.pins]
+# Pin Description (Figure TSL2591-4 p.3), all six pads of the FN package.
+"1" = "scl"   # SCL
+"2" = "int"   # INT
+"3" = "gnd"   # GND
+"4" = "nc"    # NC
+"5" = "vdd"   # VDD
+"6" = "sda"   # SDA
+
+[models.ratings]
+# Figure TSL2591-6 p.4: VDD 3.8 V; input and output terminals -0.5 to 3.8 V; storage -40 to 85 C.
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 3.8
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5), Figure TSL2591-7 p.5 VDD 2.7 to 3.6 V (3 V typical); Figure TSL2591-6 p.4 supply voltage 3.8 V maximum"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "TSL2591"
+bus = "i2c"
+i2c_address = 0x29
+
+# Every access starts with a COMMAND byte (Command Register, p.11): CMD (bit 7) = 1,
+# TRANSACTION (bits 6:5) = 01 normal operation, ADDR (bits 4:0) = the register. The
+# first byte written is the I2C pointer, so each register is declared at 0xA0 + its
+# address (Figure TSL2591-16, p.10); a read through a pointer without the CMD bit finds
+# no register and returns 0xFF. Sequential reads auto-increment through the declared
+# registers. The special-function commands (TRANSACTION = 11: interrupt set/clear) are not
+# modelled.
+
+# Raw ADC counts on the two photodiode channels. The datasheet converts irradiance to counts
+# only through channel responsivities printed at one white-LED and one 850 nm condition
+# (ALS Characteristics, p.6), so the registers carry counts: 0 is the dark reset value.
+[[sensor.input]]
+name = "ch0_counts"
+default = 0.0
+
+[[sensor.input]]
+name = "ch1_counts"
+default = 0.0
+
+# ENABLE (0x00, p.12) reads back, reset 0x00.
+[[sensor.register]]
+addr = 0xA0
+encoding = "u8"
+expr = "enable"
+
+# CONFIG/CONTROL (0x01, p.13) reads back, reset 0x00; SRESET (bit 7) is self-clearing and reads 0.
+[[sensor.register]]
+addr = 0xA1
+encoding = "u8"
+expr = "config - 128 * cfg_sreset"
+
+# AILTL (0x04, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA4
+encoding = "u8"
+expr = "ailtl"
+
+# AILTH (0x05, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA5
+encoding = "u8"
+expr = "ailth"
+
+# AIHTL (0x06, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA6
+encoding = "u8"
+expr = "aihtl"
+
+# AIHTH (0x07, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA7
+encoding = "u8"
+expr = "aihth"
+
+# NPAILTL (0x08, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA8
+encoding = "u8"
+expr = "npailtl"
+
+# NPAILTH (0x09, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xA9
+encoding = "u8"
+expr = "npailth"
+
+# NPAIHTL (0x0A, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xAA
+encoding = "u8"
+expr = "npaihtl"
+
+# NPAIHTH (0x0B, p.14), reset 0x00.
+[[sensor.register]]
+addr = 0xAB
+encoding = "u8"
+expr = "npaihth"
+
+# PERSIST (0x0C, p.15) reads back, reset 0x00.
+[[sensor.register]]
+addr = 0xAC
+encoding = "u8"
+expr = "persist"
+
+# ID (0x12, p.16): Device Identification = 0x50. The PID register (0x11) prints only its PID field (bits 5:4 = 00) and no value for the reserved bits, so it is left undeclared.
+[[sensor.register]]
+addr = 0xB2
+const = [0x50]
+
+# STATUS (0x13, p.16): AVALID (bit 0) = an integration has completed since AEN was set. With no conversion latency modelled it reads 1 whenever PON and AEN are both set. AINT and NPINTR (the interrupt flags) read 0: the interrupt engine is not modelled.
+[[sensor.register]]
+addr = 0xB3
+encoding = "u8"
+expr = "en_aen * en_pon"
+
+# C0DATAL/C0DATAH/C1DATAL/C1DATAH (0x14-0x17, p.17): the channel counts, low byte first, zero while the ALS is disabled (reset 0x00) and clamped to the ATIME maximum count (37888 at 100 ms, 65535 from 200 ms, p.13). The shadow-register latch on the low-byte read is not modelled.
+[[sensor.register]]
+addr = 0xB4
+encoding = "u8"
+expr = "(if(en_aen * en_pon > 0, round(min(ch0_counts, if(cfg_atime < 0.5, 37888, 65535))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0xB5
+encoding = "u8"
+expr = "floor((if(en_aen * en_pon > 0, round(min(ch0_counts, if(cfg_atime < 0.5, 37888, 65535))), 0)) / 256)"
+
+[[sensor.register]]
+addr = 0xB6
+encoding = "u8"
+expr = "(if(en_aen * en_pon > 0, round(min(ch1_counts, if(cfg_atime < 0.5, 37888, 65535))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0xB7
+encoding = "u8"
+expr = "floor((if(en_aen * en_pon > 0, round(min(ch1_counts, if(cfg_atime < 0.5, 37888, 65535))), 0)) / 256)"
+
+# ENABLE reset 0x00: NPIEN bit 7, SAI bit 6, AIEN bit 4, AEN bit 1, PON bit 0.
+[[sensor.write_register]]
+addr = 0xA0
+encoding = "u8"
+store = "enable"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "en_npien"
+bits = [7, 7]
+
+[[sensor.write_register.field]]
+name = "en_sai"
+bits = [6, 6]
+
+[[sensor.write_register.field]]
+name = "en_aien"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "en_aen"
+bits = [1, 1]
+
+[[sensor.write_register.field]]
+name = "en_pon"
+bits = [0, 0]
+
+# CONTROL reset 0x00: SRESET bit 7, AGAIN bits 5:4 (low, medium, high, max), ATIME bits 2:0 (100 ms to 600 ms).
+[[sensor.write_register]]
+addr = 0xA1
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "cfg_sreset"
+bits = [7, 7]
+
+[[sensor.write_register.field]]
+name = "cfg_again"
+bits = [5, 4]
+
+[[sensor.write_register.field]]
+name = "cfg_atime"
+bits = [2, 0]
+
+[[sensor.write_register]]
+addr = 0xA4
+encoding = "u8"
+store = "ailtl"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xA5
+encoding = "u8"
+store = "ailth"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xA6
+encoding = "u8"
+store = "aihtl"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xA7
+encoding = "u8"
+store = "aihth"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xA8
+encoding = "u8"
+store = "npailtl"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xA9
+encoding = "u8"
+store = "npailth"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xAA
+encoding = "u8"
+store = "npaihtl"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0xAB
+encoding = "u8"
+store = "npaihth"
+default = 0.0
+
+# PERSIST reset 0x00: APERS bits 3:0.
+[[sensor.write_register]]
+addr = 0xAC
+encoding = "u8"
+store = "persist"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "persist_apers"
+bits = [3, 0]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.7    # Figure TSL2591-7 p.5, VDD min (no power-on-reset level is printed)
+idle_a = 0.000275             # Figure TSL2591-8 p.5, IDD active typ
+read_a = 0.000275
+write_a = 0.000275
+low_power_a = 0.0000023       # Figure TSL2591-8 p.5, IDD sleep state typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_3v", "active_supply_current", "absolute_ratings", "supply_range", "register_map", "device_id_read", "reset_values", "config_register_readback", "raw_channel_counts", "atime_count_clamp", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["lux_computation", "gain_scaling_of_counts", "integration_timing", "interrupt_engine", "persist_filter", "special_function_commands", "shadow_register_latch", "sleep_after_interrupt", "system_reset_command", "pid_register_value", "tsl25913fn_1v8_bus_levels", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/TSL25911_Datasheet_EN_v1.pdf"
+title = "ams TSL2591 Very-High Sensitivity Light-to-Digital Converter datasheet, ams163.5, April 2013"
+locator = "Pin Diagram and Description p.3; Ordering Information and Absolute Maximum Ratings p.4; Figures TSL2591-7 and -8 p.5; Figure TSL2591-9 p.6; Figure TSL2591-10 p.7; Register summary Figure TSL2591-16 p.10; registers pp.11-17"
+sha256 = "69f2872b09a6fbff0e0c3fd463bec6b493c0ae6e40a88a01b85564385be3f8b4"
+
+[[models.source.pinout]]
+package = "FN ODFN-6"
+pins = { "1" = "SCL", "2" = "INT", "3" = "GND", "4" = "NC", "5" = "VDD", "6" = "SDA" }
+
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 2.7
+typ = 3
+max = 3.6
+unit = "V"
+conditions = "recommended"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-7 p.5, Recommended Operating Conditions"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum"
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4, Absolute Maximum Ratings"
+
+[[models.source.characteristic]]
+parameter = "Input terminal voltage absolute maximum"
+min = -0.5
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4"
+
+[[models.source.characteristic]]
+parameter = "Output terminal voltage absolute maximum"
+min = -0.5
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4"
+
+[[models.source.characteristic]]
+parameter = "Output terminal current absolute maximum"
+min = -1
+max = 20
+unit = "mA"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -40
+max = 85
+unit = "C"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4"
+
+[[models.source.characteristic]]
+parameter = "ESD tolerance, human body model"
+max = 2000
+unit = "V"
+conditions = "stress rating"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-6 p.4"
+
+[[models.source.characteristic]]
+parameter = "Operating free-air temperature"
+min = -30
+max = 70
+unit = "C"
+conditions = "recommended"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-7 p.5"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, active"
+typ = 275
+max = 325
+unit = "uA"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5, Operating Characteristics"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, sleep state"
+typ = 2.3
+max = 4
+unit = "uA"
+conditions = "VDD = 3 V, TA = 25 C, no I2C activity"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 3 mA sink"
+min = 0
+max = 0.4
+unit = "V"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 6 mA sink"
+min = 0
+max = 0.6
+unit = "V"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "ILEAK leakage current SDA, SCL, INT"
+min = -5
+max = 5
+unit = "uA"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "VIH SCL, SDA input high voltage"
+min = 0.7
+unit = "VDD"
+conditions = "fraction of VDD"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "VIL SCL, SDA input low voltage"
+max = 0.3
+unit = "VDD"
+conditions = "fraction of VDD"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-8 p.5"
+
+[[models.source.characteristic]]
+parameter = "f(SCL) clock frequency"
+min = 0
+max = 400
+unit = "kHz"
+conditions = "I2C only"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-10 p.7, AC Electrical Characteristics"
+
+[[models.source.characteristic]]
+parameter = "Ci input pin capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-10 p.7"
+
+[[models.source.characteristic]]
+parameter = "Dark ADC count value, CH0 and CH1"
+min = 0
+max = 25
+unit = "counts"
+conditions = "Ee = 0, ATIME = 000b (100 ms), AGAIN = max"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6, ALS Characteristics"
+
+[[models.source.characteristic]]
+parameter = "ADC integration time step size"
+min = 95
+typ = 101
+max = 108
+unit = "ms"
+conditions = "ATIME = 000b (100 ms)"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "ADC counts per step"
+min = 0
+max = 37888
+unit = "counts"
+conditions = "ATIME = 000b (100 ms)"
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "ADC count value, ATIME = 101b (600 ms)"
+min = 0
+max = 65535
+unit = "counts"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "Gain scaling, AGAIN = Low (relative to 1x)"
+typ = 1
+unit = "x"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "Gain scaling, AGAIN = Med (relative to 1x)"
+typ = 25
+unit = "x"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "Gain scaling, AGAIN = High (relative to 1x)"
+typ = 428
+unit = "x"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+[[models.source.characteristic]]
+parameter = "Gain scaling, AGAIN = Max (relative to 1x)"
+typ = 9876
+unit = "x"
+conditions = ""
+basis = "ams TSL2591 datasheet (Apr. 2013, ams163.5) Figure TSL2591-9 p.6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TSL2561 (CS/T/FN): TAOS (now ams OSRAM) light-to-digital converter, 6-lead CS (chipscale), T (TMB-6) and FN (dual flat no-lead).
+#
+# Source: TAOS "TSL2560, TSL2561 Light-to-Digital Converter", TAOS059N, March 2009. Page
+#   numbers are the printed footers: package pin diagrams p.1, Available Options p.2, Terminal
+#   Functions, Absolute Maximum Ratings, Recommended Operating Conditions and Electrical
+#   Characteristics p.3, Operating Characteristics p.4, Notes p.5, AC characteristics p.6,
+#   Table 1 slave addresses p.10, protocols pp.11-13, Table 2 register map p.13, Tables 3-12
+#   pp.14-18. The datasheet's own table cross-references are off by one page in places, so
+#   table numbers are cited alongside.
+#
+# VARIANTS: the CS, T and FN bodies share one pad order (1 VDD, 2 ADDR SEL, 3 GND, 4 SCL,
+# 5 INT, 6 SDA) and the CL body numbers its pads differently (1 VDD, 2 GND, 3 ADDR SEL, 4 SCL,
+# 5 SDA, 6 INT), so the tsl2561 variant family has two cards. A bare "TSL2561" names neither
+# and stays unresolved until the ordering code (TSL2561CS/T/FN or CL) or the fitted pads select
+# one. TSL2560 (SMBus, PARTNO 0000) is a different part and is not resolved here.
+#
+# LEVELS: VIL (0.8 V max) and VIH (2.1 V min) are printed in volts (Recommended Operating
+# Conditions p.3), not as fractions of VDD. VOL is printed in volts (0.4 V at 3 mA, 0.6 V at
+# 6 mA). INT and SDA are open drain, so no output-high level is carried.
+#
+# ADDRESS: the ADDR SEL pin is three-state (GND 0x29, Float 0x39, VDD 0x49, Table 1 p.10). The
+# strap contract here has two levels, so the card carries GND = 0x29 and VDD = 0x49, and the
+# Float address 0x39 is the spec default used, flagged assumed, when the pin is not tied.
+#
+# THERMAL: the datasheet prints no theta_JA, theta_JC or junction temperature (searched the
+# whole document); the fields are left ABSENT.
+#
+# BUS MODEL: byte-framed (0x80 + register) and word-framed (0xA0 + register) command bytes.
+# CONTROL, TIMING, INTERRUPT and the two 16-bit thresholds read back what was written; the ID
+# register answers 0x10 (PARTNO 0001, REVNO not printed); the channel data registers answer
+# from two RAW count inputs because lux needs an empirical formula.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "tsl2561_cs_t_fn"
+kind = "digital"
+description = "TAOS TSL2561 light-to-digital converter, 6-lead CS (chipscale), T (TMB-6) and FN (dual flat no-lead) (three-state ADDR SEL address strap, pad map, volt logic levels, command-byte register map with reset values, raw channel counts); no interrupt engine"
+variant_of = "tsl2561"
+
+[models.match]
+# One shared family match: the bare number and every ordering code. TSL2560 and TSL2591 fall
+# outside the anchored number.
+value_re = "(?i)^TSL2561(?:CS|T|FN|CL)?$"
+
+[models.variant]
+orderable_re = '^TSL2561(CS|T|FN)$'
+orderable = ["TSL2561CS", "TSL2561T", "TSL2561FN"]
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Available Options p.2; Terminal Functions p.3 (pin numbering per package)"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "3 mA sink on INT and SDA", basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3, VOL 0.4 V max at 3 mA (0.6 V at 6 mA)" }
+vih   = 2.1      # Recommended Operating Conditions p.3, SCL and SDA input high voltage min
+vil   = 0.8      # Recommended Operating Conditions p.3, SCL and SDA input low voltage max
+supply_static_ua = 240.0   # Electrical Characteristics p.3, IDD active typ (0.6 mA max); power down is 3.2 uA typ
+supply_pin = "1"
+gnd_pin    = "3"
+
+[models.pins]
+# Terminal Functions p.3, CS/T/FN, all six pads.
+"1" = "vdd"   # VDD
+"2" = "addr_sel"# ADDR SEL
+"3" = "gnd"   # GND
+"4" = "scl"   # SCL
+"5" = "int"   # INT
+"6" = "sda"   # SDA
+
+[models.ratings]
+# Absolute Maximum Ratings p.3: VDD 3.8 V; digital outputs -0.5 to 3.8 V; storage -40 to 85 C.
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 3.8
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009), Recommended Operating Conditions p.3 VDD 2.7 to 3.6 V (3 V nominal); Absolute Maximum Ratings p.3 supply voltage 3.8 V (the block diagram on p.2 prints 2.7 to 3.5 V; the table is used)"
+
+[models.peripheral]
+kind = "register_map"
+address_select_role = "addr_sel"
+address_when_low = 0x29      # Table 1 p.10, ADDR SEL at GND
+address_when_high = 0x49     # Table 1 p.10, ADDR SEL at VDD
+spec_toml = '''
+[sensor]
+name = "TSL2561 CS/T/FN"
+bus = "i2c"
+# Table 1 Slave Address Selection (p.10): ADDR SEL to GND selects 0101001 (0x29), left floating
+# 0111001 (0x39), tied to VDD 1001001 (0x49). The card's [models.peripheral] strap carries the
+# GND and VDD addresses; an ADDR SEL that is floating (or on a signal net) takes this default,
+# which is the printed Float address, and is reported as assumed.
+i2c_address = 0x39
+
+# 6-lead CS (chipscale), T (TMB-6) and FN (dual flat no-lead) pad map (Terminal Functions, p.3), the same as [models.pins].
+[sensor.pins]
+1 = "vdd"
+2 = "addr_sel"
+3 = "gnd"
+4 = "scl"
+5 = "int"
+6 = "sda"
+
+# Raw ADC counts of the two photodiode channels (Channel 0 visible plus IR, Channel 1 IR only).
+# The datasheet turns illuminance into counts only through source-dependent responsivities
+# (Operating Characteristics p.4), so the registers carry counts: 0 is the dark reset value.
+[[sensor.input]]
+name = "ch0_counts"
+default = 0.0
+
+[[sensor.input]]
+name = "ch1_counts"
+default = 0.0
+
+# ID register REVNO (bits 3:0). The datasheet prints the field but no value (Table 11, p.17),
+# so the revision defaults to 0 and a test can set it.
+[[sensor.input]]
+name = "revno"
+default = 0.0
+
+# Every access starts with a COMMAND byte (Table 3, p.14): CMD (bit 7) = 1, WORD (bit 5) for the
+# word protocols, ADDRESS (bits 3:0) = the register (Table 2, p.13). The first byte written is the
+# I2C pointer, so byte-framed registers are declared at 0x80 + address and word-framed registers
+# at 0xA0 + address. Block framing (0x90 + address, 0x9B) and the CLEAR bit (0x40) are not modelled.
+
+# CONTROL (0h, Table 4 p.14) reads back, reset 00h; a written 03h reads back 03h.
+[[sensor.register]]
+addr = 0x80
+encoding = "u8"
+expr = "control"
+
+# TIMING (1h, Table 5 p.15) reads back, reset 02h (GAIN 0 = 1x, INTEG 10 = 402 ms).
+[[sensor.register]]
+addr = 0x81
+encoding = "u8"
+expr = "timing"
+
+# THRESHLOWLOW (2h, Table 7 p.16): low byte of the low threshold, reset 00h.
+[[sensor.register]]
+addr = 0x82
+encoding = "u8"
+expr = "thresh_low % 256"
+
+# THRESHLOWHIGH (3h).
+[[sensor.register]]
+addr = 0x83
+encoding = "u8"
+expr = "floor(thresh_low / 256)"
+
+# THRESHHIGHLOW (4h).
+[[sensor.register]]
+addr = 0x84
+encoding = "u8"
+expr = "thresh_high % 256"
+
+# THRESHHIGHHIGH (5h).
+[[sensor.register]]
+addr = 0x85
+encoding = "u8"
+expr = "floor(thresh_high / 256)"
+
+# INTERRUPT (6h, Table 8 p.16) reads back, reset 00h.
+[[sensor.register]]
+addr = 0x86
+encoding = "u8"
+expr = "intr"
+
+# ID (Ah, Table 11 p.17): PARTNO (bits 7:4) = 0001 for the TSL2561 (0000 is the TSL2560); REVNO (bits 3:0) is not printed.
+[[sensor.register]]
+addr = 0x8A
+encoding = "u8"
+expr = "16 + revno"
+
+# DATA0LOW..DATA1HIGH (Ch-Fh, Table 12 p.18): the channel counts, low byte first, 00h on power up and while CONTROL is not 03h, clamped to the full-scale count of the integration time (5047 at 13.7 ms, 37177 at 101 ms, 65535 at 402 ms; Note 6 p.5). The high-byte shadow latch on the low-byte read is not modelled.
+[[sensor.register]]
+addr = 0x8C
+encoding = "u8"
+expr = "(if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0x8D
+encoding = "u8"
+expr = "floor((if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) / 256)"
+
+[[sensor.register]]
+addr = 0x8E
+encoding = "u8"
+expr = "(if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0x8F
+encoding = "u8"
+expr = "floor((if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) / 256)"
+
+# Low threshold read as a word (Read Word protocol, Figure 15 p.12).
+[[sensor.register]]
+addr = 0xA2
+encoding = "u16_le"
+expr = "thresh_low"
+
+# High threshold read as a word.
+[[sensor.register]]
+addr = 0xA4
+encoding = "u16_le"
+expr = "thresh_high"
+
+# Channel 0 ADC count as a word (DATA0LOW then DATA0HIGH, Table 12 p.18).
+[[sensor.register]]
+addr = 0xAC
+encoding = "u16_le"
+expr = "if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)"
+
+# Channel 1 ADC count as a word (DATA1LOW then DATA1HIGH).
+[[sensor.register]]
+addr = 0xAE
+encoding = "u16_le"
+expr = "if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)"
+
+# CONTROL reset 00h: POWER bits 1:0 (03h powers up, 00h powers down).
+[[sensor.write_register]]
+addr = 0x80
+encoding = "u8"
+store = "control"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "ctl_power"
+bits = [1, 0]
+
+# TIMING reset 02h: GAIN bit 4, Manual bit 3, INTEG bits 1:0.
+[[sensor.write_register]]
+addr = 0x81
+encoding = "u8"
+store = "timing"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "tim_gain"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "tim_manual"
+bits = [3, 3]
+
+[[sensor.write_register.field]]
+name = "tim_integ"
+bits = [1, 0]
+
+# Low interrupt threshold, written as a word (Write Word protocol; the datasheet says byte-paired registers are written together, Table 7 note p.16). Reset 0000h. Single-byte writes to 2h/3h are not modelled.
+[[sensor.write_register]]
+addr = 0xA2
+encoding = "u16_le"
+store = "thresh_low"
+default = 0.0
+
+# High interrupt threshold, written as a word; reset 0000h.
+[[sensor.write_register]]
+addr = 0xA4
+encoding = "u16_le"
+store = "thresh_high"
+default = 0.0
+
+# INTERRUPT reset 00h: INTR bits 5:4, PERSIST bits 3:0.
+[[sensor.write_register]]
+addr = 0x86
+encoding = "u8"
+store = "intr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "intr_mode"
+bits = [5, 4]
+
+[[sensor.write_register.field]]
+name = "intr_persist"
+bits = [3, 0]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.7    # Recommended Operating Conditions p.3, VDD min (no power-on-reset level is printed)
+idle_a = 0.00024              # Electrical Characteristics p.3, IDD active typ
+read_a = 0.00024
+write_a = 0.00024
+low_power_a = 0.0000032       # Electrical Characteristics p.3, IDD power down typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_range", "i2c_address_strap", "register_map", "device_id_read", "reset_values", "config_register_readback", "raw_channel_counts", "integration_count_clamp", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["three_state_address_float_level", "lux_computation", "gain_scaling_of_counts", "integration_timing", "manual_integration", "interrupt_engine", "interrupt_clear_command", "persist_filter", "smbus_alert_response", "block_read_write_framing", "single_byte_threshold_writes", "shadow_register_latch", "power_down_holds_last_conversion", "revno_value_not_printed", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/TSL2561.pdf"
+title = "TAOS TSL2560, TSL2561 Light-to-Digital Converter datasheet, TAOS059N, March 2009"
+locator = "Available Options p.2; Terminal Functions to Electrical Characteristics p.3; Operating Characteristics p.4; Notes p.5; AC Electrical Characteristics p.6; Table 1 p.10; Table 2 p.13; Tables 3-12 pp.14-18"
+sha256 = "619e949c78132c5b11c61700adea33f854f818c806979d99624ec61d3914e7dc"
+
+[[models.source.pinout]]
+package = "6-lead CS (chipscale), T (TMB-6) and FN (dual flat no-lead)"
+pins = { "1" = "VDD", "2" = "ADDR SEL", "3" = "GND", "4" = "SCL", "5" = "INT", "6" = "SDA" }
+
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 2.7
+typ = 3
+max = 3.6
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum"
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Digital output voltage absolute maximum"
+min = -0.5
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Digital output current absolute maximum"
+min = -1
+max = 20
+unit = "mA"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -40
+max = 85
+unit = "C"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "ESD tolerance, human body model"
+max = 2000
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Operating free-air temperature"
+min = -30
+max = 70
+unit = "C"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input low voltage VIL"
+min = -0.5
+max = 0.8
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input high voltage VIH"
+min = 2.1
+max = 3.6
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, active"
+typ = 0.24
+max = 0.6
+unit = "mA"
+conditions = "over recommended range"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, power down"
+typ = 3.2
+max = 15
+unit = "uA"
+conditions = "over recommended range"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 3 mA sink"
+min = 0
+max = 0.4
+unit = "V"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 6 mA sink"
+min = 0
+max = 0.6
+unit = "V"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "ILEAK leakage current"
+min = -5
+max = 5
+unit = "uA"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "fosc oscillator frequency"
+min = 690
+typ = 735
+max = 780
+unit = "kHz"
+conditions = "High gain, VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "Dark ADC count value, Ch0 and Ch1"
+min = 0
+max = 4
+unit = "counts"
+conditions = "Ee = 0, Tint = 402 ms"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint = 13.7 ms"
+max = 5047
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4 and Note 6 p.5"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint = 101 ms"
+max = 37177
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4 and Note 6 p.5"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint > 178 ms"
+max = 65535
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "t(CONV) conversion time"
+min = 12
+typ = 100
+max = 400
+unit = "ms"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+[[models.source.characteristic]]
+parameter = "f(SCL) clock frequency (I2C)"
+min = 0
+max = 400
+unit = "kHz"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+[[models.source.characteristic]]
+parameter = "Ci input pin capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TSL2561 (CL): TAOS (now ams OSRAM) light-to-digital converter, 6-lead ChipLED (CL).
+#
+# Source: TAOS "TSL2560, TSL2561 Light-to-Digital Converter", TAOS059N, March 2009. Page
+#   numbers are the printed footers: package pin diagrams p.1, Available Options p.2, Terminal
+#   Functions, Absolute Maximum Ratings, Recommended Operating Conditions and Electrical
+#   Characteristics p.3, Operating Characteristics p.4, Notes p.5, AC characteristics p.6,
+#   Table 1 slave addresses p.10, protocols pp.11-13, Table 2 register map p.13, Tables 3-12
+#   pp.14-18. The datasheet's own table cross-references are off by one page in places, so
+#   table numbers are cited alongside.
+#
+# VARIANTS: the CS, T and FN bodies share one pad order (1 VDD, 2 ADDR SEL, 3 GND, 4 SCL,
+# 5 INT, 6 SDA) and the CL body numbers its pads differently (1 VDD, 2 GND, 3 ADDR SEL, 4 SCL,
+# 5 SDA, 6 INT), so the tsl2561 variant family has two cards. A bare "TSL2561" names neither
+# and stays unresolved until the ordering code (TSL2561CS/T/FN or CL) or the fitted pads select
+# one. TSL2560 (SMBus, PARTNO 0000) is a different part and is not resolved here.
+#
+# LEVELS: VIL (0.8 V max) and VIH (2.1 V min) are printed in volts (Recommended Operating
+# Conditions p.3), not as fractions of VDD. VOL is printed in volts (0.4 V at 3 mA, 0.6 V at
+# 6 mA). INT and SDA are open drain, so no output-high level is carried.
+#
+# ADDRESS: the ADDR SEL pin is three-state (GND 0x29, Float 0x39, VDD 0x49, Table 1 p.10). The
+# strap contract here has two levels, so the card carries GND = 0x29 and VDD = 0x49, and the
+# Float address 0x39 is the spec default used, flagged assumed, when the pin is not tied.
+#
+# THERMAL: the datasheet prints no theta_JA, theta_JC or junction temperature (searched the
+# whole document); the fields are left ABSENT.
+#
+# BUS MODEL: byte-framed (0x80 + register) and word-framed (0xA0 + register) command bytes.
+# CONTROL, TIMING, INTERRUPT and the two 16-bit thresholds read back what was written; the ID
+# register answers 0x10 (PARTNO 0001, REVNO not printed); the channel data registers answer
+# from two RAW count inputs because lux needs an empirical formula.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "tsl2561_cl"
+kind = "digital"
+description = "TAOS TSL2561 light-to-digital converter, 6-lead ChipLED (CL) (three-state ADDR SEL address strap, pad map, volt logic levels, command-byte register map with reset values, raw channel counts); no interrupt engine"
+variant_of = "tsl2561"
+
+[models.match]
+# One shared family match: the bare number and every ordering code. TSL2560 and TSL2591 fall
+# outside the anchored number.
+value_re = "(?i)^TSL2561(?:CS|T|FN|CL)?$"
+
+[models.variant]
+orderable_re = '^TSL2561CL$'
+orderable = ["TSL2561CL"]
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Available Options p.2; Terminal Functions p.3 (pin numbering per package)"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "3 mA sink on INT and SDA", basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3, VOL 0.4 V max at 3 mA (0.6 V at 6 mA)" }
+vih   = 2.1      # Recommended Operating Conditions p.3, SCL and SDA input high voltage min
+vil   = 0.8      # Recommended Operating Conditions p.3, SCL and SDA input low voltage max
+supply_static_ua = 240.0   # Electrical Characteristics p.3, IDD active typ (0.6 mA max); power down is 3.2 uA typ
+supply_pin = "1"
+gnd_pin    = "2"
+
+[models.pins]
+# Terminal Functions p.3, ChipLED-6, all six pads.
+"1" = "vdd"   # VDD
+"2" = "gnd"   # GND
+"3" = "addr_sel"# ADDR SEL
+"4" = "scl"   # SCL
+"5" = "sda"   # SDA
+"6" = "int"   # INT
+
+[models.ratings]
+# Absolute Maximum Ratings p.3: VDD 3.8 V; digital outputs -0.5 to 3.8 V; storage -40 to 85 C.
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 3.8
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009), Recommended Operating Conditions p.3 VDD 2.7 to 3.6 V (3 V nominal); Absolute Maximum Ratings p.3 supply voltage 3.8 V (the block diagram on p.2 prints 2.7 to 3.5 V; the table is used)"
+
+[models.peripheral]
+kind = "register_map"
+address_select_role = "addr_sel"
+address_when_low = 0x29      # Table 1 p.10, ADDR SEL at GND
+address_when_high = 0x49     # Table 1 p.10, ADDR SEL at VDD
+spec_toml = '''
+[sensor]
+name = "TSL2561 CL"
+bus = "i2c"
+# Table 1 Slave Address Selection (p.10): ADDR SEL to GND selects 0101001 (0x29), left floating
+# 0111001 (0x39), tied to VDD 1001001 (0x49). The card's [models.peripheral] strap carries the
+# GND and VDD addresses; an ADDR SEL that is floating (or on a signal net) takes this default,
+# which is the printed Float address, and is reported as assumed.
+i2c_address = 0x39
+
+# 6-lead ChipLED (CL) pad map (Terminal Functions, p.3), the same as [models.pins].
+[sensor.pins]
+1 = "vdd"
+2 = "gnd"
+3 = "addr_sel"
+4 = "scl"
+5 = "sda"
+6 = "int"
+
+# Raw ADC counts of the two photodiode channels (Channel 0 visible plus IR, Channel 1 IR only).
+# The datasheet turns illuminance into counts only through source-dependent responsivities
+# (Operating Characteristics p.4), so the registers carry counts: 0 is the dark reset value.
+[[sensor.input]]
+name = "ch0_counts"
+default = 0.0
+
+[[sensor.input]]
+name = "ch1_counts"
+default = 0.0
+
+# ID register REVNO (bits 3:0). The datasheet prints the field but no value (Table 11, p.17),
+# so the revision defaults to 0 and a test can set it.
+[[sensor.input]]
+name = "revno"
+default = 0.0
+
+# Every access starts with a COMMAND byte (Table 3, p.14): CMD (bit 7) = 1, WORD (bit 5) for the
+# word protocols, ADDRESS (bits 3:0) = the register (Table 2, p.13). The first byte written is the
+# I2C pointer, so byte-framed registers are declared at 0x80 + address and word-framed registers
+# at 0xA0 + address. Block framing (0x90 + address, 0x9B) and the CLEAR bit (0x40) are not modelled.
+
+# CONTROL (0h, Table 4 p.14) reads back, reset 00h; a written 03h reads back 03h.
+[[sensor.register]]
+addr = 0x80
+encoding = "u8"
+expr = "control"
+
+# TIMING (1h, Table 5 p.15) reads back, reset 02h (GAIN 0 = 1x, INTEG 10 = 402 ms).
+[[sensor.register]]
+addr = 0x81
+encoding = "u8"
+expr = "timing"
+
+# THRESHLOWLOW (2h, Table 7 p.16): low byte of the low threshold, reset 00h.
+[[sensor.register]]
+addr = 0x82
+encoding = "u8"
+expr = "thresh_low % 256"
+
+# THRESHLOWHIGH (3h).
+[[sensor.register]]
+addr = 0x83
+encoding = "u8"
+expr = "floor(thresh_low / 256)"
+
+# THRESHHIGHLOW (4h).
+[[sensor.register]]
+addr = 0x84
+encoding = "u8"
+expr = "thresh_high % 256"
+
+# THRESHHIGHHIGH (5h).
+[[sensor.register]]
+addr = 0x85
+encoding = "u8"
+expr = "floor(thresh_high / 256)"
+
+# INTERRUPT (6h, Table 8 p.16) reads back, reset 00h.
+[[sensor.register]]
+addr = 0x86
+encoding = "u8"
+expr = "intr"
+
+# ID (Ah, Table 11 p.17): PARTNO (bits 7:4) = 0001 for the TSL2561 (0000 is the TSL2560); REVNO (bits 3:0) is not printed.
+[[sensor.register]]
+addr = 0x8A
+encoding = "u8"
+expr = "16 + revno"
+
+# DATA0LOW..DATA1HIGH (Ch-Fh, Table 12 p.18): the channel counts, low byte first, 00h on power up and while CONTROL is not 03h, clamped to the full-scale count of the integration time (5047 at 13.7 ms, 37177 at 101 ms, 65535 at 402 ms; Note 6 p.5). The high-byte shadow latch on the low-byte read is not modelled.
+[[sensor.register]]
+addr = 0x8C
+encoding = "u8"
+expr = "(if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0x8D
+encoding = "u8"
+expr = "floor((if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) / 256)"
+
+[[sensor.register]]
+addr = 0x8E
+encoding = "u8"
+expr = "(if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) % 256"
+
+[[sensor.register]]
+addr = 0x8F
+encoding = "u8"
+expr = "floor((if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)) / 256)"
+
+# Low threshold read as a word (Read Word protocol, Figure 15 p.12).
+[[sensor.register]]
+addr = 0xA2
+encoding = "u16_le"
+expr = "thresh_low"
+
+# High threshold read as a word.
+[[sensor.register]]
+addr = 0xA4
+encoding = "u16_le"
+expr = "thresh_high"
+
+# Channel 0 ADC count as a word (DATA0LOW then DATA0HIGH, Table 12 p.18).
+[[sensor.register]]
+addr = 0xAC
+encoding = "u16_le"
+expr = "if(control % 4 > 2.5, round(min(ch0_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)"
+
+# Channel 1 ADC count as a word (DATA1LOW then DATA1HIGH).
+[[sensor.register]]
+addr = 0xAE
+encoding = "u16_le"
+expr = "if(control % 4 > 2.5, round(min(ch1_counts, if(tim_integ < 0.5, 5047, if(tim_integ < 1.5, 37177, 65535)))), 0)"
+
+# CONTROL reset 00h: POWER bits 1:0 (03h powers up, 00h powers down).
+[[sensor.write_register]]
+addr = 0x80
+encoding = "u8"
+store = "control"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "ctl_power"
+bits = [1, 0]
+
+# TIMING reset 02h: GAIN bit 4, Manual bit 3, INTEG bits 1:0.
+[[sensor.write_register]]
+addr = 0x81
+encoding = "u8"
+store = "timing"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "tim_gain"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "tim_manual"
+bits = [3, 3]
+
+[[sensor.write_register.field]]
+name = "tim_integ"
+bits = [1, 0]
+
+# Low interrupt threshold, written as a word (Write Word protocol; the datasheet says byte-paired registers are written together, Table 7 note p.16). Reset 0000h. Single-byte writes to 2h/3h are not modelled.
+[[sensor.write_register]]
+addr = 0xA2
+encoding = "u16_le"
+store = "thresh_low"
+default = 0.0
+
+# High interrupt threshold, written as a word; reset 0000h.
+[[sensor.write_register]]
+addr = 0xA4
+encoding = "u16_le"
+store = "thresh_high"
+default = 0.0
+
+# INTERRUPT reset 00h: INTR bits 5:4, PERSIST bits 3:0.
+[[sensor.write_register]]
+addr = 0x86
+encoding = "u8"
+store = "intr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "intr_mode"
+bits = [5, 4]
+
+[[sensor.write_register.field]]
+name = "intr_persist"
+bits = [3, 0]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.7    # Recommended Operating Conditions p.3, VDD min (no power-on-reset level is printed)
+idle_a = 0.00024              # Electrical Characteristics p.3, IDD active typ
+read_a = 0.00024
+write_a = 0.00024
+low_power_a = 0.0000032       # Electrical Characteristics p.3, IDD power down typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_range", "i2c_address_strap", "register_map", "device_id_read", "reset_values", "config_register_readback", "raw_channel_counts", "integration_count_clamp", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["three_state_address_float_level", "lux_computation", "gain_scaling_of_counts", "integration_timing", "manual_integration", "interrupt_engine", "interrupt_clear_command", "persist_filter", "smbus_alert_response", "block_read_write_framing", "single_byte_threshold_writes", "shadow_register_latch", "power_down_holds_last_conversion", "revno_value_not_printed", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn-shop.adafruit.com/datasheets/TSL2561.pdf"
+title = "TAOS TSL2560, TSL2561 Light-to-Digital Converter datasheet, TAOS059N, March 2009"
+locator = "Available Options p.2; Terminal Functions to Electrical Characteristics p.3; Operating Characteristics p.4; Notes p.5; AC Electrical Characteristics p.6; Table 1 p.10; Table 2 p.13; Tables 3-12 pp.14-18"
+sha256 = "619e949c78132c5b11c61700adea33f854f818c806979d99624ec61d3914e7dc"
+
+[[models.source.pinout]]
+package = "6-lead ChipLED (CL)"
+pins = { "1" = "VDD", "2" = "GND", "3" = "ADDR SEL", "4" = "SCL", "5" = "SDA", "6" = "INT" }
+
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 2.7
+typ = 3
+max = 3.6
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum"
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Digital output voltage absolute maximum"
+min = -0.5
+max = 3.8
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Digital output current absolute maximum"
+min = -1
+max = 20
+unit = "mA"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -40
+max = 85
+unit = "C"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "ESD tolerance, human body model"
+max = 2000
+unit = "V"
+conditions = "stress rating"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Absolute Maximum Ratings p.3"
+
+[[models.source.characteristic]]
+parameter = "Operating free-air temperature"
+min = -30
+max = 70
+unit = "C"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input low voltage VIL"
+min = -0.5
+max = 0.8
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input high voltage VIH"
+min = 2.1
+max = 3.6
+unit = "V"
+conditions = "recommended"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Recommended Operating Conditions p.3"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, active"
+typ = 0.24
+max = 0.6
+unit = "mA"
+conditions = "over recommended range"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current, power down"
+typ = 3.2
+max = 15
+unit = "uA"
+conditions = "over recommended range"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 3 mA sink"
+min = 0
+max = 0.4
+unit = "V"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "VOL INT, SDA output low voltage, 6 mA sink"
+min = 0
+max = 0.6
+unit = "V"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "ILEAK leakage current"
+min = -5
+max = 5
+unit = "uA"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Electrical Characteristics p.3"
+
+[[models.source.characteristic]]
+parameter = "fosc oscillator frequency"
+min = 690
+typ = 735
+max = 780
+unit = "kHz"
+conditions = "High gain, VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "Dark ADC count value, Ch0 and Ch1"
+min = 0
+max = 4
+unit = "counts"
+conditions = "Ee = 0, Tint = 402 ms"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint = 13.7 ms"
+max = 5047
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4 and Note 6 p.5"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint = 101 ms"
+max = 37177
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4 and Note 6 p.5"
+
+[[models.source.characteristic]]
+parameter = "Full scale ADC count value, Tint > 178 ms"
+max = 65535
+unit = "counts"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) Operating Characteristics p.4"
+
+[[models.source.characteristic]]
+parameter = "t(CONV) conversion time"
+min = 12
+typ = 100
+max = 400
+unit = "ms"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+[[models.source.characteristic]]
+parameter = "f(SCL) clock frequency (I2C)"
+min = 0
+max = 400
+unit = "kHz"
+conditions = "VDD = 3 V, TA = 25 C"
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+[[models.source.characteristic]]
+parameter = "Ci input pin capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "TAOS TSL2560/TSL2561 datasheet (TAOS059N, Mar. 2009) AC Electrical Characteristics p.6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BH1750FVI: ROHM digital 16-bit ambient light sensor, WSOF6I (6-pad).
+#
+# Source: ROHM "BH1750FVI Ambient Light Sensor IC Series, Digital 16bit Serial Output Type",
+#   Technical Note No.11046EDT01, 2011.11 Rev.D. Page numbers are the printed "n/17" footers:
+#   Absolute Maximum Ratings and Operating Conditions p.1, Electrical Characteristics p.2,
+#   Block Diagram p.4, Instruction Set Architecture p.5, I2C Bus Access (slave address, write
+#   and read formats) p.10, MTreg adjustment p.11, H-Resolution Mode2 p.12, Terminal Description
+#   p.13, Package Outlines p.14, Ordering part number p.17.
+#
+# ORDERING: BH1750FVI-TR (tape and reel, 3000 pcs) is the only ordering code; the single
+# WSOF6I body means one card and no variants. The exposed central pad is GND level and is to be
+# left unconnected and unsoldered (Cautions on use 10, p.16), so it is not mapped.
+#
+# LEVELS: SCL and SDA thresholds are printed as 0.7 and 0.3 of DVI, the I2C reference voltage
+# pin, not of VCC; the volts below evaluate them at DVI = 3.0 V, the Electrical Characteristics
+# test condition (derived). VOL is printed in volts (0.4 V at 3 mA). SDA is open drain, so no
+# output-high level is carried. DVI is also the asynchronous reset: low holds the part in Power
+# Down (p.13), so the peripheral requires DVI high.
+#
+# THERMAL: no thermal resistance is printed. RthetaJA below is DERIVED from the printed
+# power-dissipation derating of 3.47 mW/C (1 / 0.00347 = 288.2 C/W, 70 x 70 x 1.6 mm glass epoxy
+# board, p.1); no junction-temperature limit is printed, so max_junction_temp_c is ABSENT.
+#
+# BUS MODEL: opcode-framed writes (Power Down, Power On, Reset, the three continuous and three
+# one-time measurement modes, and the two MTreg halves) and the two-byte measurement read frame
+# (high byte, then low byte). The data register follows the illuminance input (count = lux x 1.2
+# x MTreg / 69, doubled in H-resolution Mode2) once a measurement mode has been started.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "bh1750fvi"
+kind = "digital"
+description = "ROHM BH1750FVI ambient light sensor, WSOF6I (ADDR address strap, DVI-referenced logic levels, opcode command decode, two-byte lux data frame with MTreg sensitivity); no conversion latency"
+
+[models.match]
+# The bare number, BH1750FVI and the BH1750FVI-TR ordering code. BH1721FVC and BH1730FVC
+# are different parts and fall outside the anchored number.
+value_re = "(?i)^BH1750(?:FVI(?:-TR)?)?$"
+
+[models.params]
+vol   = { max = 0.4, unit = "V", conditions = "IOL = 3 mA on SDA", basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2, VOL 0.4 V max at IOL = 3 mA" }
+vih   = 2.1      # Electrical Characteristics p.2, VIH1 0.7 x DVI min (SCL, SDA), derived at DVI = 3.0 V
+vil   = 0.9      # Electrical Characteristics p.2, VIL1 0.3 x DVI max (SCL, SDA), derived at DVI = 3.0 V
+supply_static_ua = 120.0   # Electrical Characteristics p.2, Icc1 typ during measurement (190 uA max); power down is 0.01 uA typ
+supply_pin = "1"           # VCC
+gnd_pin    = "3"           # GND
+
+[models.pins]
+# Terminal Description p.13, all six pads.
+"1" = "vcc"   # VCC
+"2" = "addr"  # ADDR
+"3" = "gnd"   # GND
+"4" = "sda"   # SDA
+"5" = "dvi"   # DVI
+"6" = "scl"   # SCL
+
+[models.ratings]
+# Absolute Maximum Ratings p.1: supply voltage Vmax 4.5 V.
+max_voltage_v = 4.5
+theta_ja_c_per_w = 288.2     # DERIVED from the 3.47 mW/C derating of Pd = 260 mW (p.1), 70 x 70 x 1.6 mm glass epoxy board
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.4
+max_v = 3.6
+abs_max_v = 4.5
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D, Operating Conditions p.1 VCC 2.4 to 3.6 V (3.0 V typ); Absolute Maximum Ratings p.1 supply voltage Vmax 4.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvi"
+min_v = 1.65
+max_v = 3.6
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D, Operating Conditions p.1 I2C Reference Voltage VDVI 1.65 V to VCC (3.6 V at the VCC maximum)"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "dvi"
+upper = "vcc"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D, Operating Conditions p.1: the I2C reference voltage VDVI is 1.65 V to VCC, so DVI must not exceed VCC"
+
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["dvi"]    # p.13: DVI low is the asynchronous reset and holds Power Down
+address_select_role = "addr"
+address_when_low = 0x23          # p.10, ADDR low 0100011
+address_when_high = 0x5C         # p.10, ADDR high 1011100
+spec_toml = '''
+[sensor]
+name = "BH1750FVI"
+bus = "i2c"
+# Slave Address (p.10): ADDR low (<= 0.3 x VCC) selects 0100011 (0x23), ADDR high (>= 0.7 x VCC)
+# 1011100 (0x5C). ADDR is a tri-state buffer for internal test (Terminal Description p.13), so
+# the card's strap contract takes the two levels and an ADDR that is floating (or on a signal
+# net) takes this default, flagged assumed.
+i2c_address = 0x23
+
+# Six-pad WSOF6I pad map (Terminal Description p.13), the same as [models.pins].
+[sensor.pins]
+1 = "vcc"
+2 = "addr"
+3 = "gnd"
+4 = "sda"
+5 = "dvi"
+6 = "scl"
+
+# Ambient illuminance in lux, the quantity the part reports. The default is 0 lx (dark).
+# The count is illuminance x 1.2 (Measurement Accuracy typ, p.2; H-resolution formula
+# lx = count / 1.2 x 69 / MTreg, p.11) for the 1 lx and 4 lx modes, and twice that for the
+# 0.5 lx H-resolution Mode2 (p.11).
+[[sensor.input]]
+name = "illuminance_lx"
+default = 0.0
+
+# Per-channel state. pwr: 1 after Power On or a measurement command, 0 in Power Down (the
+# initial state, p.4). meas: 0 = data register empty (reset value 0000_0000_0000_0000, p.4),
+# 1 = H-resolution, 2 = H-resolution Mode2, 3 = L-resolution. mthi / mtlo: the two halves of
+# MTreg, default 0100_0101 = 69 (p.4): MT[7:5] = 010 = 2, MT[4:0] = 00101 = 5.
+[[sensor.state]]
+name = "pwr"
+default = 0.0
+
+[[sensor.state]]
+name = "meas"
+default = 0.0
+
+[[sensor.state]]
+name = "mthi"
+default = 2.0
+
+[[sensor.state]]
+name = "mtlo"
+default = 5.0
+
+# Power Down 0000_0000 (p.5): no active state; the data register is kept.
+[[sensor.write_command]]
+name = "power_down"
+match_mask = 0xFF
+match_value = 0x00
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "0.0"
+
+# Power On 0000_0001 (p.5): waiting for a measurement command.
+[[sensor.write_command]]
+name = "power_on"
+match_mask = 0xFF
+match_value = 0x01
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "1.0"
+
+# Reset 0000_0111 (p.5): resets the illuminance data register only, and is not accepted in Power Down mode.
+[[sensor.write_command]]
+name = "reset"
+match_mask = 0xFF
+match_value = 0x07
+group_bytes = 1
+
+[sensor.write_command.update]
+meas = "if(pwr > 0.5, 0.0, meas)"
+
+# Continuously H-Resolution Mode 0001_0000 (p.5), 1 lx, 120 ms typ.
+[[sensor.write_command]]
+name = "cont_h"
+match_mask = 0xFF
+match_value = 0x10
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "1.0"
+meas = "1.0"
+
+# Continuously H-Resolution Mode2 0001_0001 (p.5), 0.5 lx, 120 ms typ.
+[[sensor.write_command]]
+name = "cont_h2"
+match_mask = 0xFF
+match_value = 0x11
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "1.0"
+meas = "2.0"
+
+# Continuously L-Resolution Mode 0001_0011 (p.5), 4 lx, 16 ms typ.
+[[sensor.write_command]]
+name = "cont_l"
+match_mask = 0xFF
+match_value = 0x13
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "1.0"
+meas = "3.0"
+
+# One Time H-Resolution Mode 0010_0000 (p.5): measures, then goes to Power Down by itself. With no conversion latency modelled the device is in Power Down at once and the result is readable.
+[[sensor.write_command]]
+name = "once_h"
+match_mask = 0xFF
+match_value = 0x20
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "0.0"
+meas = "1.0"
+
+# One Time H-Resolution Mode2 0010_0001 (p.5), then Power Down.
+[[sensor.write_command]]
+name = "once_h2"
+match_mask = 0xFF
+match_value = 0x21
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "0.0"
+meas = "2.0"
+
+# One Time L-Resolution Mode 0010_0011 (p.5), then Power Down.
+[[sensor.write_command]]
+name = "once_l"
+match_mask = 0xFF
+match_value = 0x23
+group_bytes = 1
+
+[sensor.write_command.update]
+pwr = "0.0"
+meas = "3.0"
+
+# Change Measurement time, high bit: 01000_MT[7,6,5] (p.5, p.11).
+[[sensor.write_command]]
+name = "mt_high"
+match_mask = 0xF8
+match_value = 0x40
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "mt_hi_bits"
+bits = [2, 0]
+
+[sensor.write_command.update]
+mthi = "mt_hi_bits"
+
+# Change Measurement time, low bit: 011_MT[4,3,2,1,0] (p.5, p.11).
+[[sensor.write_command]]
+name = "mt_low"
+match_mask = 0xE0
+match_value = 0x60
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "mt_lo_bits"
+bits = [4, 0]
+
+[sensor.write_command.update]
+mtlo = "mt_lo_bits"
+
+# Read format (p.10): high byte [15:8] then low byte [7:0] of the 16-bit data register.
+# Reads wrap at the frame end, as a master that keeps clocking would see.
+[sensor.read_frame]
+bytes = [
+  "floor((if(meas < 0.5, 0, round(min(65535, max(0, illuminance_lx * if(meas > 1.5 && meas < 2.5, 2.4, 1.2) * (mthi * 32 + mtlo) / 69))))) / 256)",
+  "(if(meas < 0.5, 0, round(min(65535, max(0, illuminance_lx * if(meas > 1.5 && meas < 2.5, 2.4, 1.2) * (mthi * 32 + mtlo) / 69))))) % 256",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"   # nominal: opcode framing above replaces pointer writes
+'''
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.4    # Operating Conditions p.1, VCC min (no power-on-reset level is printed)
+idle_a = 0.00012              # Electrical Characteristics p.2, Icc1 typ (the only operating current printed)
+read_a = 0.00012
+write_a = 0.00012
+low_power_a = 0.00000001      # Electrical Characteristics p.2, Icc2 power-down typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_dvi_3v", "active_supply_current", "absolute_ratings", "supply_range", "dvi_rail_order", "thermal_resistance_derived", "i2c_address_strap", "dvi_reset_gating", "opcode_command_decode", "power_down_and_power_on", "reset_command", "measurement_mode_select", "two_byte_data_frame", "mtreg_sensitivity", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["measurement_time_latency", "data_register_latch_at_end_of_measurement", "l_resolution_4lx_quantisation", "mtreg_in_l_resolution_mode_not_printed", "accuracy_tolerance_band", "asynchronous_reset_timing", "dark_counts", "max_junction_temperature_not_printed", "idle_current_in_power_on_state_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://components101.com/sites/default/files/component_datasheet/BH1750.pdf"
+title = "ROHM BH1750FVI Digital 16bit Serial Output Type Ambient Light Sensor IC, Technical Note No.11046EDT01, 2011.11 Rev.D"
+locator = "Absolute Maximum Ratings and Operating Conditions p.1; Electrical Characteristics p.2; Instruction Set Architecture p.5; I2C Bus Access p.10; MTreg adjustment p.11; Terminal Description p.13; Ordering part number p.17"
+sha256 = "aa7dfcb9f97a0a3a9e7298fd17a69f1a587188ac96a78d1a95d1849cae10b80c"
+
+[[models.source.pinout]]
+package = "WSOF6I"
+pins = { "1" = "VCC", "2" = "ADDR", "3" = "GND", "4" = "SDA", "5" = "DVI", "6" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum Vmax"
+max = 4.5
+unit = "V"
+conditions = "stress rating"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature Topr"
+min = -40
+max = 85
+unit = "C"
+conditions = "stress rating"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature Tstg"
+min = -40
+max = 100
+unit = "C"
+conditions = "stress rating"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1"
+
+[[models.source.characteristic]]
+parameter = "SDA sink current Imax"
+max = 7
+unit = "mA"
+conditions = "stress rating"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1"
+
+[[models.source.characteristic]]
+parameter = "Power dissipation Pd"
+max = 260
+unit = "mW"
+conditions = "70 mm x 70 mm x 1.6 mm glass epoxy board; derating 3.47 mW/C above Ta = 25 C"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1"
+
+[[models.source.characteristic]]
+parameter = "RthetaJA junction-to-ambient (derived as 1 / 3.47 mW/C)"
+typ = 288.2
+unit = "C/W"
+conditions = "70 mm x 70 mm x 1.6 mm glass epoxy board; derived from the printed derating, not a printed thermal resistance"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Absolute Maximum Ratings p.1, derived"
+
+[[models.source.characteristic]]
+parameter = "VCC voltage"
+min = 2.4
+typ = 3.0
+max = 3.6
+unit = "V"
+conditions = "operating"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Operating Conditions p.1"
+
+[[models.source.characteristic]]
+parameter = "VDVI I2C reference voltage"
+min = 1.65
+max = 3.6
+unit = "V"
+conditions = "operating; the maximum is VCC"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Operating Conditions p.1"
+
+[[models.source.characteristic]]
+parameter = "Icc1 supply current"
+typ = 120
+max = 190
+unit = "uA"
+conditions = "VCC = 3.0 V, DVI = 3.0 V, Ta = 25 C, Ev = 100 lx (white LED), during measurement"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "Icc2 power-down current"
+typ = 0.01
+max = 1.0
+unit = "uA"
+conditions = "VCC = 3.0 V, DVI = 3.0 V, Ta = 25 C, no input light"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "Measurement accuracy S/A (sensor out / actual lx)"
+min = 0.96
+typ = 1.2
+max = 1.44
+unit = "times"
+conditions = "Ev = 1000 lx, white LED"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "Dark (0 lx) sensor out S0"
+min = 0
+typ = 0
+max = 3
+unit = "counts"
+conditions = "H-resolution mode"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "H-resolution mode resolution rHR"
+typ = 1
+unit = "lx"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "L-resolution mode resolution rLR"
+typ = 4
+unit = "lx"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "H-resolution mode measurement time tHR"
+typ = 120
+max = 180
+unit = "ms"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "L-resolution mode measurement time tLR"
+typ = 16
+max = 24
+unit = "ms"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "ADDR input H voltage VAH"
+min = 0.7
+unit = "VCC"
+conditions = "fraction of VCC"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "ADDR input L voltage VAL"
+max = 0.3
+unit = "VCC"
+conditions = "fraction of VCC"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "DVI input L voltage VDVL"
+max = 0.4
+unit = "V"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input H voltage VIH1"
+min = 0.7
+unit = "DVI"
+conditions = "DVI >= 1.8 V; fraction of DVI"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input H voltage VIH2"
+min = 1.26
+unit = "V"
+conditions = "1.65 V <= DVI < 1.8 V"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input L voltage VIL1"
+max = 0.3
+unit = "DVI"
+conditions = "DVI >= 1.8 V; fraction of DVI"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA input L voltage VIL2"
+max = 0.39
+unit = "V"
+conditions = "1.65 V <= DVI < 1.8 V; printed as DVI - 1.26 V, so 0.39 V at DVI = 1.65 V (the lowest limit over the range)"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA, ADDR input H current IIH"
+max = 10
+unit = "uA"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "SCL, SDA, ADDR input L current IIL"
+max = 10
+unit = "uA"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "fSCL I2C SCL clock frequency"
+max = 400
+unit = "kHz"
+conditions = ""
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "VOL SDA output L voltage"
+min = 0
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Electrical Characteristics p.2"
+
+[[models.source.characteristic]]
+parameter = "MTreg changeable range"
+min = 31
+typ = 69
+max = 254
+unit = "decimal"
+conditions = "default 69; sensitivity 0.45x at 31 and 3.68x at 254"
+basis = "ROHM BH1750FVI No.11046EDT01 Rev.D Adjust measurement result p.11"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MLX90614 Bxx and Dxx (3 V, D = medical grade): Melexis single and dual zone IR thermometer, TO39 (SF).
+#
+# Source: Melexis "MLX90614 Single and dual zone IR sensor in TO39", Datasheet Rev 021
+#   (Doc server Rev 012), 02-Jun-2026. Page numbers are the printed "Page N of 58" footers:
+#   ordering p.2, pin description p.6, Absolute Maximum Ratings p.7, Axx electrical p.8, Bxx and
+#   Dxx electrical p.9 (notes p.10), EEPROM table p.12, RAM table p.16, SMBus commands p.19,
+#   read word, write word and flags p.20, temperature conversion pp.29-30, marking convention p.50.
+#
+# VARIANTS: the supply option (the letter after the SF package code: A = 5 V, B = 3 V, D = 3 V
+# medical) sets the supply range, absolute maximum, input-high level and the sleep mode, so the
+# mlx90614 variant family has a 3 V card (mlx90614_3v: Bxx and Dxx) and a 5 V card (mlx90614_5v:
+# Axx). The pad map is the same, so a bare "MLX90614" binds the first by id, the 3 V card, as a
+# flagged stand-in; the ordering code (MLX90614ESF-BCC-000-TU, MLX90614KSF-ACC-000-TU) selects.
+# Temperature grade (E = -40..85 C, K = -40..125 C), zone count (xAx single, xBx dual, xCx gradient
+# compensated) and field of view change only accuracy and optics, which are not card parameters.
+#
+# LEVELS: SDA is open drain in SMBus mode, so no output-high level is carried (VOUT_H applies to
+# the PWM and thermal-relay output). VOL is printed in volts (0.2 V max at 2 mA).
+#
+# THERMAL: the datasheet prints no thermal resistance or junction temperature (searched the whole
+# document); those fields are left ABSENT.
+#
+# BUS MODEL: SMBus Read Word and Write Word with the command byte as the pointer: TA (0x06), TOBJ1
+# (0x07) from two temperature inputs in 0.02 K/LSB, the emissivity EEPROM word (0x24, factory
+# 0xFFFF), and the read-flags word (0xF0). The PEC byte is not generated. SLEEP: the 3 V parts have a sleep mode (Enter SLEEP command 0xFF, Table 15 p.19; ISLEEP 2 uA typ), carried as low_power_a; the command itself and the wake-up request (SDA low > 33 ms) are not modelled.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "mlx90614_3v"
+kind = "digital"
+description = "Melexis MLX90614 IR thermometer, TO39, Bxx and Dxx (3 V, D = medical grade) (fixed 0x5A SMBus address, pad map, supply range and levels, command-byte register map with ambient and object temperature words); no PEC, no PWM or thermal-relay mode"
+variant_of = "mlx90614"
+
+[models.match]
+# One shared family match: the bare number and every product code (temperature E/K, SF package,
+# supply A/B/D, zones A/B/C, field-of-view A/C/F/H/I/K, option 000, packing TU). MLX90615 and
+# MLX90632 are different parts and fall outside the anchored number.
+value_re = "(?i)^MLX90614(?:[EK]SF(?:-?[ABD][ABC][ACFHIK](?:-?000(?:-?TU)?)?)?)?$"
+
+[models.variant]
+orderable_re = '^MLX90614[EK]SF-?[BD][ABC][ACFHIK](-?000(-?TU)?)?$'
+orderable = ["MLX90614ESF-BCC-000-TU"]
+basis = "Melexis MLX90614 datasheet Rev 021 Ordering information p.2 (Table 1) and the marking convention Table 20 p.50"
+
+[models.params]
+vol   = { max = 0.2, unit = "V", conditions = "ISINK = 2 mA on SDA, over Ta and VDD", basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9, VOL 0.2 V max" }
+vih   = 2.9      # Table 7 p.9, VIN_H = VDD - 0.1 V min (SDA, SCL), derived at the 3.0 V nominal VDD
+vil   = 0.6      # Table 7 p.9, VIN_L 0.6 V max (SDA, SCL), over Ta and VDD
+supply_static_ua = 1300.0   # Table 7 p.9, IDD typ (2.5 mA max)
+supply_pin = "3"            # VDD
+gnd_pin    = "4"            # VSS
+
+[models.pins]
+# Table 2 p.6, all four TO39 pins. Pin 1 doubles as the 5.7 V zener Vz on the 5 V parts.
+"1" = "scl"   # SCL / Vz
+"2" = "sda"   # SDA / PWM
+"3" = "vdd"   # VDD
+"4" = "gnd"   # VSS
+
+[models.ratings]
+# Table 3 p.7: supply voltage 5.0 V for less than 24 hours (Bxx and Dxx (3 V, D = medical grade)).
+max_voltage_v = 5.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.6
+max_v = 3.6
+abs_max_v = 5.0
+basis = "Melexis MLX90614 datasheet Rev 021, Table 6 p.9 VDD 2.6 to 3.6 V (3.0 V nominal, +/- 50 mV); Table 3 p.7, Supply voltage Bxx type 5 V (< 24 hours)"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MLX90614 3V"
+bus = "i2c"
+# Slave address SA = 0x5A at the factory (Table 5 p.8 and Table 7 p.9). It is the LSB-programmable
+# EEPROM word 0x2E (Table 8 p.12), not a strap, so the card carries no address strap.
+i2c_address = 0x5A
+
+# TO39 pad map (Table 2 p.6), the same as [models.pins].
+[sensor.pins]
+1 = "scl"
+2 = "sda"
+3 = "vdd"
+4 = "gnd"
+
+# Ambient (die) and object temperatures in degrees C. The device reports both as RAM words in
+# 0.02 K per LSB (Section 4.1.8 pp.29-30); the defaults are a nominal 25 C room.
+[[sensor.input]]
+name = "ta_c"
+default = 25.0
+
+[[sensor.input]]
+name = "to_c"
+default = 25.0
+
+# SMBus access is Read Word / Write Word only (Section 4.1.4.2 p.17); the first byte is the
+# command (Table 15 p.19): 000x xxxx RAM, 001x xxxx EEPROM, 1111 0000 read flags. The command byte is
+# the I2C pointer, so each word is declared at its command byte and read low byte first. The
+# trailing PEC byte (CRC-8, Figure 6 p.20) is NOT generated: the interpreter has no trailer byte,
+# so a third byte read returns the next declared word instead.
+
+# TA, RAM 0x06 (Table 14 p.16): the die temperature in 0.02 K per LSB, (Ta + 273.15) / 0.02, clamped to the linearisation limits 0x2DE4 (-38.2 C) and 0x4DC4 (+125 C), Section 4.1.8.1 p.29. The MSb error flag stays 0.
+[[sensor.register]]
+addr = 0x06
+encoding = "u16_le"
+expr = "min(19908, max(11748, round((ta_c + 273.15) / 0.02)))"
+
+# TOBJ1, RAM 0x07 (Table 14 p.16): the object temperature in 0.02 K per LSB, clamped to 0x27AD (-70 C) .. 0x7FFF (382.19 C), Section 4.1.8.2 p.30. The MSb error flag stays 0. TOBJ2 (0x08) exists on dual-zone parts only and the raw IR words (0x04, 0x05) are sign-and-magnitude sensor counts; neither is declared, so they read 0xFF.
+[[sensor.register]]
+addr = 0x07
+encoding = "u16_le"
+expr = "min(32767, max(10157, round((to_c + 273.15) / 0.02)))"
+
+# Emissivity, EEPROM 0x04 read at command 0x24 (Table 8 p.12): reads back the stored word, factory default 0xFFFF = 1.0 (emissivity = round(65535 x e)). The other user EEPROM words (Tomax, Tomin, PWMCTRL, Ta range, Config Register 1, SMBus address) carry factory calibration values that are not printed, so they are not declared.
+[[sensor.register]]
+addr = 0x24
+encoding = "u16_le"
+expr = "emissivity"
+
+# Read flags, command 0xF0 (Table 15 p.19, Figure 9 p.20): the typical flags word is 0x0010, INIT = 1 (POR initialisation complete), EE_DEAD = 0, EEBUSY = 0 (Table 16 p.20).
+[[sensor.register]]
+addr = 0xF0
+const = [0x10, 0x00]
+
+# Write Word to EEPROM 0x04 (command 0x24, Figure 7 p.20): the datasheet's erase-then-write sequence (write 0x0000, wait 5 ms, write the value) lands as two plain stores, and the 5 ms cell time is not modelled. Emissivity does not scale the temperature words here.
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u16_le"
+store = "emissivity"
+default = 65535.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.75   # Table 7 p.9, VPOR_UP typ (1.4 V min, 1.95 V max)
+idle_a = 0.0013               # Table 7 p.9, IDD typ
+read_a = 0.0013
+write_a = 0.0013
+low_power_a = 0.000002       # Table 7 p.9, ISLEEP typ (3 V versions only)
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_range", "fixed_smbus_address", "register_map", "ambient_temperature_word", "object_temperature_word", "temperature_clamp_limits", "read_flags_word", "emissivity_eeprom_word", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["pec_byte", "tobj2_dual_zone", "raw_ir_channel_words", "calibration_eeprom_words_not_printed", "eeprom_erase_write_timing", "smbus_address_reprogramming", "emissivity_scaling_of_to", "sleep_command_and_wake_up", "pwm_and_thermal_relay_output", "iir_fir_filter_settling", "output_valid_after_por", "error_flag_msb", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.melexis.com/-/media/files/documents/datasheets/mlx90614-datasheet-melexis.pdf"
+title = "Melexis MLX90614 Single and dual zone IR sensor in TO39, Datasheet Rev 021, 02-Jun-2026 (DOC#3901090614)"
+locator = "Ordering information p.2; Table 2 p.6; Table 3 p.7; Tables 4-5 p.8; Tables 6-7 p.9; Table 8 p.12; Table 14 p.16; Table 15 p.19; Figures 6-9 and Table 16 p.20; Sections 4.1.8.1-4.1.8.2 pp.29-30; Table 20 p.50"
+sha256 = "5baade0b66aac94e8dc4bd3adebc464aa4d33258da9126a05672bc3390ad7f78"
+
+[[models.source.pinout]]
+package = "TO39 (SF)"
+pins = { "1" = "SCL / Vz", "2" = "SDA / PWM", "3" = "VDD", "4" = "VSS" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum, Bxx and Dxx (3 V, D = medical grade)"
+max = 5.0
+unit = "V"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "SDA output sink current absolute maximum"
+max = 100
+unit = "mA"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Reverse voltage, each pin"
+max = -0.4
+unit = "V"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "ESD voltage, HBM (AEC-Q100-002), all pins"
+max = 2
+unit = "kV"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -40
+max = 125
+unit = "C"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature, ESF type"
+min = -40
+max = 85
+unit = "C"
+conditions = "ambient"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature, KSF type"
+min = -40
+max = 125
+unit = "C"
+conditions = "ambient"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD, Bxx and Dxx (3 V, D = medical grade)"
+min = 2.6
+typ = 3.0
+max = 3.6
+unit = "V"
+conditions = "+/- 50 mV; TA = 25 C"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 6 p.9"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage rising"
+min = 0
+max = 20
+unit = "ms"
+conditions = "ensures POR"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 6 p.9"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 1.3
+max = 2.5
+unit = "mA"
+conditions = "TA = 25 C, VDD = 3.0 V"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "ISLEEP sleep current"
+typ = 2
+max = 6
+unit = "uA"
+conditions = "over Ta and VDD; 3 V versions only"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "VPOR_UP POR level up"
+min = 1.4
+typ = 1.75
+max = 1.95
+unit = "V"
+conditions = "VDD rising, all Ta"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "VPOR_DOWN POR level down"
+min = 1.3
+typ = 1.7
+max = 1.9
+unit = "V"
+conditions = "VDD falling, all Ta"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "Input high voltage (SDA, SCL) VIN_H"
+min = 2.9
+unit = "V"
+conditions = "VDD - 0.1 V; over Ta and VDD; 2.9 V at VDD = 3.0 V (derived)"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "Input low voltage (SDA, SCL) VIN_L"
+max = 0.6
+unit = "V"
+conditions = "over Ta and VDD"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "SDA output low voltage VOL"
+max = 0.2
+unit = "V"
+conditions = "ISINK = 2 mA, over Ta and VDD"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "SMBus clock frequency"
+min = 10
+max = 100
+unit = "kHz"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "SDA capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "SCL capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "To output resolution, SMBus mode"
+typ = 0.02
+unit = "C"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "Output valid (results in RAM) Tvalid"
+typ = 250
+unit = "ms"
+conditions = "after POR"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+[[models.source.characteristic]]
+parameter = "Timeout, low TTIMEOUT_L"
+min = 27
+max = 33
+unit = "ms"
+conditions = "SCL low"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 7 p.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MLX90614 Axx (5 V): Melexis single and dual zone IR thermometer, TO39 (SF).
+#
+# Source: Melexis "MLX90614 Single and dual zone IR sensor in TO39", Datasheet Rev 021
+#   (Doc server Rev 012), 02-Jun-2026. Page numbers are the printed "Page N of 58" footers:
+#   ordering p.2, pin description p.6, Absolute Maximum Ratings p.7, Axx electrical p.8, Bxx and
+#   Dxx electrical p.9 (notes p.10), EEPROM table p.12, RAM table p.16, SMBus commands p.19,
+#   read word, write word and flags p.20, temperature conversion pp.29-30, marking convention p.50.
+#
+# VARIANTS: the supply option (the letter after the SF package code: A = 5 V, B = 3 V, D = 3 V
+# medical) sets the supply range, absolute maximum, input-high level and the sleep mode, so the
+# mlx90614 variant family has a 3 V card (mlx90614_3v: Bxx and Dxx) and a 5 V card (mlx90614_5v:
+# Axx). The pad map is the same, so a bare "MLX90614" binds the first by id, the 3 V card, as a
+# flagged stand-in; the ordering code (MLX90614ESF-BCC-000-TU, MLX90614KSF-ACC-000-TU) selects.
+# Temperature grade (E = -40..85 C, K = -40..125 C), zone count (xAx single, xBx dual, xCx gradient
+# compensated) and field of view change only accuracy and optics, which are not card parameters.
+#
+# LEVELS: SDA is open drain in SMBus mode, so no output-high level is carried (VOUT_H applies to
+# the PWM and thermal-relay output). VOL is printed in volts (0.2 V max at 2 mA).
+#
+# THERMAL: the datasheet prints no thermal resistance or junction temperature (searched the whole
+# document); those fields are left ABSENT.
+#
+# BUS MODEL: SMBus Read Word and Write Word with the command byte as the pointer: TA (0x06), TOBJ1
+# (0x07) from two temperature inputs in 0.02 K/LSB, the emissivity EEPROM word (0x24, factory
+# 0xFFFF), and the read-flags word (0xF0). The PEC byte is not generated. SLEEP: the 5 V parts have no sleep mode (Note 6 p.10), so no low-power current is carried.
+#
+# Renode (MIT, Antmicro) was not consulted for this part: every value is from the datasheet.
+[[models]]
+id = "mlx90614_5v"
+kind = "digital"
+description = "Melexis MLX90614 IR thermometer, TO39, Axx (5 V) (fixed 0x5A SMBus address, pad map, supply range and levels, command-byte register map with ambient and object temperature words); no PEC, no PWM or thermal-relay mode"
+variant_of = "mlx90614"
+
+[models.match]
+# One shared family match: the bare number and every product code (temperature E/K, SF package,
+# supply A/B/D, zones A/B/C, field-of-view A/C/F/H/I/K, option 000, packing TU). MLX90615 and
+# MLX90632 are different parts and fall outside the anchored number.
+value_re = "(?i)^MLX90614(?:[EK]SF(?:-?[ABD][ABC][ACFHIK](?:-?000(?:-?TU)?)?)?)?$"
+
+[models.variant]
+orderable_re = '^MLX90614[EK]SF-?A[ABC][ACFHIK](-?000(-?TU)?)?$'
+orderable = ["MLX90614ESF-ACC-000-TU", "MLX90614KSF-ACC-000-TU"]
+basis = "Melexis MLX90614 datasheet Rev 021 Ordering information p.2 (Table 1) and the marking convention Table 20 p.50"
+
+[models.params]
+vol   = { max = 0.2, unit = "V", conditions = "ISINK = 2 mA on SDA, over Ta and VDD", basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8, VOL 0.2 V max" }
+vih   = 3.0      # Table 5 p.8, VIN_H 3 V min (SDA, SCL), over Ta and VDD
+vil   = 0.6      # Table 5 p.8, VIN_L 0.6 V max (SDA, SCL), over Ta and VDD
+supply_static_ua = 1300.0   # Table 5 p.8, IDD typ (2.5 mA max)
+supply_pin = "3"            # VDD
+gnd_pin    = "4"            # VSS
+
+[models.pins]
+# Table 2 p.6, all four TO39 pins. Pin 1 doubles as the 5.7 V zener Vz on the 5 V parts.
+"1" = "scl"   # SCL / Vz
+"2" = "sda"   # SDA / PWM
+"3" = "vdd"   # VDD
+"4" = "gnd"   # VSS
+
+[models.ratings]
+# Table 3 p.7: supply voltage 7.0 V for less than 24 hours (Axx (5 V)).
+max_voltage_v = 7.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Melexis MLX90614 datasheet Rev 021, Table 4 p.8 VDD 4.5 to 5.5 V (5.0 V nominal, +/- 50 mV); Table 3 p.7, Supply voltage Axx type 7 V (< 24 hours)"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MLX90614 5V"
+bus = "i2c"
+# Slave address SA = 0x5A at the factory (Table 5 p.8 and Table 7 p.9). It is the LSB-programmable
+# EEPROM word 0x2E (Table 8 p.12), not a strap, so the card carries no address strap.
+i2c_address = 0x5A
+
+# TO39 pad map (Table 2 p.6), the same as [models.pins].
+[sensor.pins]
+1 = "scl"
+2 = "sda"
+3 = "vdd"
+4 = "gnd"
+
+# Ambient (die) and object temperatures in degrees C. The device reports both as RAM words in
+# 0.02 K per LSB (Section 4.1.8 pp.29-30); the defaults are a nominal 25 C room.
+[[sensor.input]]
+name = "ta_c"
+default = 25.0
+
+[[sensor.input]]
+name = "to_c"
+default = 25.0
+
+# SMBus access is Read Word / Write Word only (Section 4.1.4.2 p.17); the first byte is the
+# command (Table 15 p.19): 000x xxxx RAM, 001x xxxx EEPROM, 1111 0000 read flags. The command byte is
+# the I2C pointer, so each word is declared at its command byte and read low byte first. The
+# trailing PEC byte (CRC-8, Figure 6 p.20) is NOT generated: the interpreter has no trailer byte,
+# so a third byte read returns the next declared word instead.
+
+# TA, RAM 0x06 (Table 14 p.16): the die temperature in 0.02 K per LSB, (Ta + 273.15) / 0.02, clamped to the linearisation limits 0x2DE4 (-38.2 C) and 0x4DC4 (+125 C), Section 4.1.8.1 p.29. The MSb error flag stays 0.
+[[sensor.register]]
+addr = 0x06
+encoding = "u16_le"
+expr = "min(19908, max(11748, round((ta_c + 273.15) / 0.02)))"
+
+# TOBJ1, RAM 0x07 (Table 14 p.16): the object temperature in 0.02 K per LSB, clamped to 0x27AD (-70 C) .. 0x7FFF (382.19 C), Section 4.1.8.2 p.30. The MSb error flag stays 0. TOBJ2 (0x08) exists on dual-zone parts only and the raw IR words (0x04, 0x05) are sign-and-magnitude sensor counts; neither is declared, so they read 0xFF.
+[[sensor.register]]
+addr = 0x07
+encoding = "u16_le"
+expr = "min(32767, max(10157, round((to_c + 273.15) / 0.02)))"
+
+# Emissivity, EEPROM 0x04 read at command 0x24 (Table 8 p.12): reads back the stored word, factory default 0xFFFF = 1.0 (emissivity = round(65535 x e)). The other user EEPROM words (Tomax, Tomin, PWMCTRL, Ta range, Config Register 1, SMBus address) carry factory calibration values that are not printed, so they are not declared.
+[[sensor.register]]
+addr = 0x24
+encoding = "u16_le"
+expr = "emissivity"
+
+# Read flags, command 0xF0 (Table 15 p.19, Figure 9 p.20): the typical flags word is 0x0010, INIT = 1 (POR initialisation complete), EE_DEAD = 0, EEBUSY = 0 (Table 16 p.20).
+[[sensor.register]]
+addr = 0xF0
+const = [0x10, 0x00]
+
+# Write Word to EEPROM 0x04 (command 0x24, Figure 7 p.20): the datasheet's erase-then-write sequence (write 0x0000, wait 5 ms, write the value) lands as two plain stores, and the 5 ms cell time is not modelled. Emissivity does not scale the temperature words here.
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u16_le"
+store = "emissivity"
+default = 65535.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.75   # Table 5 p.8, VPOR_UP typ (1.4 V min, 1.95 V max)
+idle_a = 0.0013               # Table 5 p.8, IDD typ
+read_a = 0.0013
+write_a = 0.0013
+
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "supply_range", "fixed_smbus_address", "register_map", "ambient_temperature_word", "object_temperature_word", "temperature_clamp_limits", "read_flags_word", "emissivity_eeprom_word", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["pec_byte", "tobj2_dual_zone", "raw_ir_channel_words", "calibration_eeprom_words_not_printed", "eeprom_erase_write_timing", "smbus_address_reprogramming", "emissivity_scaling_of_to", "sleep_command_and_wake_up", "pwm_and_thermal_relay_output", "iir_fir_filter_settling", "output_valid_after_por", "error_flag_msb", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.melexis.com/-/media/files/documents/datasheets/mlx90614-datasheet-melexis.pdf"
+title = "Melexis MLX90614 Single and dual zone IR sensor in TO39, Datasheet Rev 021, 02-Jun-2026 (DOC#3901090614)"
+locator = "Ordering information p.2; Table 2 p.6; Table 3 p.7; Tables 4-5 p.8; Tables 6-7 p.9; Table 8 p.12; Table 14 p.16; Table 15 p.19; Figures 6-9 and Table 16 p.20; Sections 4.1.8.1-4.1.8.2 pp.29-30; Table 20 p.50"
+sha256 = "5baade0b66aac94e8dc4bd3adebc464aa4d33258da9126a05672bc3390ad7f78"
+
+[[models.source.pinout]]
+package = "TO39 (SF)"
+pins = { "1" = "SCL / Vz", "2" = "SDA / PWM", "3" = "VDD", "4" = "VSS" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum, Axx (5 V)"
+max = 7.0
+unit = "V"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "SDA output sink current absolute maximum"
+max = 100
+unit = "mA"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Reverse voltage, each pin"
+max = -0.4
+unit = "V"
+conditions = "< 24 hours"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "ESD voltage, HBM (AEC-Q100-002), all pins"
+max = 2
+unit = "kV"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -40
+max = 125
+unit = "C"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature, ESF type"
+min = -40
+max = 85
+unit = "C"
+conditions = "ambient"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature, KSF type"
+min = -40
+max = 125
+unit = "C"
+conditions = "ambient"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 3 p.7"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD, Axx (5 V)"
+min = 4.5
+typ = 5.0
+max = 5.5
+unit = "V"
+conditions = "+/- 50 mV; TA = 25 C"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 4 p.8"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage rising"
+min = 0
+max = 20
+unit = "ms"
+conditions = "ensures POR"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 4 p.8"
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 1.3
+max = 2.5
+unit = "mA"
+conditions = "TA = 25 C, VDD = 5.0 V"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "VPOR_UP POR level up"
+min = 1.4
+typ = 1.75
+max = 1.95
+unit = "V"
+conditions = "VDD rising, all Ta"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "VPOR_DOWN POR level down"
+min = 1.3
+typ = 1.7
+max = 1.9
+unit = "V"
+conditions = "VDD falling, all Ta"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Input high voltage (SDA, SCL) VIN_H"
+min = 3.0
+unit = "V"
+conditions = "over Ta and VDD"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Input low voltage (SDA, SCL) VIN_L"
+max = 0.6
+unit = "V"
+conditions = "over Ta and VDD"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "SDA output low voltage VOL"
+max = 0.2
+unit = "V"
+conditions = "ISINK = 2 mA, over Ta and VDD"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "SMBus clock frequency"
+min = 10
+max = 100
+unit = "kHz"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "SDA capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "SCL capacitance"
+max = 10
+unit = "pF"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "To output resolution, SMBus mode"
+typ = 0.02
+unit = "C"
+conditions = ""
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Output valid (results in RAM) Tvalid"
+typ = 250
+unit = "ms"
+conditions = "after POR"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Timeout, low TTIMEOUT_L"
+min = 27
+max = 33
+unit = "ms"
+conditions = "SCL low"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Zener voltage VZ on SCL / Vz"
+min = 5.5
+typ = 5.7
+max = 5.9
+unit = "V"
+conditions = "IZ = 75..1000 uA, room temperature"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
+
+[[models.source.characteristic]]
+parameter = "Zener voltage VZ over temperature"
+min = 5.15
+typ = 5.7
+max = 6.24
+unit = "V"
+conditions = "IZ = 75..1000 uA, all Ta"
+basis = "Melexis MLX90614 datasheet Rev 021 Table 5 p.8"
