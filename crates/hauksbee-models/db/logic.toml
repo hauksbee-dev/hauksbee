@@ -1,4 +1,2248 @@
-# Official built-in part library: logic.
-#
-# Cards here are written from vendor datasheets only (every value carries a basis and a source).
-# See target/launch/official-parts-20261022/ranking.md for the batch plan.
+# Official-parts batch serial_logic: 74-series logic cards (TI datasheets, read in full).
+# One [[models]] per distinct pin map. Values are the SN74 figures of the cited TI datasheet;
+# a value the datasheet does not print is absent, and a derived value is labelled DERIVED.
+
+[[models]]
+id = "74lvc1g02"
+kind = "digital"
+description = "74LVC1G02 single 2-input NOR gate, 5-lead SOT-23-5 / SC70-5 / SOT-5X3 / DSBGA (TI DBV, DCK, DRL, YZP)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g02.pdf"
+title = "Texas Instruments SN74LVC1G02 Single 2-Input Positive NOR-Gate datasheet, SCES213Y, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL, YZP: 1 A, 2 B, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4-5; 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.5-6; 5.7 Switching Characteristics and 5.9 Operating Characteristics p.6"
+sha256 = "38895735614b7fee3e6ccee1c02026dc1256ff83da5375cdcc4022ad84460d0f"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the 6-pin DRY and DSF packages and the 5-pin DPW package number A and B differently and are separate cards (74lvc1g02_dry_dsf, 74lvc1g02_dpw); the Nexperia 74LVC1G02 datasheet could not be fetched, so its GW, GV and GX suffixes are not matched"
+
+[[models.source.pinout]]
+package = "DBV, DCK, DRL, YZP"
+pins = { "1" = "A", "2" = "B", "3" = "GND", "4" = "Y", "5" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DBV (SOT-23)"
+rating = "theta_ja_c_per_w"
+max = 357.1
+unit = "°C/W"
+conditions = "DBV (SOT-23) package"
+package = "DBV (SOT-23)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, DBV (SOT-23) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DCK (SC70)"
+rating = "theta_ja_c_per_w"
+max = 371.0
+unit = "°C/W"
+conditions = "DCK (SC70) package"
+package = "DCK (SC70)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, DCK (SC70) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRL (SOT-5X3)"
+rating = "theta_ja_c_per_w"
+max = 364.1
+unit = "°C/W"
+conditions = "DRL (SOT-5X3) package"
+package = "DRL (SOT-5X3)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, DRL (SOT-5X3) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, YZP (DSBGA)"
+rating = "theta_ja_c_per_w"
+max = 130.0
+unit = "°C/W"
+conditions = "YZP (DSBGA) package"
+package = "YZP (DSBGA)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, YZP (DSBGA) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.3
+unit = "V"
+conditions = "IOH = -24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.5
+unit = "ns"
+conditions = "A or B to Y; VCC = 3.3 V +/- 0.3 V; CL = 30 pF or 50 pF; -40 to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.7 Switching Characteristics, tpd row, VCC = 3.3 V column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 23.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G02 SCES213Y Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G02(DBV|DCK|DRL|YZP)?[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V (VCC - 0.1 V at -100 uA), 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-09     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 23.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]   # VCC - 0.1 V at IOH = -100 uA (5.5 Electrical Characteristics)
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 371.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G02 SCES213Y 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G02 SCES213Y 3 Description (the Boolean function of the gate).
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!(a | b)"
+
+[models.coverage]
+implements = ["nor", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g02_dry_dsf"
+kind = "digital"
+description = "74LVC1G02 single 2-input NOR gate, 6-pin SON (TI DRY 1.45 x 1.0 mm, DSF 1.0 x 1.0 mm); pin 5 not connected"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g02.pdf"
+title = "Texas Instruments SN74LVC1G02 Single 2-Input Positive NOR-Gate datasheet, SCES213Y, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3 (DRY, DSF: 1 A, 2 B, 3 GND, 4 Y, 5 NC, 6 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4-5; 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.5-6; 5.7 Switching Characteristics and 5.9 Operating Characteristics p.6"
+sha256 = "38895735614b7fee3e6ccee1c02026dc1256ff83da5375cdcc4022ad84460d0f"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "theta_ja_dsf"
+reason = "5.4 Thermal Information prints no DSF column (only DBV, DCK, DRL, DRY, YZP, DPW), so the DSF package carries no RθJA row"
+
+[[models.source.pinout]]
+package = "DRY, DSF"
+pins = { "1" = "A", "2" = "B", "3" = "GND", "4" = "Y", "5" = "NC", "6" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRY (SON)"
+rating = "theta_ja_c_per_w"
+max = 439.0
+unit = "°C/W"
+conditions = "DRY (SON) package"
+package = "DRY (SON)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, DRY (SON) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.3
+unit = "V"
+conditions = "IOH = -24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.5
+unit = "ns"
+conditions = "A or B to Y; VCC = 3.3 V +/- 0.3 V; CL = 30 pF or 50 pF; -40 to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.7 Switching Characteristics, tpd row, VCC = 3.3 V column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 23.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G02 SCES213Y Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G02(DRY|DSF)[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V (VCC - 0.1 V at -100 uA), 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-09     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 23.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "6"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]   # VCC - 0.1 V at IOH = -100 uA (5.5 Electrical Characteristics)
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "nc"
+"6" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 439.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G02 SCES213Y 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G02 SCES213Y 3 Description (the Boolean function of the gate).
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!(a | b)"
+
+[models.coverage]
+implements = ["nor", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g02_dpw"
+kind = "digital"
+description = "74LVC1G02 single 2-input NOR gate, 5-pin X2SON (TI DPW 0.8 x 0.8 mm); inputs numbered B 1, A 2"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g02.pdf"
+title = "Texas Instruments SN74LVC1G02 Single 2-Input Positive NOR-Gate datasheet, SCES213Y, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3 (DPW: 1 B, 2 A, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4-5; 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.5-6; 5.7 Switching Characteristics and 5.9 Operating Characteristics p.6"
+sha256 = "38895735614b7fee3e6ccee1c02026dc1256ff83da5375cdcc4022ad84460d0f"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+
+[[models.source.pinout]]
+package = "DPW"
+pins = { "1" = "B", "2" = "A", "3" = "GND", "4" = "Y", "5" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DPW (X2SON)"
+rating = "theta_ja_c_per_w"
+max = 340.0
+unit = "°C/W"
+conditions = "DPW (X2SON) package"
+package = "DPW (X2SON)"
+basis = "SN74LVC1G02 SCES213Y 5.4 Thermal Information, RθJA, DPW (X2SON) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.3
+unit = "V"
+conditions = "IOH = -24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.5
+unit = "ns"
+conditions = "A or B to Y; VCC = 3.3 V +/- 0.3 V; CL = 30 pF or 50 pF; -40 to 85 C"
+basis = "SN74LVC1G02 SCES213Y 5.7 Switching Characteristics, tpd row, VCC = 3.3 V column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 23.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G02 SCES213Y Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G02DPW[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V (VCC - 0.1 V at -100 uA), 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-09     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 23.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]   # VCC - 0.1 V at IOH = -100 uA (5.5 Electrical Characteristics)
+
+[models.pins]
+"1" = "b"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 340.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G02 SCES213Y 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G02 SCES213Y 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G02 SCES213Y 3 Description (the Boolean function of the gate).
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "!(a | b)"
+
+[models.coverage]
+implements = ["nor", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g32"
+kind = "digital"
+description = "74LVC1G32 single 2-input OR gate, 5-pin SOT-23-5 / SC70-5 / SOT-5X3 / X2SON / DSBGA (TI DBV, DCK, DRL, DPW, YZP)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g32.pdf"
+title = "Texas Instruments SN74LVC1G32 Single 2-Input Positive-OR Gate datasheet, SCES219W, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3 Table 4-1 (DBV, DCK, DRL, DPW, YZP: 1 A, 2 B, 3 GND, 4 Y, 5 VCC); 5.1 Absolute Maximum Ratings p.5; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.6; 5.5 Electrical Characteristics p.7; 5.8 Switching Characteristics p.8"
+sha256 = "b64786a568abe6a715c6f15dbc8ab1ffde3ad1017a1128a98931200e12c4c416"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the 6-pin DRY and DSF packages are a separate card (74lvc1g32_dry_dsf); the Nexperia 74LVC1G32 datasheet could not be fetched, so its GW, GV and GX suffixes are not matched"
+
+[[models.source.pinout]]
+package = "DBV, DCK, DRL, DPW, YZP"
+pins = { "1" = "A", "2" = "B", "3" = "GND", "4" = "Y", "5" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DBV (SOT-23)"
+rating = "theta_ja_c_per_w"
+max = 357.1
+unit = "°C/W"
+conditions = "DBV (SOT-23) package"
+package = "DBV (SOT-23)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, DBV (SOT-23) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DCK (SOT-SC70)"
+rating = "theta_ja_c_per_w"
+max = 371.0
+unit = "°C/W"
+conditions = "DCK (SOT-SC70) package"
+package = "DCK (SOT-SC70)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, DCK (SOT-SC70) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRL (SOT-5X3)"
+rating = "theta_ja_c_per_w"
+max = 364.1
+unit = "°C/W"
+conditions = "DRL (SOT-5X3) package"
+package = "DRL (SOT-5X3)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, DRL (SOT-5X3) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, YZP (DSBGA)"
+rating = "theta_ja_c_per_w"
+max = 130.0
+unit = "°C/W"
+conditions = "YZP (DSBGA) package"
+package = "YZP (DSBGA)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, YZP (DSBGA) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DPW (X2SON)"
+rating = "theta_ja_c_per_w"
+max = 340.0
+unit = "°C/W"
+conditions = "DPW (X2SON) package"
+package = "DPW (X2SON)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, DPW (X2SON) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.3
+unit = "V"
+conditions = "IOH = -24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.5
+unit = "ns"
+conditions = "A or B to Y; VCC = 3.3 V +/- 0.3 V; CL = 30 pF or 50 pF; -40 to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.8 Switching Characteristics 3.3 V and 5 V, tpd row, VCC = 3.3 V, -40 C to 85 C column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 21.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G32 SCES219W Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G32(DBV|DCK|DRL|DPW|YZP)?[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V (VCC - 0.1 V at -100 uA), 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-09     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 21.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]   # VCC - 0.1 V at IOH = -100 uA (5.5 Electrical Characteristics)
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 371.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G32 SCES219W 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G32 SCES219W 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G32 SCES219W 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G32 SCES219W 3 Description (the Boolean function of the gate).
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a | b"
+
+[models.coverage]
+implements = ["or", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g32_dry_dsf"
+kind = "digital"
+description = "74LVC1G32 single 2-input OR gate, 6-pin SON (TI DRY 1.45 x 1.0 mm, DSF 1.0 x 1.0 mm); pin 5 not connected"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g32.pdf"
+title = "Texas Instruments SN74LVC1G32 Single 2-Input Positive-OR Gate datasheet, SCES219W, revised August 2026"
+locator = "4 Pin Configuration and Functions p.3-4 Table 4-2 (DRY, DSF: 1 A, 2 B, 3 GND, 4 Y, 5 NC, 6 VCC); 5.1 Absolute Maximum Ratings p.5; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.6; 5.5 Electrical Characteristics p.7; 5.8 Switching Characteristics p.8"
+sha256 = "b64786a568abe6a715c6f15dbc8ab1ffde3ad1017a1128a98931200e12c4c416"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "theta_ja_dsf"
+reason = "5.4 Thermal Information prints no DSF column (only DBV, DCK, DRL, DRY, YZP, DPW), so the DSF package carries no RθJA row"
+
+[[models.source.pinout]]
+package = "DRY, DSF"
+pins = { "1" = "A", "2" = "B", "3" = "GND", "4" = "Y", "5" = "NC", "6" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRY (SON)"
+rating = "theta_ja_c_per_w"
+max = 439.0
+unit = "°C/W"
+conditions = "DRY (SON) package"
+package = "DRY (SON)"
+basis = "SN74LVC1G32 SCES219W 5.4 Thermal Information, RθJA, DRY (SON) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.3
+unit = "V"
+conditions = "IOH = -24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.5
+unit = "ns"
+conditions = "A or B to Y; VCC = 3.3 V +/- 0.3 V; CL = 30 pF or 50 pF; -40 to 85 C"
+basis = "SN74LVC1G32 SCES219W 5.8 Switching Characteristics 3.3 V and 5 V, tpd row, VCC = 3.3 V, -40 C to 85 C column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 21.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G32 SCES219W Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G32(DRY|DSF)[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 3.2          # VCC - 0.1 V at IOH = -100 uA, VCC 3.3 V
+vol = 0.1          # IOL = 100 uA
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: VCC = 3 V, IOH = -24 mA: VOH 2.3 V min against 2.9 V (VCC - 0.1 V at -100 uA), 0.6 V / 24 mA = 25 Ohm.
+ro = 25.0
+tpd_s = 4.5e-09     # A or B to Y max, VCC 3.3 V +/- 0.3 V, CL = 30 or 50 pF, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 21.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "6"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+voh = [[1.65, 1.55], [5.5, 5.4]]   # VCC - 0.1 V at IOH = -100 uA (5.5 Electrical Characteristics)
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "gnd"
+"4" = "y"
+"5" = "nc"
+"6" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 439.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G32 SCES219W 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G32 SCES219W 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G32 SCES219W 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G32 SCES219W 3 Description (the Boolean function of the gate).
+inputs = ["a", "b"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a | b"
+
+[models.coverage]
+implements = ["or", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g07"
+kind = "digital"
+description = "74LVC1G07 single buffer/driver with open-drain output, 5-pin SOT-23-5 / SC70-5 / SOT-5X3 / X2SON / DSBGA (TI DBV, DCK, DRL, DPW, YZP); pin 1 not connected"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g07.pdf"
+title = "Texas Instruments SN74LVC1G07 Single Buffer/Driver With Open-Drain Output datasheet, SCES296AG, revised October 2025"
+locator = "4 Pin Configuration and Functions p.3 (DBV, DCK, DRL, DPW: 1 NC, 2 A, 3 GND, 4 Y, 5 VCC; YZP: A1/B2 NC, B1 A, C1 GND, C2 Y, A2 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.6; 5.6 Switching Characteristics and 5.8 Operating Characteristics p.6"
+sha256 = "1e175728fccf85295e744a60420f48b1feb23f7f0061b8c73d70f81a6903f59e"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "yzp_ball_binding"
+reason = "the YZP DSBGA balls are named A1..C2, not pad numbers, so that column is documented in source.pinout and not matched; the 6-pin DRY and DSF packages are a separate card (74lvc1g07_dry_dsf)"
+
+[[models.source.pinout]]
+package = "DBV, DCK, DRL, DPW"
+pins = { "1" = "NC", "2" = "A", "3" = "GND", "4" = "Y", "5" = "VCC" }
+[[models.source.pinout]]
+package = "YZP"
+pins = { "A1" = "NC", "B2" = "NC", "B1" = "A", "C1" = "GND", "C2" = "Y", "A2" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DBV (SOT-23)"
+rating = "theta_ja_c_per_w"
+max = 357.1
+unit = "°C/W"
+conditions = "DBV (SOT-23) package"
+package = "DBV (SOT-23)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, DBV (SOT-23) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DCK (SC70)"
+rating = "theta_ja_c_per_w"
+max = 371.0
+unit = "°C/W"
+conditions = "DCK (SC70) package"
+package = "DCK (SC70)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, DCK (SC70) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRL (SOT-5X3)"
+rating = "theta_ja_c_per_w"
+max = 243.0
+unit = "°C/W"
+conditions = "DRL (SOT-5X3) package"
+package = "DRL (SOT-5X3)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, DRL (SOT-5X3) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DPW (X2SON)"
+rating = "theta_ja_c_per_w"
+max = 340.0
+unit = "°C/W"
+conditions = "DPW (X2SON) package"
+package = "DPW (X2SON)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, DPW (X2SON) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, YZP (DSBGA)"
+rating = "theta_ja_c_per_w"
+max = 130.0
+unit = "°C/W"
+conditions = "YZP (DSBGA) package"
+package = "YZP (DSBGA)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, YZP (DSBGA) column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.1
+unit = "V"
+conditions = "IOL = 100 uA; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.2
+unit = "ns"
+conditions = "A to Y; VCC = 3.3 V +/- 0.3 V; -40 to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.6 Switching Characteristics -40 C to 85 C, tpd row, VCC = 3.3 V column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 4.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G07 SCES296AG Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G07(DBV|DCK|DRL|DPW)?[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+open_collector = true   # 3 Description: the output is open drain; it sinks and never sources
+vol = 0.1          # IOL = 100 uA, VCC 1.65 V to 5.5 V
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: sink resistance from the 3 V rows, (VOL 0.55 V at IOL = 24 mA - VOL 0.1 V at 100 uA) / 24 mA.
+ro = 18.75
+tpd_s = 4.2e-09     # A to Y max, VCC 3.3 V +/- 0.3 V, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 4.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 371.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G07 SCES296AG 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G07 SCES296AG 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G07 SCES296AG 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G07 SCES296AG 3 Description (the Boolean function of the gate).
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+
+[models.coverage]
+implements = ["buffer", "open_drain_output", "wire_and", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74lvc1g07_dry_dsf"
+kind = "digital"
+description = "74LVC1G07 single buffer/driver with open-drain output, 6-pin SON (TI DRY 1.45 x 1.0 mm, DSF 1.0 x 1.0 mm); pins 1 and 5 not connected"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74lvc1g07.pdf"
+title = "Texas Instruments SN74LVC1G07 Single Buffer/Driver With Open-Drain Output datasheet, SCES296AG, revised October 2025"
+locator = "4 Pin Configuration and Functions p.3 (DRY, DSF: 1 NC, 2 A, 3 GND, 4 Y, 5 NC, 6 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions and 5.4 Thermal Information p.5; 5.5 Electrical Characteristics p.6; 5.6 Switching Characteristics and 5.8 Operating Characteristics p.6"
+sha256 = "1e175728fccf85295e744a60420f48b1feb23f7f0061b8c73d70f81a6903f59e"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at one supply band; the supply-, load- and temperature-dependent delay tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "theta_ja_dsf"
+reason = "5.4 Thermal Information prints no DSF column (only DBV, DCK, DRL, DRY, YZP, DPW), so the DSF package carries no RθJA row"
+
+[[models.source.pinout]]
+package = "DRY, DSF"
+pins = { "1" = "NC", "2" = "A", "3" = "GND", "4" = "Y", "5" = "NC", "6" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DRY (USON)"
+rating = "theta_ja_c_per_w"
+max = 439.0
+unit = "°C/W"
+conditions = "DRY (USON) package"
+package = "DRY (USON)"
+basis = "SN74LVC1G07 SCES296AG 5.4 Thermal Information, RθJA, DRY (USON) column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.55
+unit = "V"
+conditions = "IOL = 24 mA; VCC = 3 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.1
+unit = "V"
+conditions = "IOL = 100 uA; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 10.0
+unit = "uA"
+conditions = "VI = 5.5 V or GND; IO = 0; VCC = 1.65 V to 5.5 V; -40 C to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.5 Electrical Characteristics, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay"
+max = 4.2
+unit = "ns"
+conditions = "A to Y; VCC = 3.3 V +/- 0.3 V; -40 to 85 C"
+basis = "SN74LVC1G07 SCES296AG 5.6 Switching Characteristics -40 C to 85 C, tpd row, VCC = 3.3 V column, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance"
+typ = 4.0
+unit = "pF"
+conditions = "f = 10 MHz; VCC = 3.3 V; TA = 25 C"
+basis = "SN74LVC1G07 SCES296AG Operating Characteristics, Cpd row, typ"
+
+[models.match]
+value_re = "(?i)^(SN)?74LVC1G07(DRY|DSF)[RT]?(E4|G4|3)?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+open_collector = true   # 3 Description: the output is open drain; it sinks and never sources
+vol = 0.1          # IOL = 100 uA, VCC 1.65 V to 5.5 V
+vih = 2.0          # VCC = 3 V to 3.6 V
+vil = 0.8
+# DERIVED: sink resistance from the 3 V rows, (VOL 0.55 V at IOL = 24 mA - VOL 0.1 V at 100 uA) / 24 mA.
+ro = 18.75
+tpd_s = 4.2e-09     # A to Y max, VCC 3.3 V +/- 0.3 V, -40 to 85 C
+supply_static_ua = 10.0   # ICC max, VI = 5.5 V or GND, -40 to 85 C
+supply_cpd_pf = 4.0      # Cpd typ, f = 10 MHz, VCC = 3.3 V
+supply_pin = "6"
+gnd_pin = "3"
+
+[models.levels]
+# 5.3 Recommended Operating Conditions: VIH 0.65 x VCC at 1.65 V to 1.95 V, 1.7 V at 2.3 V to 2.7 V,
+# 2 V at 3 V to 3.6 V, 0.7 x VCC at 4.5 V to 5.5 V; VIL 0.35 x VCC, 0.7 V, 0.8 V, 0.3 x VCC. The
+# supply-relative corners are DERIVED (printed percentage x the band's VCC end).
+vih = [[1.65, 1.0725], [1.95, 1.2675], [2.3, 1.7], [2.7, 1.7], [3.0, 2.0], [3.6, 2.0], [4.5, 3.15], [5.5, 3.85]]
+vil = [[1.65, 0.5775], [1.95, 0.6825], [2.3, 0.7], [2.7, 0.7], [3.0, 0.8], [3.6, 0.8], [4.5, 1.35], [5.5, 1.65]]
+
+[models.pins]
+"1" = "nc"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "nc"
+"6" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05   # IO continuous output current abs max (5.1)
+max_voltage_v = 6.5        # VCC and VI abs max (5.1)
+theta_ja_c_per_w = 439.0   # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G07 SCES296AG 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1G07 SCES296AG 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1G07 SCES296AG 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
+[models.logic]
+# Behaviour source: TI SN74LVC1G07 SCES296AG 3 Description (the Boolean function of the gate).
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+
+[models.coverage]
+implements = ["buffer", "open_drain_output", "wire_and", "logic_levels"]
+missing = ["propagation_timing", "output_drive_curve", "ioff_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc138"
+kind = "digital"
+description = "74HC138 3-line to 8-line decoder/demultiplexer, active-low outputs, 16-pin SOIC / SSOP / PDIP / SO / TSSOP (TI SN74HC138 D, DB, N, NS, PW)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc138.pdf"
+title = "Texas Instruments SN54HC138, SN74HC138 3-Line To 8-Line Decoders/Demultiplexers datasheet, SCLS107G, revised October 2021"
+locator = "5 Pin Configuration and Functions, Pin Functions p.3 (D, DB, N, NS, PW: 1 A, 2 B, 3 C, 4 G2A, 5 G2B, 6 G1, 7 Y7, 8 GND, 9 Y6, 10 Y5, 11 Y4, 12 Y3, 13 Y2, 14 Y1, 15 Y0, 16 VCC); 6.1 Absolute Maximum Ratings p.4; 6.3 Recommended Operating Conditions p.4; 6.4 Thermal Information p.5; 6.7 Electrical Characteristics: SN74HC138 p.6; 6.10 Switching Characteristics: SN74HC138 p.7; 8.4 Table 8-1 Function Table p.10"
+sha256 = "795ac76468c240b976a632b6107738765800f7f672ad5b58925fbfb5f5064938"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V (A, B, C to Y); the enable-to-Y delay, the supply- and load-dependent tables and tt are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC138 military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC138 columns"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC138; another vendor's 74HC138 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "D, DB, N, NS, PW"
+pins = { "1" = "A", "2" = "B", "3" = "C", "4" = "G2A_N", "5" = "G2B_N", "6" = "G1", "7" = "Y7_N", "8" = "GND", "9" = "Y6_N", "10" = "Y5_N", "11" = "Y4_N", "12" = "Y3_N", "13" = "Y2_N", "14" = "Y1_N", "15" = "Y0_N", "16" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, D (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 87.3
+unit = "°C/W"
+conditions = "D (SOIC) package"
+package = "D (SOIC)"
+basis = "SN74HC138 SCLS107G 6.4 Thermal Information, RθJA, D (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 104.3
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC138 SCLS107G 6.4 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 54.8
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC138 SCLS107G 6.4 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, NS (SO)"
+rating = "theta_ja_c_per_w"
+max = 91.1
+unit = "°C/W"
+conditions = "NS (SO) package"
+package = "NS (SO)"
+basis = "SN74HC138 SCLS107G 6.4 Thermal Information, RθJA, NS (SO) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 141.6
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC138 SCLS107G 6.4 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.84
+unit = "V"
+conditions = "IOH = -4 mA; VCC = 4.5 V; SN74HC138 over temperature"
+basis = "SN74HC138 SCLS107G 6.7 Electrical Characteristics: SN74HC138, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.33
+unit = "V"
+conditions = "IOL = 4 mA; VCC = 4.5 V; SN74HC138 over temperature"
+basis = "SN74HC138 SCLS107G 6.7 Electrical Characteristics: SN74HC138, VOL row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 80.0
+unit = "uA"
+conditions = "VI = VCC or 0; IO = 0; VCC = 6 V; SN74HC138 over temperature"
+basis = "SN74HC138 SCLS107G 6.7 Electrical Characteristics: SN74HC138, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, A, B or C to any Y"
+max = 45.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC138 over temperature"
+basis = "SN74HC138 SCLS107G 6.10 Switching Characteristics: SN74HC138, tpd row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, enable to any Y"
+max = 39.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC138 over temperature"
+basis = "SN74HC138 SCLS107G 6.10 Switching Characteristics: SN74HC138, tpd row, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance (no load)"
+typ = 85.0
+unit = "pF"
+conditions = "TA = 25 C"
+basis = "SN74HC138 SCLS107G 6.3 Recommended Operating Conditions, Cpd row, NOM"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC138(D|DB|N|NS|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -4 mA: VOH 3.84 V min against the 4.4 V light-load level, (4.4 - 3.84) V / 4 mA.
+ro = 140.0
+tpd_s = 4.5e-08     # A, B or C to any Y max, VCC 4.5 V, CL = 50 pF, SN74HC138 over -40 to 85 C (6.10)
+supply_static_ua = 80.0   # ICC max, VI = VCC or 0, IO = 0, VCC = 6 V, SN74HC138 over temperature (6.7)
+supply_cpd_pf = 85.0     # Cpd power dissipation capacitance (no load), 6.3
+supply_pin = "16"
+gnd_pin = "8"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+"3" = "c"
+"4" = "g2a_n"
+"5" = "g2b_n"
+"6" = "g1"
+"7" = "y7_n"
+"8" = "gnd"
+"9" = "y6_n"
+"10" = "y5_n"
+"11" = "y4_n"
+"12" = "y3_n"
+"13" = "y2_n"
+"14" = "y1_n"
+"15" = "y0_n"
+"16" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO continuous output current abs max (6.1)
+max_voltage_v = 7.0          # VCC abs max (6.1)
+theta_ja_c_per_w = 141.6     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC138 SCLS107G 6.3 Recommended Operating Conditions VCC 2 V to 6 V; 6.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC138 SCLS107G 8.4 Table 8-1 Function Table. Output Yn is LOW only while G1 is HIGH,
+# G2A and G2B are LOW and C B A (C most significant) selects n; every other row drives all outputs HIGH.
+inputs = ["a", "b", "c", "g1", "g2a_n", "g2b_n"]
+outputs = ["y0_n", "y1_n", "y2_n", "y3_n", "y4_n", "y5_n", "y6_n", "y7_n"]
+[models.logic.comb]
+"y0_n" = "!(g1 & !g2a_n & !g2b_n & !c & !b & !a)"
+"y1_n" = "!(g1 & !g2a_n & !g2b_n & !c & !b & a)"
+"y2_n" = "!(g1 & !g2a_n & !g2b_n & !c & b & !a)"
+"y3_n" = "!(g1 & !g2a_n & !g2b_n & !c & b & a)"
+"y4_n" = "!(g1 & !g2a_n & !g2b_n & c & !b & !a)"
+"y5_n" = "!(g1 & !g2a_n & !g2b_n & c & !b & a)"
+"y6_n" = "!(g1 & !g2a_n & !g2b_n & c & b & !a)"
+"y7_n" = "!(g1 & !g2a_n & !g2b_n & c & b & a)"
+
+[models.coverage]
+implements = ["decoder_3_to_8", "enable_gating", "logic_levels"]
+missing = ["propagation_timing", "output_transition_time", "output_drive_curve", "input_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc139"
+kind = "digital"
+description = "74HC139 dual 2-line to 4-line decoder/demultiplexer, active-low outputs, 16-pin SOIC / SSOP / PDIP / SO / TSSOP (TI SN74HC139 D, DB, N, NS, PW)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc139.pdf"
+title = "Texas Instruments SN54HC139, SN74HC139 Dual 2-Line To 4-Line Decoders/Demultiplexers datasheet, SCLS108E, revised February 2022"
+locator = "4 Pin Configuration and Functions p.3 (J, W, D, DB, N, NS, PW top view: 1 1G, 2 1A, 3 1B, 4 1Y0, 5 1Y1, 6 1Y2, 7 1Y3, 8 GND, 9 2Y3, 10 2Y2, 11 2Y1, 12 2Y0, 13 2B, 14 2A, 15 2G, 16 VCC); 5.1 Absolute Maximum Ratings and 5.2 Recommended Operating Conditions p.4; 5.3 Thermal Information p.4; 5.4 Electrical Characteristics and 5.5 Switching Characteristics p.5; 5.6 Operating Characteristics p.5; 7.3 Device Functional Modes p.7"
+sha256 = "2cd8d95edab7d19b65f907dd3e9f45ae8df3f9a878e3b149e8dfd5c82c44cd3f"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V; the supply- and load-dependent tables and tt are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC139 military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC139 columns"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "thermal_pin_count"
+reason = "5.3 Thermal Information heads its package columns '14 PINS' although the 16-pin packages are drawn; the RθJA values are carried as printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC139; another vendor's 74HC139 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "D, DB, N, NS, PW"
+pins = { "1" = "1G_N", "2" = "1A", "3" = "1B", "4" = "1Y0_N", "5" = "1Y1_N", "6" = "1Y2_N", "7" = "1Y3_N", "8" = "GND", "9" = "2Y3_N", "10" = "2Y2_N", "11" = "2Y1_N", "12" = "2Y0_N", "13" = "2B", "14" = "2A", "15" = "2G_N", "16" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, D (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 73.0
+unit = "°C/W"
+conditions = "D (SOIC) package"
+package = "D (SOIC)"
+basis = "SN74HC139 SCLS108E 5.3 Thermal Information, RθJA, D (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 82.0
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC139 SCLS108E 5.3 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 67.0
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC139 SCLS108E 5.3 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, NS (SO)"
+rating = "theta_ja_c_per_w"
+max = 64.0
+unit = "°C/W"
+conditions = "NS (SO) package"
+package = "NS (SO)"
+basis = "SN74HC139 SCLS108E 5.3 Thermal Information, RθJA, NS (SO) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 108.0
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC139 SCLS108E 5.3 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.84
+unit = "V"
+conditions = "IOH = -4 mA; VCC = 4.5 V; SN74HC139 over temperature"
+basis = "SN74HC139 SCLS108E 5.4 Electrical Characteristics, VOH row, SN74HC139 min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.33
+unit = "V"
+conditions = "IOL = 4 mA; VCC = 4.5 V; SN74HC139 over temperature"
+basis = "SN74HC139 SCLS108E 5.4 Electrical Characteristics, VOL row, SN74HC139 max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 80.0
+unit = "uA"
+conditions = "IO = 0; VCC = 6 V; SN74HC139 over temperature"
+basis = "SN74HC139 SCLS108E 5.4 Electrical Characteristics, ICC row, SN74HC139 max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, A or B to Y"
+max = 44.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC139 over temperature"
+basis = "SN74HC139 SCLS108E 5.5 Switching Characteristics, tpd row, SN74HC139 max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, G to Y"
+max = 44.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC139 over temperature"
+basis = "SN74HC139 SCLS108E 5.5 Switching Characteristics, tpd row, SN74HC139 max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance per decoder"
+typ = 25.0
+unit = "pF"
+conditions = "No load; TA = 25 C"
+basis = "SN74HC139 SCLS108E 5.6 Operating Characteristics, Cpd row, typ"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC139(D|DB|N|NS|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -4 mA: VOH 3.84 V min against the 4.4 V light-load level, (4.4 - 3.84) V / 4 mA.
+ro = 140.0
+tpd_s = 4.4e-08     # A or B to Y max, VCC 4.5 V, CL = 50 pF, SN74HC139 over -40 to 85 C (5.5)
+supply_static_ua = 80.0   # ICC max, IO = 0, VCC = 6 V, SN74HC139 over temperature (5.4)
+supply_cpd_pf = 25.0     # Cpd power dissipation capacitance per decoder, no load, TA = 25 C (5.6)
+supply_pin = "16"
+gnd_pin = "8"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "1g_n"
+"2" = "1a"
+"3" = "1b"
+"4" = "1y0_n"
+"5" = "1y1_n"
+"6" = "1y2_n"
+"7" = "1y3_n"
+"8" = "gnd"
+"9" = "2y3_n"
+"10" = "2y2_n"
+"11" = "2y1_n"
+"12" = "2y0_n"
+"13" = "2b"
+"14" = "2a"
+"15" = "2g_n"
+"16" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025   # IO continuous output current abs max (5.1)
+max_voltage_v = 7.0          # VCC abs max (5.1)
+theta_ja_c_per_w = 108.0     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC139 SCLS108E 5.2 Recommended Operating Conditions VCC 2 V to 6 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC139 SCLS108E 7.3 Device Functional Modes: with G HIGH all four outputs are HIGH; with G
+# LOW the output selected by B A (A least significant) goes LOW. The two decoders are independent.
+inputs = ["1a", "1b", "1g_n", "2a", "2b", "2g_n"]
+outputs = ["1y0_n", "1y1_n", "1y2_n", "1y3_n", "2y0_n", "2y1_n", "2y2_n", "2y3_n"]
+[models.logic.comb]
+"1y0_n" = "!(!1g_n & !1b & !1a)"
+"1y1_n" = "!(!1g_n & !1b & 1a)"
+"1y2_n" = "!(!1g_n & 1b & !1a)"
+"1y3_n" = "!(!1g_n & 1b & 1a)"
+"2y0_n" = "!(!2g_n & !2b & !2a)"
+"2y1_n" = "!(!2g_n & !2b & 2a)"
+"2y2_n" = "!(!2g_n & 2b & !2a)"
+"2y3_n" = "!(!2g_n & 2b & 2a)"
+
+[models.coverage]
+implements = ["dual_decoder_2_to_4", "enable_gating", "logic_levels"]
+missing = ["propagation_timing", "output_transition_time", "output_drive_curve", "input_leakage"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc244"
+kind = "digital"
+description = "74HC244 octal buffer / line driver, two 4-bit halves with separate active-low output enables, 3-state, 20-pin SOIC / SSOP / PDIP / SO / TSSOP (TI SN74HC244 DB, DW, N, NS, PW)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc244.pdf"
+title = "Texas Instruments SN54HC244, SN74HC244 Octal Buffers and Line Drivers With 3-State Outputs datasheet, SCLS130I, revised February 2026"
+locator = "4 Pin Configuration and Functions p.3 (DB, DW, N, NS, PW: 1 1OE, 2 1A1, 3 2Y4, 4 1A2, 5 2Y3, 6 1A3, 7 2Y2, 8 1A4, 9 2Y1, 10 GND, 11 2A1, 12 1Y4, 13 2A2, 14 1Y3, 15 2A3, 16 1Y2, 17 2A4, 18 1Y1, 19 2OE, 20 VCC); 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information p.5; 5.7 Electrical Characteristics -40 C to 125 C p.5-6; 5.9 and 5.10 Switching Characteristics p.7-8"
+sha256 = "96fab8d66e73471202eddee965c22a78430f330c328a901cc6d78094915f49e9"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V; ten, tdis, tt, the CL = 150 pF figures and the supply-dependent tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC244 military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC244 columns"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC244; another vendor's 74HC244 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "DB, DW, N, NS, PW"
+pins = { "1" = "OE_N_1", "2" = "1A1", "3" = "2Y4", "4" = "1A2", "5" = "2Y3", "6" = "1A3", "7" = "2Y2", "8" = "1A4", "9" = "2Y1", "10" = "GND", "11" = "2A1", "12" = "1Y4", "13" = "2A2", "14" = "1Y3", "15" = "2A3", "16" = "1Y2", "17" = "2A4", "18" = "1Y1", "19" = "OE_N_2", "20" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DW (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 109.1
+unit = "°C/W"
+conditions = "DW (SOIC) package"
+package = "DW (SOIC)"
+basis = "SN74HC244 SCLS130I 5.4 Thermal Information, RθJA, DW (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 122.7
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC244 SCLS130I 5.4 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 84.6
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC244 SCLS130I 5.4 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, NS (SO)"
+rating = "theta_ja_c_per_w"
+max = 113.4
+unit = "°C/W"
+conditions = "NS (SO) package"
+package = "NS (SO)"
+basis = "SN74HC244 SCLS130I 5.4 Thermal Information, RθJA, NS (SO) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 131.8
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC244 SCLS130I 5.4 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.7
+unit = "V"
+conditions = "IOH = -6 mA; VCC = 4.5 V; -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.7 Electrical Characteristics -40 C to 125 C, VOH row, min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 6 mA; VCC = 4.5 V; -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.7 Electrical Characteristics -40 C to 125 C, VOL row, max"
+[[models.source.characteristic]]
+parameter = "IOZ off-state output current"
+max = 10.0
+unit = "uA"
+conditions = "VO = VCC or 0; VI = VIH or VIL; VCC = 6 V; -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.7 Electrical Characteristics -40 C to 125 C, IOZ row, max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 160.0
+unit = "uA"
+conditions = "VI = VCC or 0; IO = 0; VCC = 6 V; -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.7 Electrical Characteristics -40 C to 125 C, ICC row, max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, A to Y"
+max = 34.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; TA = -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.10 Switching Characteristics CL = 50 pF, tpd row, max"
+[[models.source.characteristic]]
+parameter = "ten output enable time, OE to Y"
+max = 45.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; TA = -40 C to 125 C"
+basis = "SN74HC244 SCLS130I 5.10 Switching Characteristics CL = 50 pF, ten row, max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance per buffer or driver"
+typ = 35.0
+unit = "pF"
+conditions = "No load"
+basis = "SN74HC244 SCLS130I 5.3 Recommended Operating Conditions, Cpd row, NOM"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC244(DB|DW|N|NS|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -6 mA: VOH 3.7 V min against the 4.4 V light-load level, (4.4 - 3.7) V / 6 mA.
+ro = 116.7
+tpd_s = 3.4e-08     # A to Y max, VCC 4.5 V, CL = 50 pF, SN74HC244 over -40 to 125 C (5.10)
+supply_static_ua = 160.0   # ICC max, VI = VCC or 0, IO = 0, VCC = 6 V, -40 to 125 C (5.7)
+supply_cpd_pf = 35.0     # Cpd power dissipation capacitance per buffer or driver, no load (5.3)
+supply_pin = "20"
+gnd_pin = "10"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "oe_n_1"
+"2" = "1a1"
+"3" = "2y4"
+"4" = "1a2"
+"5" = "2y3"
+"6" = "1a3"
+"7" = "2y2"
+"8" = "1a4"
+"9" = "2y1"
+"10" = "gnd"
+"11" = "2a1"
+"12" = "1y4"
+"13" = "2a2"
+"14" = "1y3"
+"15" = "2a3"
+"16" = "1y2"
+"17" = "2a4"
+"18" = "1y1"
+"19" = "oe_n_2"
+"20" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035   # IO continuous output current abs max (5.1)
+max_voltage_v = 7.0          # VCC abs max (5.1)
+theta_ja_c_per_w = 131.8     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC244 SCLS130I 5.3 Recommended Operating Conditions VCC 2 V to 6 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC244 SCLS130I 3 Description and the Function Table: each buffer passes A to Y while its half's OE is LOW and is
+# high impedance while OE is HIGH. 1OE enables 1Y1..1Y4, 2OE enables 2Y1..2Y4.
+inputs = ["1a1", "1a2", "1a3", "1a4", "2a1", "2a2", "2a3", "2a4", "oe_n_1", "oe_n_2"]
+outputs = ["1y1", "1y2", "1y3", "1y4", "2y1", "2y2", "2y3", "2y4"]
+[models.logic.comb]
+"1y1" = "1a1"
+"1y2" = "1a2"
+"1y3" = "1a3"
+"1y4" = "1a4"
+"2y1" = "2a1"
+"2y2" = "2a2"
+"2y3" = "2a3"
+"2y4" = "2a4"
+[models.logic.tristate]
+"1y1..1y4" = { enable = "oe_n_1", active = "low" }
+"2y1..2y4" = { enable = "oe_n_2", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_transition_time", "output_drive_curve", "input_leakage", "off_state_output_current"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc240"
+kind = "digital"
+description = "74HC240 octal inverting buffer / line driver, two 4-bit halves with separate active-low output enables, 3-state, 20-pin SOIC / SSOP / VSSOP / PDIP / SO / TSSOP (TI SN74HC240 DB, DGS, DW, N, NS, PW)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc240.pdf"
+title = "Texas Instruments SN54HC240, SN74HC240 Octal Buffers and Line Drivers With 3-State Outputs datasheet, SCLS128H, revised August 2024"
+locator = "3 Pin Configuration and Functions p.3 Table 3-1 (DB, DGS, DW, N, NS, PW: 1 1OE, 2 1A1, 3 2Y4, 4 1A2, 5 2Y3, 6 1A3, 7 2Y2, 8 1A4, 9 2Y1, 10 GND, 11 2A1, 12 1Y4, 13 2A2, 14 1Y3, 15 2A3, 16 1Y2, 17 2A4, 18 1Y1, 19 2OE, 20 VCC); 4.1 Absolute Maximum Ratings and 4.2 Recommended Operating Conditions p.4; 4.3 Thermal Information p.4-5; 4.4 Electrical Characteristics, 4.5 Switching Characteristics p.5-6; 4.7 Operating Characteristics p.7; 6.3 Table 6-1 Function Table p.9"
+sha256 = "cae4339d4d335f27959a7ae8197ae74df4a3458e4518e8e59f248bbc24751a45"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V; ten, tdis, tt, the CL = 150 pF figures and the supply-dependent tables are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC240 military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC240 columns"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC240; another vendor's 74HC240 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "DB, DGS, DW, N, NS, PW"
+pins = { "1" = "OE_N_1", "2" = "1A1", "3" = "2Y4", "4" = "1A2", "5" = "2Y3", "6" = "1A3", "7" = "2Y2", "8" = "1A4", "9" = "2Y1", "10" = "GND", "11" = "2A1", "12" = "1Y4", "13" = "2A2", "14" = "1Y3", "15" = "2A3", "16" = "1Y2", "17" = "2A4", "18" = "1Y1", "19" = "OE_N_2", "20" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DW (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 109.1
+unit = "°C/W"
+conditions = "DW (SOIC) package"
+package = "DW (SOIC)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, DW (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 122.7
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DGS (VSSOP)"
+rating = "theta_ja_c_per_w"
+max = 130.6
+unit = "°C/W"
+conditions = "DGS (VSSOP) package"
+package = "DGS (VSSOP)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, DGS (VSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 84.6
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, NS (SOP)"
+rating = "theta_ja_c_per_w"
+max = 113.4
+unit = "°C/W"
+conditions = "NS (SOP) package"
+package = "NS (SOP)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, NS (SOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 131.8
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC240 SCLS128H 4.3 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.84
+unit = "V"
+conditions = "IOH = -6 mA; VCC = 4.5 V; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.4 Electrical Characteristics, VOH row, SN74HC240 min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.33
+unit = "V"
+conditions = "IOL = 6 mA; VCC = 4.5 V; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.4 Electrical Characteristics, VOL row, SN74HC240 max"
+[[models.source.characteristic]]
+parameter = "IOZ off-state output current"
+max = 5.0
+unit = "uA"
+conditions = "VO = VCC or 0; VCC = 6 V; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.4 Electrical Characteristics, IOZ row, SN74HC240 max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 80.0
+unit = "uA"
+conditions = "VI = VCC or 0; IO = 0; VCC = 6 V; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.4 Electrical Characteristics, ICC row, SN74HC240 max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, A to Y"
+max = 25.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.5 Switching Characteristics, tpd row, SN74HC240 max"
+[[models.source.characteristic]]
+parameter = "ten output enable time, OE to Y"
+max = 38.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC240 over temperature"
+basis = "SN74HC240 SCLS128H 4.5 Switching Characteristics, ten row, SN74HC240 max"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance per buffer/driver"
+typ = 35.0
+unit = "pF"
+conditions = "No load; TA = 25 C"
+basis = "SN74HC240 SCLS128H 4.7 Operating Characteristics, Cpd row, typ"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC240(DB|DGS|DW|N|NS|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -6 mA: VOH 3.84 V min against the 4.4 V light-load level, (4.4 - 3.84) V / 6 mA.
+ro = 93.3
+tpd_s = 2.5e-08     # A to Y max, VCC 4.5 V, CL = 50 pF, SN74HC240 over -40 to 85 C (4.5)
+supply_static_ua = 80.0   # ICC max, VI = VCC or 0, IO = 0, VCC = 6 V, SN74HC240 over temperature (4.4)
+supply_cpd_pf = 35.0     # Cpd power dissipation capacitance per buffer/driver, no load, TA = 25 C (4.7)
+supply_pin = "20"
+gnd_pin = "10"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "oe_n_1"
+"2" = "1a1"
+"3" = "2y4"
+"4" = "1a2"
+"5" = "2y3"
+"6" = "1a3"
+"7" = "2y2"
+"8" = "1a4"
+"9" = "2y1"
+"10" = "gnd"
+"11" = "2a1"
+"12" = "1y4"
+"13" = "2a2"
+"14" = "1y3"
+"15" = "2a3"
+"16" = "1y2"
+"17" = "2a4"
+"18" = "1y1"
+"19" = "oe_n_2"
+"20" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035   # IO continuous output current abs max (4.1)
+max_voltage_v = 7.0          # VCC abs max (4.1)
+theta_ja_c_per_w = 131.8     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC240 SCLS128H 4.2 Recommended Operating Conditions VCC 2 V to 6 V; 4.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC240 SCLS128H 6.3 Table 6-1 Function Table: each buffer passes A to Y inverted while its half's OE is LOW and is
+# high impedance while OE is HIGH. 1OE enables 1Y1..1Y4, 2OE enables 2Y1..2Y4.
+inputs = ["1a1", "1a2", "1a3", "1a4", "2a1", "2a2", "2a3", "2a4", "oe_n_1", "oe_n_2"]
+outputs = ["1y1", "1y2", "1y3", "1y4", "2y1", "2y2", "2y3", "2y4"]
+[models.logic.comb]
+"1y1" = "!1a1"
+"1y2" = "!1a2"
+"1y3" = "!1a3"
+"1y4" = "!1a4"
+"2y1" = "!2a1"
+"2y2" = "!2a2"
+"2y3" = "!2a3"
+"2y4" = "!2a4"
+[models.logic.tristate]
+"1y1..1y4" = { enable = "oe_n_1", active = "low" }
+"2y1..2y4" = { enable = "oe_n_2", active = "low" }
+
+[models.coverage]
+implements = ["inverter", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_transition_time", "output_drive_curve", "input_leakage", "off_state_output_current"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc373"
+kind = "digital"
+description = "74HC373 octal transparent D-type latch, 3-state outputs, 20-pin SOIC / SSOP / PDIP / SO / TSSOP (TI SN74HC373 DB, DW, N, NS, PW); inputs and outputs interleaved"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc373.pdf"
+title = "Texas Instruments SN54HC373, SN74HC373 Octal Transparent D-Type Latches With 3-State Outputs datasheet, SCLS140G, revised February 2025"
+locator = "3 Pin Configuration and Functions p.3 Table 3-1 (J, W, FK, DB, DW, N, NS, PW: 1 OE, 2 1Q, 3 1D, 4 2D, 5 2Q, 6 3Q, 7 3D, 8 4D, 9 4Q, 10 GND, 11 LE, 12 5Q, 13 5D, 14 6D, 15 6Q, 16 7Q, 17 7D, 18 8D, 19 8Q, 20 VCC); 4.1 Absolute Maximum Ratings and 4.2 Recommended Operating Conditions p.4; 4.3 Thermal Information p.4-5; 4.4 Electrical Characteristics p.5; 4.5 Timing Requirements p.5; 4.6 Switching Characteristics and 4.8 Operating Characteristics p.6; 6.4 Table 6-1 Function Table p.9"
+sha256 = "14e811d116887347b4b0c4f25d044839ff296d7d5080c2eae242ce6ea3830ee4"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V (D to Q); the LE and OE delays, the setup and hold times in characteristics only, tt and the CL = 150 pF figures are not enforced"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "power_on_state"
+reason = "the datasheet states the latch state at startup is unknown; the model starts every Q low and labels that ASSUMED"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC373 military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC373 columns (this datasheet prints the SN74 range as -55 C to 125 C)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC373; another vendor's 74HC373 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "DB, DW, N, NS, PW"
+pins = { "1" = "OE_N", "2" = "1Q", "3" = "1D", "4" = "2D", "5" = "2Q", "6" = "3Q", "7" = "3D", "8" = "4D", "9" = "4Q", "10" = "GND", "11" = "LE", "12" = "5Q", "13" = "5D", "14" = "6D", "15" = "6Q", "16" = "7Q", "17" = "7D", "18" = "8D", "19" = "8Q", "20" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DW (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 109.1
+unit = "°C/W"
+conditions = "DW (SOIC) package"
+package = "DW (SOIC)"
+basis = "SN74HC373 SCLS140G 4.3 Thermal Information, RθJA, DW (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 122.7
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC373 SCLS140G 4.3 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 84.6
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC373 SCLS140G 4.3 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, NS (SO)"
+rating = "theta_ja_c_per_w"
+max = 113.4
+unit = "°C/W"
+conditions = "NS (SO) package"
+package = "NS (SO)"
+basis = "SN74HC373 SCLS140G 4.3 Thermal Information, RθJA, NS (SO) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 131.8
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC373 SCLS140G 4.3 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.7
+unit = "V"
+conditions = "IOH = -6 mA; VCC = 4.5 V; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.4 Electrical Characteristics, VOH row, SN74HC373 min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 6 mA; VCC = 4.5 V; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.4 Electrical Characteristics, VOL row, SN74HC373 max"
+[[models.source.characteristic]]
+parameter = "IOZ off-state output current"
+max = 10.0
+unit = "uA"
+conditions = "VO = VCC or 0; VCC = 6 V; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.4 Electrical Characteristics, IOZ row, SN74HC373 max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 160.0
+unit = "uA"
+conditions = "VI = VCC or 0; IO = 0; VCC = 6 V; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.4 Electrical Characteristics, ICC row, SN74HC373 max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, D to Q"
+max = 45.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.6 Switching Characteristics, tpd row, SN74HC373 max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, LE to any Q"
+max = 53.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC373 over temperature"
+basis = "SN74HC373 SCLS140G 4.6 Switching Characteristics, tpd row, SN74HC373 max"
+[[models.source.characteristic]]
+parameter = "tw pulse duration, LE high"
+min = 24.0
+unit = "ns"
+conditions = "VCC = 4.5 V; SN74HC373"
+basis = "SN74HC373 SCLS140G 4.5 Timing Requirements, tw row, SN74HC373 min"
+[[models.source.characteristic]]
+parameter = "tsu setup time, data before LE falling"
+min = 15.0
+unit = "ns"
+conditions = "VCC = 4.5 V; SN74HC373"
+basis = "SN74HC373 SCLS140G 4.5 Timing Requirements, tsu row, SN74HC373 min"
+[[models.source.characteristic]]
+parameter = "th hold time, data after LE falling"
+min = 13.0
+unit = "ns"
+conditions = "VCC = 4.5 V; SN74HC373"
+basis = "SN74HC373 SCLS140G 4.5 Timing Requirements, th row, SN74HC373 min"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance per latch"
+typ = 100.0
+unit = "pF"
+conditions = "No load; TA = 25 C"
+basis = "SN74HC373 SCLS140G 4.8 Operating Characteristics, Cpd row, typ"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC373(DB|DW|N|NS|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -6 mA: VOH 3.7 V min against the 4.4 V light-load level, (4.4 - 3.7) V / 6 mA.
+ro = 116.7
+tpd_s = 4.5e-08     # D to Q max, VCC 4.5 V, CL = 50 pF, SN74HC373 over -55 to 125 C (4.6); LE to any Q is 53 ns
+supply_static_ua = 160.0   # ICC max, VI = VCC or 0, IO = 0, VCC = 6 V, SN74HC373 over temperature (4.4)
+supply_cpd_pf = 100.0     # Cpd power dissipation capacitance per latch, no load, TA = 25 C (4.8)
+supply_pin = "20"
+gnd_pin = "10"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "oe_n"
+"2" = "1q"
+"3" = "1d"
+"4" = "2d"
+"5" = "2q"
+"6" = "3q"
+"7" = "3d"
+"8" = "4d"
+"9" = "4q"
+"10" = "gnd"
+"11" = "le"
+"12" = "5q"
+"13" = "5d"
+"14" = "6d"
+"15" = "6q"
+"16" = "7q"
+"17" = "7d"
+"18" = "8d"
+"19" = "8q"
+"20" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035   # IO continuous output current abs max (4.1)
+max_voltage_v = 7.0          # VCC abs max (4.1)
+theta_ja_c_per_w = 131.8     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC373 SCLS140G 4.2 Recommended Operating Conditions VCC 2 V to 6 V; 4.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC373 SCLS140G 6.4 Table 6-1 Function Table: while OE is LOW and LE is HIGH Q follows D; with LE LOW Q holds
+# the last state (Q0); OE HIGH puts every Q in high impedance and does not disturb the stored state. The latch is a
+# combinational self-reference (transparent while LE is high). 6.1 Overview: if LE is held low during startup the output state is unknown until LE is driven high.
+inputs = ["1d", "2d", "3d", "4d", "5d", "6d", "7d", "8d", "le", "oe_n"]
+outputs = ["1q", "2q", "3q", "4q", "5q", "6q", "7q", "8q"]
+[models.logic.comb]
+"1q" = "(le & 1d) | (!le & 1q)"
+"2q" = "(le & 2d) | (!le & 2q)"
+"3q" = "(le & 3d) | (!le & 3q)"
+"4q" = "(le & 4d) | (!le & 4q)"
+"5q" = "(le & 5d) | (!le & 5q)"
+"6q" = "(le & 6d) | (!le & 6q)"
+"7q" = "(le & 7d) | (!le & 7q)"
+"8q" = "(le & 8d) | (!le & 8q)"
+[models.logic.init]
+# ASSUMED: the datasheet prints the power-on state as unknown (Q0 at startup is unknown); LOW is chosen so the latch starts in a legal state.
+"1q" = 0
+"2q" = 0
+"3q" = 0
+"4q" = 0
+"5q" = 0
+"6q" = 0
+"7q" = 0
+"8q" = 0
+[models.logic.tristate]
+"1q..8q" = { enable = "oe_n", active = "low" }
+
+[models.coverage]
+implements = ["transparent_latch", "tristate_enable", "logic_levels"]
+missing = ["setup_hold_timing", "propagation_timing", "enable_disable_timing", "output_transition_time", "output_drive_curve", "input_leakage", "power_on_state"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc573"
+kind = "digital"
+description = "74HC573A octal transparent D-type latch, 3-state outputs, bus-structured pinout, 20-pin SOIC / SSOP / PDIP / TSSOP (TI SN74HC573A DB, DW, N, PW)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc573a.pdf"
+title = "Texas Instruments SN54HC573A, SN74HC573A Octal Transparent D-Type Latches With 3-State Outputs datasheet, SCLS147G, revised April 2022"
+locator = "5 Pin Configuration and Functions p.3 (DB, DW, J, N, PW, W: 1 OE, 2 1D, 3 2D, 4 3D, 5 4D, 6 5D, 7 6D, 8 7D, 9 8D, 10 GND, 11 LE, 12 8Q, 13 7Q, 14 6Q, 15 5Q, 16 4Q, 17 3Q, 18 2Q, 19 1Q, 20 VCC); 6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics p.5-6; 6.6 Timing Requirements p.6; 6.7 Switching Characteristics p.7; 8.4 Table 8-1 Function Table p.10"
+sha256 = "1481ceb629ec47c3d9cfa64a9a727e85d6879425b1b77ca21411aa12e5521678"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "propagation_timing"
+reason = "tpd is carried as one scalar at VCC 4.5 V (D to Q); the LE and OE delays, the setup and hold times in characteristics only, tt and the supply-dependent tables are not enforced"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "power_on_state"
+reason = "the datasheet does not state the power-on state of the latch; the model starts every Q low and labels that ASSUMED"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package_coverage"
+reason = "the SN54HC573A military J, W and FK (LCCC-20) packages and parts are not matched; values are the SN74HC573A columns"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "other_vendors"
+reason = "the figures are Texas Instruments' SN74HC573A; another vendor's 74HC573 differs in timing and drive and its datasheet was not read"
+
+[[models.source.pinout]]
+package = "DB, DW, N, PW"
+pins = { "1" = "OE_N", "2" = "1D", "3" = "2D", "4" = "3D", "5" = "4D", "6" = "5D", "7" = "6D", "8" = "7D", "9" = "8D", "10" = "GND", "11" = "LE", "12" = "8Q", "13" = "7Q", "14" = "6Q", "15" = "5Q", "16" = "4Q", "17" = "3Q", "18" = "2Q", "19" = "1Q", "20" = "VCC" }
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DW (SOIC)"
+rating = "theta_ja_c_per_w"
+max = 109.1
+unit = "°C/W"
+conditions = "DW (SOIC) package"
+package = "DW (SOIC)"
+basis = "SN74HC573A SCLS147G 6.4 Thermal Information, RθJA, DW (SOIC) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, DB (SSOP)"
+rating = "theta_ja_c_per_w"
+max = 122.7
+unit = "°C/W"
+conditions = "DB (SSOP) package"
+package = "DB (SSOP)"
+basis = "SN74HC573A SCLS147G 6.4 Thermal Information, RθJA, DB (SSOP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, N (PDIP)"
+rating = "theta_ja_c_per_w"
+max = 84.6
+unit = "°C/W"
+conditions = "N (PDIP) package"
+package = "N (PDIP)"
+basis = "SN74HC573A SCLS147G 6.4 Thermal Information, RθJA, N (PDIP) column"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance, PW (TSSOP)"
+rating = "theta_ja_c_per_w"
+max = 131.8
+unit = "°C/W"
+conditions = "PW (TSSOP) package"
+package = "PW (TSSOP)"
+basis = "SN74HC573A SCLS147G 6.4 Thermal Information, RθJA, PW (TSSOP) column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 3.84
+unit = "V"
+conditions = "IOH = -6 mA; VCC = 4.5 V; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.5 Electrical Characteristics, VOH row, SN74HC573A min"
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.33
+unit = "V"
+conditions = "IOL = 6 mA; VCC = 4.5 V; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.5 Electrical Characteristics, VOL row, SN74HC573A max"
+[[models.source.characteristic]]
+parameter = "IOZ off-state output current"
+max = 5.0
+unit = "uA"
+conditions = "VO = VCC or 0; VCC = 6 V; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.5 Electrical Characteristics, IOZ row, SN74HC573A max"
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+max = 80.0
+unit = "uA"
+conditions = "VI = VCC or 0; IO = 0; VCC = 6 V; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.5 Electrical Characteristics, ICC row, SN74HC573A max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, D to Q"
+max = 44.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.7 Switching Characteristics, tpd row, SN74HC573A max"
+[[models.source.characteristic]]
+parameter = "tpd propagation delay, LE to any Q"
+max = 44.0
+unit = "ns"
+conditions = "VCC = 4.5 V; CL = 50 pF; SN74HC573A over temperature"
+basis = "SN74HC573A SCLS147G 6.7 Switching Characteristics, tpd row, SN74HC573A max"
+[[models.source.characteristic]]
+parameter = "tw pulse duration, LE high"
+min = 20.0
+unit = "ns"
+conditions = "VCC = 4.5 V; SN74HC573A"
+basis = "SN74HC573A SCLS147G 6.6 Timing Requirements, tw row, SN74HC573A min"
+[[models.source.characteristic]]
+parameter = "tsu setup time, data before LE falling"
+min = 13.0
+unit = "ns"
+conditions = "VCC = 4.5 V; SN74HC573A"
+basis = "SN74HC573A SCLS147G 6.6 Timing Requirements, tsu row, SN74HC573A min"
+[[models.source.characteristic]]
+parameter = "Cpd power dissipation capacitance per latch"
+typ = 50.0
+unit = "pF"
+conditions = "TA = 25 C; no load"
+basis = "SN74HC573A SCLS147G 6.5 Electrical Characteristics, Cpd row, typ"
+
+[models.match]
+# SN54 military packages (J, W, FK) are not matched; an HCT or AHC sibling is a different part.
+value_re = "(?i)^(SN)?74HC573A?(DB|DW|N|PW)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -20 uA, VCC = 4.5 V
+vol = 0.1          # IOL = 20 uA, VCC = 4.5 V
+vih = 3.15         # VCC = 4.5 V
+vil = 1.35
+# DERIVED: VCC = 4.5 V, IOH = -6 mA: VOH 3.84 V min against the 4.4 V light-load level, (4.4 - 3.84) V / 6 mA.
+ro = 93.3
+tpd_s = 4.4e-08     # D to Q max, VCC 4.5 V, CL = 50 pF, SN74HC573A over -40 to 85 C (6.7)
+supply_static_ua = 80.0   # ICC max, VI = VCC or 0, IO = 0, VCC = 6 V, SN74HC573A over temperature (6.5)
+supply_cpd_pf = 50.0     # Cpd power dissipation capacitance per latch, TA = 25 C, no load (6.5)
+supply_pin = "20"
+gnd_pin = "10"
+
+[models.levels]
+# Recommended Operating Conditions: VIH min and VIL max at VCC = 2 V, 4.5 V and 6 V; VOH min at
+# IOH = -20 uA (Electrical Characteristics): the 2 V, 4.5 V and 6 V columns, read linearly between them.
+vih = [[2.0, 1.5], [4.5, 3.15], [6.0, 4.2]]
+vil = [[2.0, 0.5], [4.5, 1.35], [6.0, 1.8]]
+voh = [[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]]
+
+[models.pins]
+"1" = "oe_n"
+"2" = "1d"
+"3" = "2d"
+"4" = "3d"
+"5" = "4d"
+"6" = "5d"
+"7" = "6d"
+"8" = "7d"
+"9" = "8d"
+"10" = "gnd"
+"11" = "le"
+"12" = "8q"
+"13" = "7q"
+"14" = "6q"
+"15" = "5q"
+"16" = "4q"
+"17" = "3q"
+"18" = "2q"
+"19" = "1q"
+"20" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035   # IO continuous output current abs max (6.1)
+max_voltage_v = 7.0          # VCC abs max (6.1)
+theta_ja_c_per_w = 131.8     # least favourable package row
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 6.0
+abs_max_v = 7.0
+basis = "TI SN74HC573A SCLS147G 6.3 Recommended Operating Conditions VCC 2 V to 6 V; 6.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[models.logic]
+# Behaviour source: TI SN74HC573A SCLS147G 8.4 Table 8-1 Function Table: while OE is LOW and LE is HIGH Q follows D; with LE LOW Q holds
+# the last state (Q0); OE HIGH puts every Q in high impedance and does not disturb the stored state. The latch is a
+# combinational self-reference (transparent while LE is high). The datasheet does not state the power-on state of Q0.
+inputs = ["1d", "2d", "3d", "4d", "5d", "6d", "7d", "8d", "le", "oe_n"]
+outputs = ["1q", "2q", "3q", "4q", "5q", "6q", "7q", "8q"]
+[models.logic.comb]
+"1q" = "(le & 1d) | (!le & 1q)"
+"2q" = "(le & 2d) | (!le & 2q)"
+"3q" = "(le & 3d) | (!le & 3q)"
+"4q" = "(le & 4d) | (!le & 4q)"
+"5q" = "(le & 5d) | (!le & 5q)"
+"6q" = "(le & 6d) | (!le & 6q)"
+"7q" = "(le & 7d) | (!le & 7q)"
+"8q" = "(le & 8d) | (!le & 8q)"
+[models.logic.init]
+# ASSUMED: the datasheet prints the power-on state as unknown (Q0 at startup is unknown); LOW is chosen so the latch starts in a legal state.
+"1q" = 0
+"2q" = 0
+"3q" = 0
+"4q" = 0
+"5q" = 0
+"6q" = 0
+"7q" = 0
+"8q" = 0
+[models.logic.tristate]
+"1q..8q" = { enable = "oe_n", active = "low" }
+
+[models.coverage]
+implements = ["transparent_latch", "tristate_enable", "logic_levels"]
+missing = ["setup_hold_timing", "propagation_timing", "enable_disable_timing", "output_transition_time", "output_drive_curve", "input_leakage", "power_on_state"]
+
+# ─────────────────────────────────────────────────────────────────────────────
