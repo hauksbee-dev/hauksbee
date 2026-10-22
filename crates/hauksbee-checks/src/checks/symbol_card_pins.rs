@@ -15,7 +15,8 @@
 //! from the one table in `hauksbee_ir::pin_functions` (crystal pins, reset,
 //! supply, ground, analog reference, I2C and SWD lines: functions that read the
 //! same from either side of the pad) and the two sets of functions must share
-//! nothing. A multiplexed name that includes the card's function
+//! nothing (a reference and a positive supply count as shared: a `VREF` pin is a
+//! supply input on a level translator). A multiplexed name that includes the card's function
 //! (`PB6/XTAL1` against `pb6_xtal1`), a generic pin name (`PA4`, `GPIO7`, `1`),
 //! a name the table does not know, a card that does not name the pad, a card
 //! the binder only guessed at, a card whose pin map does not fit the footprint
@@ -26,7 +27,7 @@ use std::collections::BTreeSet;
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
-use hauksbee_ir::pin_functions::{functions_named, PinFunction};
+use hauksbee_ir::pin_functions::{contradict, functions_named, PinFunction};
 use hauksbee_models::{Confidence, ModelLibrary};
 
 /// The words for a set of functions, `crystal input (XTAL1)` or `a or b`.
@@ -66,7 +67,7 @@ pub fn symbol_card_pin_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
                 continue;
             }
             let (symbol, card) = (functions_named(&pin.function), functions_named(role));
-            if symbol.is_empty() || card.is_empty() || !symbol.is_disjoint(&card) {
+            if !contradict(&symbol, &card) {
                 continue;
             }
             power |= symbol.iter().chain(&card).any(|f| f.is_power());
@@ -182,6 +183,9 @@ mod tests {
             ("2", "D0", 1)
         ]))
         .is_empty());
+        // A reference pin is a supply input on a level translator, so a symbol
+        // calling the pad VREF where the card says VCC (or the reverse) is one pad.
+        assert!(run(mcu(&[("7", "VREF", 4), ("21", "VDD", 4)])).is_empty());
         // A pad the card does not name, and a pin with no name at all.
         assert!(run(mcu(&[("99", "XTAL1", 2), ("9", "", 3)])).is_empty());
         // Names the table keeps out because they depend on the reader's side.

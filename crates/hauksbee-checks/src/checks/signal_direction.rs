@@ -74,6 +74,27 @@ fn symbol_dir(kind: &str) -> Option<Dir> {
     }
 }
 
+/// A symbol whose pins carry almost all one electrical type states no
+/// directions: a library that types every pin of a many-pin part `input` (or
+/// `bidirectional`, or `passive`) never assigned them, and a peripheral pin of a
+/// microcontroller (`TXD`, `PWM`, `SCK`) typed that way is not an input. "Almost
+/// all" is every pin of a part with six or more, or four in five of the pins of
+/// a part with sixteen or more (the few left are its supply and port pins).
+fn untyped_symbol(comp: &Component) -> bool {
+    const FEWEST_PINS: usize = 6;
+    const FEWEST_PINS_DOMINANT: usize = 16;
+    let total = comp.pins.len();
+    let mut counts = std::collections::BTreeMap::new();
+    for pin in &comp.pins {
+        *counts
+            .entry(pin.kind.trim().to_ascii_lowercase())
+            .or_insert(0_usize) += 1;
+    }
+    let most = counts.values().copied().max().unwrap_or(0);
+    (total >= FEWEST_PINS && most == total)
+        || (total >= FEWEST_PINS_DOMINANT && most * 5 >= total * 4)
+}
+
 /// A card role that names a port or general-purpose I/O pad (`pa9`, `gpio4`,
 /// `io12`): the firmware sets its direction.
 fn is_port_role(role: &str) -> bool {
@@ -149,7 +170,7 @@ fn classify(comp: &Component, pin: &Pin, model: Option<&ModelEntry>) -> Member {
     if is_connector_like(comp) {
         return Member::Unknown;
     }
-    let symbol = symbol_dir(&pin.kind);
+    let symbol = symbol_dir(&pin.kind).filter(|_| !untyped_symbol(comp));
     let card = model.and_then(|m| card_dir(m, &pin.number));
     let dir = match (symbol, card) {
         (Some(s), Some(c)) if s == c => Some(s),
@@ -415,6 +436,41 @@ mod tests {
             ],
         )
         .is_empty());
+    }
+
+    /// A library that types every pin of a many-pin part `input` assigned no
+    /// directions: a peripheral output on it is not an input, so the net is
+    /// not judged. The same two parts with real types are flagged.
+    #[test]
+    fn a_symbol_with_one_type_on_every_pin_states_no_direction() {
+        let mcu = |kind: &str| {
+            let mut pads: Vec<(String, i64, String, String)> = (2..=8)
+                .map(|i| (i.to_string(), 0, format!("PA{i}"), kind.to_owned()))
+                .collect();
+            pads.insert(0, ("1".into(), 1, "PWML0".into(), kind.to_owned()));
+            let pads: Vec<(&str, i64, &str, &str)> = pads
+                .iter()
+                .map(|(n, net, f, k)| (n.as_str(), *net, f.as_str(), k.as_str()))
+                .collect();
+            ic("U1", &pads)
+        };
+        let buffer = || ic("U2", &[("1", 1, "2A", "input")]);
+        assert!(run(&[(1, "HEATER0")], vec![mcu("input"), buffer()]).is_empty());
+        // Four in five of twenty pins one type: the few others are supply and port
+        // pins, and the part is still untyped.
+        let mut big: Vec<(String, i64, String, String)> = (2..=19)
+            .map(|i| (i.to_string(), 0, format!("PA{i}"), "input".to_owned()))
+            .collect();
+        big.insert(0, ("1".into(), 1, "PWML0".into(), "input".into()));
+        big.push(("20".into(), 0, "VDD".into(), "power_in".into()));
+        let big: Vec<(&str, i64, &str, &str)> = big
+            .iter()
+            .map(|(n, net, f, k)| (n.as_str(), *net, f.as_str(), k.as_str()))
+            .collect();
+        assert!(run(&[(1, "HEATER0")], vec![ic("U1", &big), buffer()]).is_empty());
+        // The same net with a pin that really is typed an input is a fault.
+        let one = ic("U1", &[("1", 1, "PWML0", "input")]);
+        assert_eq!(run(&[(1, "HEATER0")], vec![one, buffer()]).len(), 1);
     }
 
     #[test]

@@ -19,6 +19,12 @@
 //! is no entry for a "common 4-pin UART header": the order of those varies
 //! from vendor to vendor and no document fixes it, so nothing can be judged
 //! against one.
+//!
+//! The words that name a header are the ones only that header goes by. A bare
+//! `ISP` or `JTAG` is not one: an LPC part's serial-boot `ISP` header and an
+//! Altera or Xilinx `JTAG` header are other connectors with other orders, so
+//! the AVR header is named by `AVR`/`AVRISP` and the Cortex one by `SWD` or
+//! `Cortex`.
 
 /// What a pin of a standard header carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,7 +186,7 @@ pub const STANDARD_HEADERS: &[StandardHeader] = &[
             ("5", S::Reset),
             ("6", S::Ground),
         ],
-        name_words: &["isp", "avrisp"],
+        name_words: &["avr", "avrisp"],
         source: AVR042,
     },
     StandardHeader {
@@ -199,7 +205,7 @@ pub const STANDARD_HEADERS: &[StandardHeader] = &[
             ("9", S::Miso),
             ("10", S::Ground),
         ],
-        name_words: &["isp", "avrisp"],
+        name_words: &["avr", "avrisp"],
         source: AVR042,
     },
     StandardHeader {
@@ -218,7 +224,7 @@ pub const STANDARD_HEADERS: &[StandardHeader] = &[
             ("9", S::Ground),
             ("10", S::Reset),
         ],
-        name_words: &["swd", "jtag", "cortex"],
+        name_words: &["swd", "cortex"],
         source: ATMEL_ICE,
     },
 ];
@@ -295,9 +301,13 @@ mod tests {
         let words = |s: &str| vec![s.to_string()];
         let got: Vec<_> = headers_named(6, &words("ftdi")).map(|h| h.id).collect();
         assert_eq!(got, ["ftdi_6"]);
-        let got: Vec<_> = headers_named(10, &words("isp")).map(|h| h.id).collect();
+        let got: Vec<_> = headers_named(10, &words("avr")).map(|h| h.id).collect();
         assert_eq!(got, ["avr_isp_10"]);
         assert_eq!(headers_named(4, &words("ftdi")).count(), 0);
         assert_eq!(headers_named(6, &words("icsp")).count(), 0);
+        // A bare ISP or JTAG is another connector's name too (LPC serial boot,
+        // Altera/Xilinx JTAG), so it names no standard header.
+        assert_eq!(headers_named(6, &words("isp")).count(), 0);
+        assert_eq!(headers_named(10, &words("jtag")).count(), 0);
     }
 }

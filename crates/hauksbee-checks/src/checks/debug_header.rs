@@ -12,11 +12,14 @@
 //!
 //! - **The header is named.** A connector with exactly the pin count of a
 //!   standard header, whose value, symbol or footprint name carries a whole word
-//!   that names that one header (`FTDI`, `ISP`, `SWD`, `JTAG`, `Cortex`). A
-//!   header with no such word is the designer's own, and `ICSP` is left out
-//!   because PIC and AVR use different orders under that name.
+//!   that names that one header (`FTDI`, `AVR`/`AVRISP`, `SWD`, `Cortex`). A
+//!   header with no such word is the designer's own. A bare `ISP` or `JTAG` is
+//!   left out (an LPC serial-boot `ISP` header and an Altera or Xilinx `JTAG`
+//!   header are other connectors) and so is `ICSP`, because PIC and AVR use
+//!   different orders under that name.
 //! - **The pin's use is known.** What a pin carries is read from the net on it
-//!   (and the nets one series resistor away): its supply or ground name, a
+//!   (and the signal nets one series resistor away; a resistor to a rail is a
+//!   pull, not a series part): its supply or ground name, a
 //!   `MOSI`/`MISO`/`SCK`/`SWDIO`/`SWCLK`/reset name, or the card pad of an MCU on
 //!   it. A name and a card that disagree, or no reading at all, leave the pin
 //!   unjudged. The serial pins are judged from the UART pins of the parts on the
@@ -99,14 +102,14 @@ fn from_name(name: &str) -> Option<HeaderSignal> {
         (has("mosi") || has("copi"), HeaderSignal::Mosi),
         (has("miso") || has("cipo"), HeaderSignal::Miso),
         (has("sck") || has("sclk"), HeaderSignal::Sck),
-        (has("swo"), HeaderSignal::Swo),
+        (has("swo") || has("tdo"), HeaderSignal::Swo),
         (has("tdi"), HeaderSignal::Tdi),
         (
-            functions.contains(&PinFunction::SwdData),
+            functions.contains(&PinFunction::SwdData) || has("tms"),
             HeaderSignal::SwdData,
         ),
         (
-            functions.contains(&PinFunction::SwdClock),
+            functions.contains(&PinFunction::SwdClock) || has("tck"),
             HeaderSignal::SwdClock,
         ),
         (functions.contains(&PinFunction::Reset), HeaderSignal::Reset),
@@ -165,7 +168,12 @@ fn pin_signal(
     let mut said = Vec::new();
     for n in series_nets(board, net) {
         if let Some(name) = board.net(n).map(|x| &x.name) {
-            if let Some(s) = from_name(name) {
+            // A resistor from the line to a rail is a pull-up or pull-down, not a
+            // series part: the rail it reaches says nothing about the line.
+            let pull = n != net;
+            if let Some(s) = from_name(name)
+                .filter(|s| !(pull && matches!(s, HeaderSignal::Ground | HeaderSignal::Supply)))
+            {
                 said.push(s);
             }
         }
@@ -538,5 +546,93 @@ mod tests {
         let mut columns = header("FTDI", &[("1", V5), ("3", GND)]);
         columns.lib_id = "Connector_Generic:Conn_02x03_Top_Bottom".into();
         assert!(run(vec![columns]).is_empty());
+    }
+
+    /// A bare `ISP` is an LPC serial-boot header as often as an AVR one, and a
+    /// bare `JTAG` is any vendor's: neither names a standard header.
+    #[test]
+    fn a_bare_isp_or_jtag_name_is_not_a_standard_header() {
+        let lpc = header(
+            "LPC_ISP",
+            &[
+                ("1", GND),
+                ("2", V5),
+                ("3", SCK),
+                ("4", MISO),
+                ("5", MOSI),
+                ("6", RST),
+            ],
+        );
+        assert!(run(vec![lpc]).is_empty());
+        let mut nets = NETS.to_vec();
+        nets.extend([(9, "TCK"), (10, "TMS")]);
+        let jtag = part(
+            "J3",
+            "JTAG",
+            &[
+                // TCK on the pin the Cortex header gives to TMS and the reverse:
+                // wrong for that header, so only the name keeps this silent.
+                ("1", V5),
+                ("2", 9),
+                ("3", GND),
+                ("4", 10),
+                ("5", GND),
+                ("6", 0),
+                ("7", 0),
+                ("8", 0),
+                ("9", GND),
+                ("10", RST),
+            ],
+        );
+        assert!(
+            debug_header_lint(&board(&nets, vec![jtag]), &ModelLibrary::builtin())
+                .findings
+                .is_empty()
+        );
+    }
+
+    /// A pull-up or pull-down on a debug line is not a series resistor: the rail
+    /// it reaches must not be read as what the header pin carries, and the
+    /// JTAG names `TCK`/`TMS` are the SWD clock and data pins.
+    #[test]
+    fn a_pull_up_on_a_debug_line_is_not_what_the_pin_carries() {
+        let mut nets = NETS.to_vec();
+        nets.extend([(9, "TMS"), (10, "TCK")]);
+        let swd = Component {
+            lib_id: "Connector:Conn_ARM_SWD_TagConnect".into(),
+            ..part(
+                "J3",
+                "SWD",
+                &[
+                    ("1", V5),
+                    ("2", 9),
+                    ("3", GND),
+                    ("4", 10),
+                    ("5", GND),
+                    ("6", 0),
+                    ("7", 0),
+                    ("8", 0),
+                    ("9", GND),
+                    ("10", RST),
+                ],
+            )
+        };
+        let pulls = vec![
+            part("R1", "10k", &[("1", 9), ("2", V5)]),
+            part("R2", "10k", &[("1", 10), ("2", GND)]),
+        ];
+        let run = |extra: Vec<Component>| {
+            let mut parts = vec![swd.clone()];
+            parts.extend(extra);
+            debug_header_lint(&board(&nets, parts), &ModelLibrary::builtin()).findings
+        };
+        assert!(run(pulls).is_empty());
+        // Swapped for real: the clock where the data belongs is still caught.
+        let mut crossed = swd.clone();
+        crossed.pins[1].net = Some(10);
+        crossed.pins[3].net = Some(9);
+        let found =
+            debug_header_lint(&board(&nets, vec![crossed]), &ModelLibrary::builtin()).findings;
+        assert_eq!(found.len(), 1, "{found:#?}");
     }
 }

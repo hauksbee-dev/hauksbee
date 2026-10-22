@@ -87,6 +87,26 @@ impl PinFunction {
     pub const fn is_power(self) -> bool {
         matches!(self, Self::PositiveSupply | Self::Ground)
     }
+
+    /// Whether two names for one pad can both be right: the same function, or
+    /// a reference and a positive supply. A `VREF` pin is a supply input on a
+    /// level translator or a ratiometric converter, and a datasheet may call the
+    /// same pad `VCC` or `VREF`, so the pair states no contradiction.
+    #[must_use]
+    pub const fn agrees_with(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::PositiveSupply, Self::AnalogReference)
+                | (Self::AnalogReference, Self::PositiveSupply)
+        ) || self as u8 == other as u8
+    }
+}
+
+/// Whether two sets of functions read from one pad contradict each other: both
+/// state something and no function of one agrees with a function of the other.
+#[must_use]
+pub fn contradict(a: &BTreeSet<PinFunction>, b: &BTreeSet<PinFunction>) -> bool {
+    !a.is_empty() && !b.is_empty() && !a.iter().any(|x| b.iter().any(|y| x.agrees_with(*y)))
 }
 
 /// A spelling of a function: the lower-case part, whether a trailing index is
@@ -333,6 +353,17 @@ pub fn names_a_uart(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reference_and_a_supply_do_not_contradict_but_a_supply_and_ground_do() {
+        let set = |n: &str| functions_named(n);
+        assert!(!contradict(&set("VREF1"), &set("VCC")));
+        assert!(!contradict(&set("VDD"), &set("AREF")));
+        assert!(contradict(&set("VCC"), &set("GND")));
+        assert!(contradict(&set("XTAL1"), &set("XTAL2")));
+        // A name that states nothing contradicts nothing.
+        assert!(!contradict(&set("PA4"), &set("GND")));
+    }
 
     #[test]
     fn peripheral_names_are_read_by_whole_word() {
