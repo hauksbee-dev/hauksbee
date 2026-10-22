@@ -1,4 +1,4 @@
-//! Official-parts batch converters_analog: the register maps shipped inside the cards
+//! Official-parts batch `converters_analog`: the register maps shipped inside the cards
 //! (ADS1115, ADS1015, MCP4725) executed over a modelled I2C bus, from the card's own
 //! `spec_toml` rather than a copy.
 
@@ -188,10 +188,8 @@ fn mcp4725_write_commands_drive_vout_and_read_back() {
         .slave::<RegisterMapSensor>(addr)
         .and_then(|s| s.output_volts("vout"))
         .expect("vout");
-    assert!(
-        (vout - 1000.0 / 4096.0 * 5.0).abs() < 1e-9,
-        "fast write: {vout}"
-    );
+    let expected = 1000.0 / 4096.0 * 5.0;
+    assert!((vout - expected).abs() < 1e-9, "fast write: {vout}");
     // A fast write does not touch the EEPROM image.
     assert_eq!(
         read_stream(&mut bus, addr, 5),
@@ -224,8 +222,6 @@ fn mcp4725_write_commands_drive_vout_and_read_back() {
         .slave::<RegisterMapSensor>(addr)
         .and_then(|s| s.output_volts("vout"))
         .expect("vout");
-    assert!(
-        (vout - 3000.0 / 4096.0 * 5.0).abs() < 1e-9,
-        "write DAC: {vout}"
-    );
+    let expected = 3000.0 / 4096.0 * 5.0;
+    assert!((vout - expected).abs() < 1e-9, "write DAC: {vout}");
 }

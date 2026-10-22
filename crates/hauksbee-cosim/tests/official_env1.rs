@@ -78,12 +78,23 @@ fn crc8_reference_matches_the_datasheet_vectors() {
     assert_eq!(crc8(&[0x4E, 0x85], 0x00), 0x6B); // HTU21D datasheet example
 }
 
+/// Rounds `x` and saturates it into the integer code range `0..=max`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=max (< 2^32) first
+const fn code(x: f64, max: f64) -> u32 {
+    x.round().clamp(0.0, max) as u32
+}
+
+/// The low byte of `x`, as a register or frame byte.
+fn byte(x: u32) -> u8 {
+    u8::try_from(x & 0xFF).expect("masked to one byte")
+}
+
 fn sht4x_raw_t(t: f64) -> u16 {
-    ((t + 45.0) * 65535.0 / 175.0).round().clamp(0.0, 65535.0) as u16
+    u16::try_from(code((t + 45.0) * 65535.0 / 175.0, 65535.0)).expect("saturated to 16 bits")
 }
 
 fn sht4x_raw_rh(rh: f64) -> u16 {
-    ((rh + 6.0) * 65535.0 / 125.0).round().clamp(0.0, 65535.0) as u16
+    u16::try_from(code((rh + 6.0) * 65535.0 / 125.0, 65535.0)).expect("saturated to 16 bits")
 }
 
 fn assert_sht4x_frame(frame: &[u8], t: f64, rh: f64) {
@@ -168,7 +179,7 @@ const HTU_PARTS: [&str; 4] = ["HTU21D", "HTU21DF", "HPP845E031R4", "SHT21"];
 
 /// Code of a measurement at the code step of the chosen resolution (2^(16 - bits)).
 fn htu_word(x: f64, step: f64) -> u16 {
-    ((x / step).round() * step).clamp(0.0, 65536.0 - step) as u16
+    u16::try_from(code((x / step).round() * step, 65536.0 - step)).expect("saturated to 16 bits")
 }
 
 fn htu_t_word(t: f64, step: f64) -> u16 {
@@ -314,10 +325,8 @@ fn htu21d_sht21_answer_at_0x40_only() {
 // ---- AHT10 / AHT20 / AHT21 (trigger 0xAC 0x33 0x00, status + 5 data bytes, CRC-8 init 0xFF on AHT20/21) ----
 
 fn aht_words(t: f64, rh: f64) -> (u32, u32) {
-    let srh = (rh / 100.0 * 1_048_576.0).round().clamp(0.0, 1_048_575.0) as u32;
-    let st = ((t + 50.0) / 200.0 * 1_048_576.0)
-        .round()
-        .clamp(0.0, 1_048_575.0) as u32;
+    let srh = code(rh / 100.0 * 1_048_576.0, 1_048_575.0);
+    let st = code((t + 50.0) / 200.0 * 1_048_576.0, 1_048_575.0);
     (srh, st)
 }
 
@@ -326,11 +335,11 @@ fn aht_body(status: u8, t: f64, rh: f64) -> Vec<u8> {
     let (srh, st) = aht_words(t, rh);
     vec![
         status,
-        (srh >> 12) as u8,
-        (srh >> 4) as u8,
-        (((srh & 0xF) << 4) | (st >> 16)) as u8,
-        (st >> 8) as u8,
-        st as u8,
+        byte(srh >> 12),
+        byte(srh >> 4),
+        byte(((srh & 0xF) << 4) | (st >> 16)),
+        byte(st >> 8),
+        byte(st),
     ]
 }
 

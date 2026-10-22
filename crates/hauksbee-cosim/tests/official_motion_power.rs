@@ -1,4 +1,4 @@
-//! Official-parts batch motion_power: the register maps of the new cards, run as the
+//! Official-parts batch `motion_power`: the register maps of the new cards, run as the
 //! co-simulation peripheral that firmware talks to over I2C.
 //!
 //! Each test resolves a card by its ordering code, builds a [`RegisterMapSensor`] from
