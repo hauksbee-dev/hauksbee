@@ -3422,7 +3422,7 @@ tier = "curated-library"
 validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.ti.com/lit/ds/symlink/tps797.pdf"
-title = "Texas Instruments TPS797xx Ultralow-Power Low-Dropout Linear Regulators with Power Good, SLVS332J, March 2001, revised December 2016"
+title = "Texas Instruments TPS797xx Ultra-Low IQ, 50-mA Low-Dropout Linear Regulators With Power Good Output in SC70 Package, SLVS332J, March 2001, revised December 2016"
 locator = "Section 5 Pin Configuration and Functions p.4; 6.4 Thermal Information"
 sha256 = "ace5c5708757b3ce74c8e1b6c3653227df1538b4c8b2e86c65881b2358d527cf"
 [[models.source.characteristic]]
