@@ -106,6 +106,10 @@ pub struct Stall {
     pub detail: String,
 }
 
+/// How the blocker for a firmware stalled on a missing external oscillator
+/// begins; the boot annotation recognises it by this.
+pub const EXTERNAL_CLOCK_STALL_PREFIX: &str = "the board fits no crystal or oscillator";
+
 /// Evidence that the firmware executed on one MCU during the run.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct ExecutionEvidence {
@@ -159,6 +163,13 @@ pub struct ExecutionEvidence {
     /// card carries a boot table (hauksbee-ir's vocabulary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot: Option<hauksbee_ir::boot::BootDecision>,
+    /// The firmware is probably waiting for an external oscillator the board
+    /// does not fit (see [`BoardReadings::external_clock_modelled`]). The
+    /// sentence is in [`Self::blockers`]; this flag lets the bench view say it
+    /// in its one-line headline, so it is not repeated on the wire.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stalled_on_external_clock: bool,
 }
 
 /// Board-side readings for one MCU, gathered by the scheduler.
@@ -170,6 +181,11 @@ pub struct BoardReadings {
     pub supply_v: Option<f64>,
     /// The clock the board gives the core, from the binder.
     pub clock: McuClock,
+    /// Whether the backend gates the part's external-oscillator readiness on
+    /// the board really fitting a crystal ([`hauksbee_mcu::Mcu::external_clock_modelled`]),
+    /// so a firmware wait on the oscillator stalls on a board without one as on
+    /// silicon. Without it a missing crystal is invisible in the run.
+    pub external_clock_modelled: bool,
 }
 
 impl ExecutionEvidence {
@@ -273,6 +289,25 @@ impl ExecutionEvidence {
                 clock.detail
             ));
         }
+        // On silicon the firmware's wait for the external oscillator never ends
+        // when nothing is fitted; the emulator reproduces that, and the run
+        // then shows a core that never got to `main` and nothing else. Say why.
+        let stalled_on_external_clock =
+            !executed && board.external_clock_modelled && !clock.external_present();
+        if stalled_on_external_clock {
+            blockers.push(format!(
+                "{EXTERNAL_CLOCK_STALL_PREFIX} on the part's external clock pins \
+                 ({}), and this backend models oscillator readiness as silicon does, so \
+                 firmware that waits for the external oscillator to become ready (an SDK \
+                 start-up loop, an HSE or XOSC ready flag) stalls here: fit the crystal \
+                 or oscillator the part's reference design uses",
+                if clock.detail.is_empty() {
+                    "nothing is bound to them"
+                } else {
+                    &clock.detail
+                }
+            ));
+        }
         Self {
             mcu_ref: mcu_ref.to_string(),
             backend: backend.to_string(),
@@ -295,6 +330,7 @@ impl ExecutionEvidence {
             firmware_pass_eligible: blockers.is_empty(),
             blockers,
             boot: None,
+            stalled_on_external_clock,
         }
     }
 }
@@ -580,6 +616,7 @@ mod tests {
             supply_valid,
             supply_v: Some(3.3),
             clock: McuClock::default(),
+            external_clock_modelled: false,
         }
     }
 
@@ -627,6 +664,46 @@ mod tests {
             board(Observed::Unknown, Observed::Unknown),
         );
         assert!(e.executed && e.firmware_pass_eligible, "{e:?}");
+    }
+
+    /// A core that never reached `main` on a board with no crystal, on a backend
+    /// that gates oscillator readiness, is reported as waiting for the
+    /// oscillator; with readiness not modelled, or a crystal fitted, or `main`
+    /// reached, it is not.
+    #[test]
+    fn a_core_that_never_started_without_a_crystal_is_reported_as_waiting_for_it() {
+        let run = |reached: bool, modelled: bool, clock: McuClock| {
+            ExecutionEvidence::new(
+                "U1",
+                "renode:rp2040",
+                probe(Some(reached), &[]),
+                0,
+                &BTreeMap::new(),
+                BoardReadings {
+                    clock,
+                    external_clock_modelled: modelled,
+                    ..board(Observed::No, Observed::Yes)
+                },
+            )
+        };
+        let e = run(false, true, McuClock::default());
+        assert!(
+            e.stalled_on_external_clock && !e.firmware_pass_eligible,
+            "{e:?}"
+        );
+        assert!(
+            e.blockers
+                .iter()
+                .any(|b| b.starts_with(EXTERNAL_CLOCK_STALL_PREFIX)),
+            "{e:?}"
+        );
+        assert!(!run(false, false, McuClock::default()).stalled_on_external_clock);
+        assert!(!run(true, true, McuClock::default()).stalled_on_external_clock);
+        let crystal = McuClock {
+            kind: ClockKind::Crystal,
+            ..McuClock::default()
+        };
+        assert!(!run(false, true, crystal).stalled_on_external_clock);
     }
 
     #[test]
