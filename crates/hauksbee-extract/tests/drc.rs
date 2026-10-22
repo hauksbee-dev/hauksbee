@@ -449,7 +449,10 @@ fn foreign_copper_on_the_unbridged_pad_of_a_three_pad_jumper_is_still_a_short() 
     ));
     assert!(foreign.short_count() >= 1, "{:?}", foreign.findings);
     assert_short(&foreign, "A", "B");
-    let ordinary = drc(&bridged_12_jumper("Connector_PinHeader:PinHeader_1x03", false));
+    let ordinary = drc(&bridged_12_jumper(
+        "Connector_PinHeader:PinHeader_1x03",
+        false,
+    ));
     assert!(ordinary.short_count() >= 1, "{:?}", ordinary.findings);
     assert_short(&ordinary, "A", "GND");
 }

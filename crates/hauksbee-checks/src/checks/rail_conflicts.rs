@@ -154,7 +154,13 @@ mod tests {
             reference: "U1".into(),
             value: "SY8089AAAC".into(),
             footprint: "Package_TO_SOT_SMD:SOT-23-5".into(),
-            pins: vec![pin("1", 2), pin("2", 1), pin("3", 4), pin("4", 2), pin("5", 3)],
+            pins: vec![
+                pin("1", 2),
+                pin("2", 1),
+                pin("3", 4),
+                pin("4", 2),
+                pin("5", 3),
+            ],
             ..Default::default()
         };
         ExtractedBoard {

@@ -299,10 +299,12 @@ fn polarity(pin: &hauksbee_extract::Pin, model: Option<&hauksbee_models::ModelEn
     crate::binder::pad_role_sources(pin, &m.pins, Some(m.kind))
         .into_iter()
         .flatten()
-        .find_map(|role| match by_name(role.trim_end_matches(|c: char| c.is_ascii_digit())) {
-            Polarity::Unknown => None,
-            known => Some(known),
-        })
+        .find_map(
+            |role| match by_name(role.trim_end_matches(|c: char| c.is_ascii_digit())) {
+                Polarity::Unknown => None,
+                known => Some(known),
+            },
+        )
         .unwrap_or(Polarity::Unknown)
 }
 
@@ -438,8 +440,8 @@ fn strong_source_nets(
                 m.supply_outputs.iter().any(|s| s.role == *role)
                     || (m.kind == ComponentKind::Vreg && output_role(role))
             });
-            let named_out = has_in
-                && matches!(function_base(&p.function).as_str(), "OUT" | "VOUT" | "VO");
+            let named_out =
+                has_in && matches!(function_base(&p.function).as_str(), "OUT" | "VOUT" | "VO");
             if p.kind.starts_with("power_out") || card_out || named_out {
                 out.insert(net);
             }
@@ -674,8 +676,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                             // A diode feeds only its cathode's net (an
                             // electrode nothing names may be either).
                             ComponentKind::Diode => {
-                                on.iter()
-                                    .any(|p| polarity(p, Some(m)) != Polarity::Anode)
+                                on.iter().any(|p| polarity(p, Some(m)) != Polarity::Anode)
                                     && into_rail()
                             }
                             ComponentKind::BjtNpn

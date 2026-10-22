@@ -2109,13 +2109,13 @@ basis = "Recommended Operating Conditions, VDD row"
     fn name_assumed_band_does_not_gate_on_a_battery_fed_board() {
         let lib = library("assumed_battery", MARGIN_CARD);
         let run = |battery: bool| {
-            let mut parts = vec![part(
-                "U1",
-                "MARGIN_PART",
-                vec![pin("1", 2), pin("2", 1)],
-            )];
+            let mut parts = vec![part("U1", "MARGIN_PART", vec![pin("1", 2), pin("2", 1)])];
             if battery {
-                parts.push(part("BT1", "Battery holder", vec![pin("1", 3), pin("2", 1)]));
+                parts.push(part(
+                    "BT1",
+                    "Battery holder",
+                    vec![pin("1", 3), pin("2", 1)],
+                ));
             }
             let b = board(&[(1, "GND"), (2, "+5V"), (3, "CELL")], parts);
             let report = envelope_lint(&b, &lib);
