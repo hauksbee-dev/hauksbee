@@ -208,6 +208,15 @@ impl KicadClearanceInput {
                     let coverage =
                         crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
                     let global = parsed.global_clearance_mm();
+                    // Every clearance rule the file sets governs the pairs its
+                    // condition and layer select, last matching rule first;
+                    // the unconditional one is also the report-wide value.
+                    let custom = parsed.clearance_rules();
+                    if !custom.is_empty() {
+                        rules
+                            .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
+                            .set_custom_rules(custom);
+                    }
                     if let Some(clearance_mm) = global {
                         rules
                             .get_or_insert_with(hauksbee_extract::ClearanceRules::default)

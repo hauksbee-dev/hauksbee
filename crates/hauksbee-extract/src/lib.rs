@@ -38,6 +38,7 @@ pub mod bom;
 pub mod datasheet_identity;
 pub mod dnp;
 pub mod drc;
+mod drc_rules;
 mod dsu;
 mod eagle;
 pub mod easyeda;
@@ -85,9 +86,10 @@ pub mod trace_current;
 pub use drc::{
     clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
     run_drc_with_clearance_rules, ClearanceRules, DeclaredTie, DrcFinding, DrcReport,
-    DrcTieQualification, Item, ItemKind, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM,
-    SHORT_TOUCH_EPS_MM,
+    DrcTieQualification, Item, ItemKind, NetClassRule, UnjudgedClearance, ViolationKind,
+    DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
 };
+pub use drc_rules::CustomClearanceRule;
 pub use eagle_sch::{
     declared_net_ties, looks_like_eagle_schematic, schematic_pad_names, schematic_part_identities,
     schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,

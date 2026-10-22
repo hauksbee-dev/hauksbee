@@ -799,6 +799,7 @@ mod tests {
             version_warning: Some("board format 20260206 is UNVALIDATED".into()),
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
+            clearance_unjudged: hauksbee_extract::UnjudgedClearance::default(),
             findings: vec![
                 short("GND", "+3V3", 1.0, 2.0),
                 short("GND", "PYRO4_FIRE", 3.0, 4.0),
