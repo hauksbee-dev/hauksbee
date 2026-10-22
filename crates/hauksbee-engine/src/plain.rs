@@ -2363,6 +2363,7 @@ mod tests {
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
+            clearance_unjudged: hauksbee_extract::UnjudgedClearance::default(),
         }
     }
 

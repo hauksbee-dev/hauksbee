@@ -49,6 +49,7 @@ use forge_sexpr::{Document, List};
 use hauksbee_ir::order::{net_pair_in_order, quantize_mm};
 use rstar::{RTree, AABB};
 
+use crate::drc_rules::{CustomClearanceRule, ItemAttrs, ItemFacts, PadType, Tri, NO_ATTRS};
 use crate::gerber::geo::{point_in_polygon, polygon_bounds, shape_gap_at, Capsule, Shape};
 use crate::pcb::at_of;
 
@@ -134,6 +135,14 @@ pub struct ClearanceRules {
     /// matching Eagle's larger-value-wins behaviour for nets of different
     /// classes.
     class_pair_clearances: HashMap<(String, String), f64>,
+    /// The board's minimum clearance (`board.design_settings.rules.min_clearance`
+    /// in the project file): a floor under the netclass and per-item clearances.
+    /// A custom rule is not raised to it; `KiCad` lets a rule go below it.
+    min_clearance_mm: f64,
+    /// The sibling `.kicad_dru` clearance rules, in file order. The last
+    /// matching rule governs a pair, over the netclass and under an item's own
+    /// local clearance.
+    custom: Vec<CustomClearanceRule>,
 }
 
 impl ClearanceRules {
@@ -150,7 +159,35 @@ impl ClearanceRules {
             classes: HashMap::new(),
             net_classes: HashMap::new(),
             class_pair_clearances: HashMap::new(),
+            min_clearance_mm: 0.0,
+            custom: Vec::new(),
         }
+    }
+
+    /// Set the board's minimum clearance floor (mm); non-positive clears it.
+    pub fn set_min_clearance(&mut self, clearance_mm: f64) {
+        self.min_clearance_mm = if clearance_mm.is_finite() && clearance_mm > 0.0 {
+            clearance_mm
+        } else {
+            0.0
+        };
+    }
+
+    /// Install the `.kicad_dru` clearance rules, in file order.
+    pub fn set_custom_rules(&mut self, rules: Vec<CustomClearanceRule>) {
+        self.custom = rules;
+    }
+
+    /// The custom clearance rules in force.
+    #[must_use]
+    pub fn custom_rules(&self) -> &[CustomClearanceRule] {
+        &self.custom
+    }
+
+    /// The netclass `net` belongs to (`Default` when none is assigned).
+    #[must_use]
+    pub fn net_class_name(&self, net: &str) -> &str {
+        self.net_classes.get(net).map_or("Default", String::as_str)
     }
 
     pub fn add_class(&mut self, rule: NetClassRule) {
@@ -249,8 +286,57 @@ impl ClearanceRules {
             .values()
             .map(|r| r.clearance_mm)
             .chain(self.class_pair_clearances.values().copied())
+            .chain(self.custom.iter().map(|rule| rule.min_mm))
             .fold(self.default_clearance_mm, f64::max)
             .max(self.global_clearance_override_mm.unwrap_or(0.0))
+            .max(self.min_clearance_mm)
+    }
+
+    /// What clearance applies between two items on `layer`, and how sure that
+    /// is. Precedence, as `kicad-cli pcb drc` resolves it: an item's own local
+    /// clearance (pad, else footprint), the larger of the two when both have
+    /// one, over the last matching custom rule, over the netclass pair rule;
+    /// the board minimum is a floor under the local and netclass values only.
+    ///
+    /// A custom rule whose scope cannot be judged for this pair contributes its
+    /// outcome AND the outcome of whatever it would have shadowed, so the caller
+    /// can tell a verdict that does not depend on it from one that does.
+    pub(crate) fn resolve_pair(
+        &self,
+        a: &ItemFacts,
+        b: &ItemFacts,
+        layer: &str,
+    ) -> PairRequirement {
+        let floor = self.min_clearance_mm;
+        let local = [a.attrs.local_clearance_mm, b.attrs.local_clearance_mm]
+            .into_iter()
+            .flatten()
+            .filter(|clearance| *clearance > 0.0)
+            .reduce(f64::max);
+        if let Some(local) = local {
+            return PairRequirement::definite(Some(local.max(floor)));
+        }
+        let mut requirement = PairRequirement::default();
+        for rule in self.custom.iter().rev() {
+            match rule.applies(a, b, layer) {
+                Tri::No => {}
+                Tri::Yes => {
+                    requirement.push((!rule.ignore).then_some(rule.min_mm));
+                    return requirement;
+                }
+                Tri::Unknown => {
+                    requirement.push((!rule.ignore).then_some(rule.min_mm));
+                    requirement.undecided.push(rule.name.clone());
+                }
+            }
+        }
+        let netclass = self.effective_clearance(a.net_name, b.net_name);
+        requirement.push(Some(if self.global_clearance_override_mm.is_some() {
+            netclass
+        } else {
+            netclass.max(floor)
+        }));
+        requirement
     }
 
     fn diff_pair_gap(&self, net_a: &str, net_b: &str) -> Option<f64> {
@@ -272,6 +358,85 @@ impl ClearanceRules {
 impl Default for ClearanceRules {
     fn default() -> Self {
         Self::new(DEFAULT_CLEARANCE_MM)
+    }
+}
+
+/// The clearances one pair of items might be held to. A pair no custom rule's
+/// scope is unsure about has exactly one.
+#[derive(Debug, Default)]
+pub(crate) struct PairRequirement {
+    /// Each possible requirement in mm; `None` is a rule that exempts the pair.
+    outcomes: Vec<Option<f64>>,
+    /// Names of the custom rules whose scope could not be judged for the pair.
+    undecided: Vec<String>,
+}
+
+/// Whether a measured gap breaks a [`PairRequirement`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Judgement {
+    /// Every possible requirement is met.
+    Clear,
+    /// Every possible requirement is broken.
+    Violates,
+    /// Some possible requirement is broken and some is not.
+    Undecided,
+}
+
+impl PairRequirement {
+    fn definite(outcome: Option<f64>) -> Self {
+        Self {
+            outcomes: vec![outcome],
+            undecided: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, outcome: Option<f64>) {
+        if !self.outcomes.contains(&outcome) {
+            self.outcomes.push(outcome);
+        }
+    }
+
+    /// The largest clearance any outcome demands (0 when all exempt the pair).
+    pub(crate) fn largest(&self) -> f64 {
+        self.outcomes.iter().flatten().copied().fold(0.0, f64::max)
+    }
+
+    pub(crate) fn judge(&self, gap_mm: f64) -> Judgement {
+        let (mut broken, mut met) = (false, false);
+        for outcome in &self.outcomes {
+            if outcome.is_some_and(|required| gap_mm < required - CLEARANCE_TOLERANCE_MM) {
+                broken = true;
+            } else {
+                met = true;
+            }
+        }
+        match (broken, met) {
+            (true, true) => Judgement::Undecided,
+            (true, false) => Judgement::Violates,
+            _ => Judgement::Clear,
+        }
+    }
+
+    pub(crate) fn undecided_rules(&self) -> &[String] {
+        &self.undecided
+    }
+}
+
+/// Close pairs the clearance check could not judge, because a custom rule's
+/// condition or layer scope could not be evaluated for them and the answer
+/// depends on it. They are neither reported nor cleared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnjudgedClearance {
+    /// Distinct places (net pair, layer, quarter-millimetre cell) left unjudged.
+    pub locations: usize,
+    /// The custom rules whose scope could not be evaluated, sorted.
+    pub rules: Vec<String>,
+}
+
+impl UnjudgedClearance {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.locations == 0
     }
 }
 
@@ -388,6 +553,15 @@ pub fn clearance_rules_from_kicad_pro<'a>(
                 }
             }
         }
+    }
+
+    // The board's minimum clearance is a floor under every netclass value: a
+    // class asking for less is held to this.
+    if let Some(min) = v
+        .pointer("/board/design_settings/rules/min_clearance")
+        .and_then(serde_json::Value::as_f64)
+    {
+        rules.set_min_clearance(min);
     }
 
     Some(rules)
@@ -821,6 +995,11 @@ pub struct DrcReport {
     /// `findings` (so they do not gate) but kept here so surfaces can show them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<DrcFinding>,
+    /// Close pairs left unjudged because a `.kicad_dru` rule scope could not be
+    /// evaluated for them (see [`UnjudgedClearance`]). Empty on a board whose
+    /// rules were all evaluable.
+    #[serde(default, skip_serializing_if = "UnjudgedClearance::is_empty")]
+    pub clearance_unjudged: UnjudgedClearance,
 }
 
 /// How far a native finding's location may sit from a `KiCad` exclusion's
@@ -1062,6 +1241,41 @@ impl DrcReport {
     /// cannot audit a rule they were never told was applied.
     #[must_use]
     pub fn suppression_note(&self) -> Option<String> {
+        match (self.zone_pad_note(), self.unjudged_clearance_note()) {
+            (Some(zone), Some(unjudged)) => Some(format!("{zone} {unjudged}")),
+            (zone, unjudged) => zone.or(unjudged),
+        }
+    }
+
+    /// Disclosure for close copper the clearance check could neither report nor
+    /// clear, because a `.kicad_dru` rule's scope could not be evaluated for it.
+    /// `None` when every rule was judged.
+    #[must_use]
+    pub fn unjudged_clearance_note(&self) -> Option<String> {
+        if self.clearance_unjudged.is_empty() {
+            return None;
+        }
+        let UnjudgedClearance { locations, rules } = &self.clearance_unjudged;
+        let places = if *locations == 1 {
+            "1 close copper location was".to_string()
+        } else {
+            format!("{locations} close copper locations were")
+        };
+        Some(format!(
+            "drc: {places} neither reported nor cleared: whether the copper there breaks the \
+             board's clearance depends on custom rule(s) {} in the .kicad_dru, whose condition \
+             hauksbee cannot evaluate for those items. Run `kicad-cli pcb drc` on the board to \
+             settle them, or write the condition with Type, NetName, NetClass, Layer, Pad_Type \
+             or Pad_Number so hauksbee can judge it.",
+            rules
+                .iter()
+                .map(|rule| format!("{rule:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
+    fn zone_pad_note(&self) -> Option<String> {
         let Some(n) = self.zone_pad_overlaps_suppressed else {
             // Never measured: either no copper DRC pass ran (a netlist-only input
             // or a default-constructed report) or the payload predates the
@@ -1249,6 +1463,28 @@ struct LayerBuckets {
     footprint: usize,
     /// Through-hole pad layers settled once every track and via is known.
     deferred: Vec<DeferredPadLayer>,
+    /// What a custom rule may ask about an item beyond its kind and net, by
+    /// item index (KiCad path only; an item with no entry has none).
+    item_attrs: HashMap<usize, ItemAttrs>,
+    /// The largest local (pad or footprint) clearance any item carries.
+    max_local_clearance_mm: f64,
+    /// The footprint whose pads are being collected.
+    footprint_context: FootprintContext,
+}
+
+/// What a footprint passes down to its pads.
+#[derive(Default)]
+struct FootprintContext {
+    /// The footprint's own `(clearance)`, used by pads that set none.
+    local_clearance_mm: Option<f64>,
+    /// The library identifier, e.g. `Resistor_SMD:R_0603_1608Metric`.
+    lib_id: Option<String>,
+}
+
+/// A clearance value only when it is a usable positive distance (KiCad treats
+/// 0 as "not set").
+fn positive_clearance(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite() && *v > 0.0)
 }
 
 impl LayerBuckets {
@@ -1261,6 +1497,18 @@ impl LayerBuckets {
 
     const fn current_item(&self) -> usize {
         self.items.len().saturating_sub(1)
+    }
+
+    /// Record the attributes of the item being built.
+    fn set_item_attrs(&mut self, attrs: ItemAttrs) {
+        if let Some(local) = attrs.local_clearance_mm {
+            self.max_local_clearance_mm = self.max_local_clearance_mm.max(local);
+        }
+        self.item_attrs.insert(self.current_item(), attrs);
+    }
+
+    fn attrs_of(&self, item: usize) -> &ItemAttrs {
+        self.item_attrs.get(&item).unwrap_or(&NO_ATTRS)
     }
 
     fn push(&mut self, layer: &str, mut prim: Primitive) {
@@ -1634,6 +1882,10 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         .enumerate()
     {
         buckets.footprint = ordinal;
+        buckets.footprint_context = FootprintContext {
+            local_clearance_mm: positive_clearance(fp.find_f64("clearance")),
+            lib_id: fp.arg_value(0),
+        };
         let owner = footprint_reference(fp);
         let (fx, fy, frot) = at_of(fp);
         let rot_rad = frot.to_radians();
@@ -1690,6 +1942,15 @@ fn collect_pad(
     };
     let pad_origin = to_world(0.0, 0.0);
     buckets.begin_item(connectivity::ItemMeta::pad(pad, net, owner, pad_origin));
+    let attrs = ItemAttrs {
+        local_clearance_mm: positive_clearance(pad.find_f64("clearance"))
+            .or(buckets.footprint_context.local_clearance_mm),
+        pad_type: pad.arg_value(1).as_deref().and_then(PadType::from_token),
+        pad_number: pad.arg_value(0),
+        footprint_reference: Some(owner.to_string()),
+        footprint_lib_id: buckets.footprint_context.lib_id.clone(),
+    };
+    buckets.set_item_attrs(attrs);
 
     // A through-hole pad can carry `(drill ... (offset x y))`: the pad's `(at)`
     // is the HOLE position and the copper shape is displaced by the offset,
@@ -2919,7 +3180,7 @@ fn sweep_buckets(
     net_ties: &NetTieOwners,
     name_of: impl Fn(i64) -> String,
 ) -> DrcReport {
-    let max_clearance = rules.max_clearance();
+    let max_clearance = rules.max_clearance().max(buckets.max_local_clearance_mm);
     let primitive_count: usize = buckets.by_layer.values().map(Vec::len).sum();
     // The copper to sweep is now known: the load bar counts primitives from here.
     hauksbee_ir::progress::begin_sweep(primitive_count);
@@ -2930,7 +3191,12 @@ fn sweep_buckets(
         version_warning: None,
         zone_pad_overlaps_suppressed: Some(0),
         excluded: Vec::new(),
+        clearance_unjudged: UnjudgedClearance::default(),
     };
+    // Close pairs a custom rule's scope left undecidable (see `Judgement`).
+    let mut unjudged_cells: std::collections::HashSet<(i64, i64, String, i64, i64)> =
+        std::collections::HashSet::new();
+    let mut unjudged_rules: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     // De-dup findings on the same net pair + layer + rounded location, so a
     // pour overlapping a long track does not emit thousands of near-identical
@@ -3048,9 +3314,34 @@ fn sweep_buckets(
                 } else {
                     (q, p, name_q, name_p)
                 };
-                let clearance = rules.effective_clearance(&name_p, &name_q);
                 let (gap, (cx, cy)) = shape_gap_at(&p.shape, &q.shape);
-                if gap >= clearance {
+                if gap >= max_clearance {
+                    continue;
+                }
+                // The clearance this pair is held to: its items' own local
+                // clearances, the custom rules, the netclass and the board
+                // minimum (see `ClearanceRules::resolve_pair`).
+                let requirement = rules.resolve_pair(
+                    &ItemFacts {
+                        kind: p.kind,
+                        net_name: &name_p,
+                        net_class: rules.net_class_name(&name_p),
+                        attrs: buckets.attrs_of(p.item),
+                    },
+                    &ItemFacts {
+                        kind: q.kind,
+                        net_name: &name_q,
+                        net_class: rules.net_class_name(&name_q),
+                        attrs: buckets.attrs_of(q.item),
+                    },
+                    layer,
+                );
+                let clearance = requirement.largest();
+                let judgement = requirement.judge(gap);
+                // Copper in contact is a short whatever a rule says about
+                // clearance; otherwise a pair that meets every possible
+                // requirement is done.
+                if !is_touching(gap) && judgement == Judgement::Clear {
                     continue;
                 }
                 // A deliberate net tie is a local footprint property, not a
@@ -3099,10 +3390,25 @@ fn sweep_buckets(
                     } else {
                         ViolationKind::Short
                     }
-                } else if gap < clearance - CLEARANCE_TOLERANCE_MM {
-                    ViolationKind::Clearance
                 } else {
-                    continue;
+                    match judgement {
+                        Judgement::Violates => ViolationKind::Clearance,
+                        Judgement::Clear => continue,
+                        Judgement::Undecided => {
+                            // Whether this is a violation hangs on a rule scope
+                            // that cannot be evaluated here: say so, don't guess.
+                            let (qx, qy) = clearance_cell(cx, cy);
+                            unjudged_cells.insert((
+                                p.net.min(q.net),
+                                p.net.max(q.net),
+                                layer.clone(),
+                                qx,
+                                qy,
+                            ));
+                            unjudged_rules.extend(requirement.undecided_rules().iter().cloned());
+                            continue;
+                        }
+                    }
                 };
                 record(
                     kind,
@@ -3180,7 +3486,21 @@ fn sweep_buckets(
 
     sort_findings(&mut report.findings);
     report.zone_pad_overlaps_suppressed = Some(zone_pad_suppressed);
+    report.clearance_unjudged = UnjudgedClearance {
+        locations: unjudged_cells.len(),
+        rules: unjudged_rules.into_iter().collect(),
+    };
     report
+}
+
+/// The quarter-millimetre cell a finding location falls in (the de-duplication
+/// grain of the sweep).
+#[allow(clippy::cast_possible_truncation, reason = "quarter-mm cells fit i64")]
+fn clearance_cell(x: f64, y: f64) -> (i64, i64) {
+    (
+        (quantize_mm(x) * 4.0).round() as i64,
+        (quantize_mm(y) * 4.0).round() as i64,
+    )
 }
 
 /// Convenience: parse `.kicad_pcb` text and run DRC with the default clearance

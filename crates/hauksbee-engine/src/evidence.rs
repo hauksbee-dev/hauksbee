@@ -2972,9 +2972,15 @@ mod tests {
             .unwrap()
     }
 
+    /// A rule whose condition the sweep cannot read (`isPlated()`), so it is
+    /// never applied.
     fn conditional_rule(constraint: &str) -> CustomRulesCoverage {
+        rule_with_condition("A.isPlated()", constraint)
+    }
+
+    fn rule_with_condition(condition: &str, constraint: &str) -> CustomRulesCoverage {
         let parsed = hauksbee_extract::parse_kicad_dru(&format!(
-            "(version 1) (rule \"conditional\" (condition \"A.Type == 'x'\") (constraint {constraint} (min 0.3mm)))"
+            "(version 1) (rule \"conditional\" (condition \"{condition}\") (constraint {constraint} (min 0.3mm)))"
         ))
         .unwrap();
         CustomRulesCoverage::from_parsed("scope.kicad_dru".into(), &parsed)
@@ -2991,6 +2997,14 @@ mod tests {
             .assumptions()
             .iter()
             .any(|id| id.as_str().starts_with("reduced-fidelity:custom-rules/")));
+
+        // A condition the sweep evaluates (here, on item types) is applied
+        // pair by pair, so the result is not qualified by it.
+        let evaluated = rule_with_condition("A.Type == 'Via'", "clearance");
+        assert_eq!(
+            drc_maps_with_rules(&evaluated)[0].status(),
+            EvidenceStatus::Clean
+        );
 
         let coverage = conditional_rule("hole_clearance");
         assert_eq!(
