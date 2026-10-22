@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   assertBlock, badNumbers, countAsserts, fixFor, groupOf, isReferenceNet, isSkippedNet, KIND_GROUPS, measureAs, missingRequired,
-  needMet, nominalFromName, offersForNet, offersForPart, prefill, rankNets, requestFor, resolveDefault, scenarioIds,
+  needMet, nominalFromName, offersForNet, offersForPart, prefill, rankNets, requestFor, resolveDefault, runWindowMs, scenarioIds,
   specBody, wouldFail,
   type CatalogField, type CatalogKind, type OfferContext,
 } from '../src/lib/check-catalog'
@@ -149,8 +149,8 @@ describe('offers', () => {
 
   test('the menu groups cover every kind once', () => {
     const all = KIND_GROUPS.flatMap(([, kinds]) => kinds)
-    expect(all).toHaveLength(19)
-    expect(new Set(all).size).toBe(19)
+    expect(all).toHaveLength(23)
+    expect(new Set(all).size).toBe(23)
     expect(groupOf('rail_window')).toBe('Voltages')
     expect(groupOf('phase_margin')).toBe('Small-signal')
   })
@@ -224,6 +224,15 @@ describe('required fields and the assertion text', () => {
     expect(assertBlock(trip, { supply_net: '/VBAT', expect_trip: 'true' }))
       .toBe('[[assert]]\nkind = "protection_trip"\nsupply_net = "/VBAT"\nexpect_trip = true\n')
     expect(requestFor(voltage, { net: 'A', min: '1' })).toEqual({ type: 'assert', kind: 'voltage', toml: '[[assert]]\nkind = "voltage"\nnet = "A"\nmin = 1\n' })
+    // A blink rate needs its periods in the run: 5 Hz is 5 periods in 1 s, and no assert asks for less than that.
+    const toggle = CATALOG.find(k => k.kind === 'toggle')!
+    expect(runWindowMs('toggle', { freq_hz: '5' })).toBe(1000)
+    expect(runWindowMs('toggle', { freq_hz: '0.5' })).toBe(10000)
+    expect(runWindowMs('toggle', { min_toggles: '4' })).toBeNull()
+    expect(runWindowMs('voltage', { freq_hz: '5' })).toBeNull()
+    expect(requestFor(toggle, { net: 'D13', freq_hz: '5' })).toMatchObject({ type: 'assert', kind: 'toggle', run_ms: '1000' })
+    expect(requestFor(toggle, { net: 'D13', freq_hz: '5' }, 2400)).toMatchObject({ run_ms: '2400' })
+    expect('run_ms' in requestFor(voltage, { net: 'A', min: '1' })).toBe(false)
   })
 
   test('a builder kind survives the round trip into a row, boot coverage under either spelling', () => {

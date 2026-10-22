@@ -324,6 +324,25 @@
       "description": "One assertion over the run.",
       "type": "object",
       "properties": {
+        "acked": {
+          "description": "`bus` over I2C: whether the address ACKs (true, the default) or must NACK.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "addr": {
+          "description": "`bus` over I2C: the 7-bit device address (0 to 127) that is addressed.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "maximum": 127,
+          "minimum": 0
+        },
         "after_ms": {
           "description": "Only sample at/after this time (ms), lets the rail settle first.",
           "type": [
@@ -350,6 +369,24 @@
           "format": "double",
           "default": null
         },
+        "baud": {
+          "description": "`uart_baud`: the nominal baud the firmware configured (9600, 115200).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "bus": {
+          "description": "`bus`: which bus controller, e.g. `I2C1`; absent means any bus of the protocol.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "bytes": {
           "description": "EEPROM byte sequence (hex string, e.g. \"48 69\" or \"4869\") that must\nappear in the peripheral's memory.",
           "type": [
@@ -357,6 +394,21 @@
             "null"
           ],
           "default": null
+        },
+        "cause": {
+          "description": "`resets`: count only resets of this cause.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "power_on",
+            "brown_out",
+            "watchdog",
+            "software",
+            "pin"
+          ]
         },
         "celsius": {
           "description": "`max_temp`: ceiling in C for the steady-state junction temperature of the\ncomponent named by `ref`. When omitted, the device's own max junction\ntemperature (from the model DB, or the per-package-class default) is used.",
@@ -445,7 +497,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model. `pulse_width`: the width (ms) of the\nfirst complete high (or `level = \"low\"`) pulse on `net` after `after_ms`.\n`logic_level`: `net` reaches a valid logic high (or `level = \"low\"`) at\nevery logic input it drives, the VIH/VIL read from those parts' cards at\ntheir own supply. `fires`: the comparator `ref` fires (`min_toggles`\ntimes, default once), at the `target` trip level when one is given.\nBoth are outcome assertions a `[search]` block searches.\nOn the numeric kinds, omitting every bound makes the assertion a\nMEASUREMENT: the value is reported, nothing is judged.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model. `pulse_width`: the width (ms) of the\nfirst complete high (or `level = \"low\"`) pulse on `net` after `after_ms`.\n`logic_level`: `net` reaches a valid logic high (or `level = \"low\"`) at\nevery logic input it drives, the VIH/VIL read from those parts' cards at\ntheir own supply. `fires`: the comparator `ref` fires (`min_toggles`\ntimes, default once), at the `target` trip level when one is given.\nBoth are outcome assertions a `[search]` block searches.\n`bus`: an I2C address ACKs (or an SPI frame holds `bytes`) on the bus\nlog. `resets`: the MCU resets at most `max_resets` times. `reaches`:\nthe firmware reaches `symbol` (or is not parked in `not_parked_in`).\n`uart_baud`: the decoded UART baud is within `tolerance` of `baud`.\nThese four read the run's bench record.\nOn the numeric kinds, omitting every bound makes the assertion a\nMEASUREMENT: the value is reported, nothing is judged.",
           "type": "string",
           "enum": [
             "voltage",
@@ -467,7 +519,11 @@
             "logic_level",
             "fires",
             "increases",
-            "decreases"
+            "decreases",
+            "bus",
+            "resets",
+            "reaches",
+            "uart_baud"
           ]
         },
         "level": {
@@ -506,6 +562,16 @@
             "null"
           ],
           "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "max_resets": {
+          "description": "`resets`: the most resets the MCU may take over the run.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
           "default": null,
           "minimum": 0
         },
@@ -558,6 +624,16 @@
           "default": null,
           "minimum": 0
         },
+        "min_transactions": {
+          "description": "`bus`: at least this many transactions match (default 1).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
         "min_width_ms": {
           "description": "`logic_level`: how long (ms) the level must be HELD, continuously, for\nthe next stage to take it (\"high enough, for long enough\"); at least\n`min_toggles` (default 1) separate pulses must hold it. An explicit\n`min` (high) or `max` (low) replaces the card-read VIH/VIL.",
           "type": [
@@ -582,6 +658,26 @@
             "null"
           ],
           "default": null
+        },
+        "not_parked_in": {
+          "description": "`reaches`: a function the firmware must NOT end the run parked in.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "protocol": {
+          "description": "`bus`: the bus protocol, `\"i2c\"` or `\"spi\"`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "i2c",
+            "spi"
+          ]
         },
         "recover_to": {
           "description": "`rail_window`: the voltage the rail must climb back to for \"recovered\".",
@@ -666,6 +762,14 @@
         },
         "supply_net": {
           "description": "`protection_trip`: the supply net whose battery protection is checked.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "symbol": {
+          "description": "`reaches`: a function the firmware must reach (`main`, `app_start`).",
           "type": [
             "string",
             "null"

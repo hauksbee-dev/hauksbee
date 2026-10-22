@@ -90,14 +90,29 @@ fn read(spec: &Spec, a: &crate::spec::Assertion, out: &RunOutcome) -> Reading {
 /// condition rather than reading a number, the run fails, or the run cannot honestly
 /// read the quantity.
 pub fn measure(path: &Path, index: usize) -> Result<Value, String> {
-    let started = Instant::now();
-    let mut spec = Spec::load(path).map_err(|e| e.to_string())?;
+    let spec = Spec::load(path).map_err(|e| e.to_string())?;
     let total = spec.asserts.len();
-    let mut chosen = spec
+    let chosen = spec
         .asserts
         .get(index)
         .cloned()
         .ok_or_else(|| format!("assertion {index} does not exist; the spec has {total}"))?;
+    measure_assertion(spec, chosen)
+}
+
+/// Read `chosen` off one nominal run of `spec`, whether or not `spec` lists it.
+///
+/// This is [`measure`] for a caller that holds the assertion in hand (the
+/// `hauksbee-ci add --observe` flow measures an assertion it has not written yet).
+///
+/// # Errors
+///
+/// As [`measure`], minus the spec-loading and index errors.
+pub fn measure_assertion(
+    mut spec: Spec,
+    mut chosen: crate::spec::Assertion,
+) -> Result<Value, String> {
+    let started = Instant::now();
     if !MEASURABLE.contains(&chosen.kind.as_str()) {
         return Err(format!(
             "a `{}` assertion judges a condition; there is no single reading to take. \

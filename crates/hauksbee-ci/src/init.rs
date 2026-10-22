@@ -53,6 +53,406 @@ pub fn init(board: &Path) -> Result<PathBuf, SpecError> {
 /// [`SpecError::Invalid`] when the spec file already exists; and any error
 /// from loading the board while rendering it.
 pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
+    let (out, spec_dir, run_hint) = plan_destination(board, out)?;
+    let spec = render_spec_at_with_run_hint(board, &spec_dir, &run_hint)?;
+    std::fs::write(&out, spec)
+        .map_err(|e| SpecError::Io(format!("writing {}: {e}", out.display())))?;
+    Ok(out)
+}
+
+/// How long `init --suggest-asserts` runs the firmware when `--duration-ms` is
+/// not given: long enough to see several periods of a blink, which the starter
+/// spec's 200 ms power-up window is not.
+pub const OBSERVE_DEFAULT_MS: f64 = 1000.0;
+
+/// The most toggling nets proposed from one run; a board with a bus busy on
+/// dozens of pins would otherwise bury the three assertions that matter.
+const MAX_SUGGESTED_NETS: usize = 8;
+
+/// First line of the section `init --suggest-asserts` appends. The tests (and
+/// anyone scripting around it) find the suggestions by this text.
+pub const SUGGESTED_HEADER: &str = "## ---- asserts suggested from one run of";
+
+/// Say one assertion as `[[assert]]` TOML: the single writer behind both
+/// `init --suggest-asserts` (commented, for the user to opt into) and
+/// `hauksbee-ci add` (live, appended to a spec).
+///
+/// `fields` are `(key, value)` in the order they should read. `notes` are
+/// prose lines above the block: `## ` lines when commented (so uncommenting a
+/// block by stripping `# ` leaves them alone), plain `# ` comments when live.
+#[must_use]
+pub fn render_assert_block(
+    kind: &str,
+    fields: &[(String, toml::Value)],
+    notes: &[String],
+    commented: bool,
+) -> String {
+    let (mark, note_mark) = if commented { ("# ", "## ") } else { ("", "# ") };
+    let mut out = String::new();
+    for note in notes {
+        let _ = writeln!(out, "{note_mark}{note}");
+    }
+    let _ = writeln!(out, "{mark}[[assert]]");
+    let _ = writeln!(
+        out,
+        "{mark}kind = {}",
+        toml::Value::String(kind.to_string())
+    );
+    for (key, value) in fields {
+        let _ = writeln!(out, "{mark}{key} = {value}");
+    }
+    out
+}
+
+/// What `init --firmware .. --suggest-asserts` should look at.
+#[derive(Debug, Clone, Copy)]
+pub struct Observe<'a> {
+    /// The firmware image to boot.
+    pub firmware: &'a Path,
+    /// How long to run it; [`OBSERVE_DEFAULT_MS`] when `None`.
+    pub duration_ms: Option<f64>,
+}
+
+/// What [`init_observing`] wrote and what it learned.
+#[derive(Debug, Clone)]
+pub struct Suggested {
+    /// The spec file.
+    pub path: PathBuf,
+    /// One line per assertion proposed (`toggle PC13: 5.0 Hz`).
+    pub proposed: Vec<String>,
+    /// Why the run could not be observed, when it could not; the spec is
+    /// still written, with the firmware line live and nothing proposed.
+    pub warning: Option<String>,
+}
+
+/// One toggling net the run saw.
+struct ToggleSeen {
+    net: String,
+    edges: u64,
+    /// The edge-timed rate, or why none could be timed.
+    rate: Result<f64, String>,
+}
+
+/// Everything a run showed that an assertion can say.
+struct Seen {
+    toggles: Vec<ToggleSeen>,
+    uart_line: Option<String>,
+    entries: Vec<String>,
+    /// The pulse width (microseconds) a polling MCU backend guarantees to see,
+    /// when the firmware ran on one. A `toggle` on such a backend is refused
+    /// unless the spec declares `timing.min_pulse_us`.
+    poll_pulse_floor_us: Option<f64>,
+}
+
+/// [`init_to`], then boot `observe.firmware` once and append the assertions
+/// that run supports as commented blocks the user can opt into.
+///
+/// The firmware line is live and the starter's other blocks are unchanged, so
+/// uncommenting a suggestion yields a spec that passes on the run it came from
+/// and fails when the number in it is edited to something the firmware does
+/// not do.
+///
+/// # Errors
+///
+/// As [`init_to`]. A firmware run that fails is not an error: the spec is
+/// written and [`Suggested::warning`] says why nothing was proposed.
+pub fn init_observing(
+    board: &Path,
+    out: Option<&Path>,
+    observe: Observe<'_>,
+) -> Result<Suggested, SpecError> {
+    let (path, spec_dir, run_hint) = plan_destination(board, out)?;
+    let mut text = render_spec_at_with_run_hint(board, &spec_dir, &run_hint)?;
+    let duration_ms = observe.duration_ms.unwrap_or(OBSERVE_DEFAULT_MS);
+    let firmware_ref = toml_path(board_reference(observe.firmware, &spec_dir));
+    text = replace_line(
+        &text,
+        "# firmware = ",
+        &format!("firmware = {firmware_ref}   # the image the suggestions below were observed on"),
+    )?;
+    text = replace_line(
+        &text,
+        "duration_ms = ",
+        &format!("duration_ms = {duration_ms}               # simulated time to run"),
+    )?;
+    std::fs::write(&path, &text)
+        .map_err(|e| SpecError::Io(format!("writing {}: {e}", path.display())))?;
+
+    let name = observe.firmware.file_name().map_or_else(
+        || "the firmware".into(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let (section, proposed, warning) = match observe_firmware(&path) {
+        Ok(seen) => {
+            let (blocks, proposed) = suggestion_blocks(&seen);
+            text.push_str(&timing_declaration(&seen));
+            (blocks, proposed, None)
+        }
+        Err(e) => (String::new(), Vec::new(), Some(e.to_string())),
+    };
+    // Prose is `## `, code is `# `: stripping `# ` from every line that has it
+    // uncomments the blocks and leaves every note a comment.
+    let mut tail = format!(
+        "\n{SUGGESTED_HEADER} {name} ({duration_ms} ms) ----\n\
+         ## Each block is something the firmware DID in that run, said as an assertion.\n\
+         ## Uncomment the ones you want to hold it to. Edit a number to say what you\n\
+         ## EXPECT instead; `hauksbee-ci explain <kind>` lists a kind's fields.\n"
+    );
+    match &warning {
+        Some(why) => {
+            let _ = writeln!(
+                tail,
+                "## The run did not finish, so nothing is proposed: {}",
+                why.lines().next().unwrap_or("")
+            );
+        }
+        None if proposed.is_empty() => {
+            tail.push_str(
+                "## The run showed nothing to assert on: no net toggled, no UART text,\n\
+                 ## and the core's entry point was not reported.\n",
+            );
+        }
+        None => tail.push_str(&section),
+    }
+    let _ = writeln!(
+        tail,
+        "##\n## Not observed (a run does not record the bench view yet, so these cannot be\n\
+         ## proposed from it): bus traffic `bus`, reset count `resets`, UART baud\n\
+         ## `uart_baud`. Add one by hand once you know what to expect:\n\
+         ##   hauksbee-ci add {run_hint} bus protocol=i2c addr=0x48"
+    );
+    text.push_str(&tail);
+    std::fs::write(&path, text)
+        .map_err(|e| SpecError::Io(format!("writing {}: {e}", path.display())))?;
+    Ok(Suggested {
+        path,
+        proposed,
+        warning,
+    })
+}
+
+/// `text` with the first line that starts with `prefix` replaced by `line`.
+fn replace_line(text: &str, prefix: &str, line: &str) -> Result<String, SpecError> {
+    let mut found = false;
+    let mut out = String::with_capacity(text.len() + line.len());
+    for l in text.lines() {
+        if !found && l.starts_with(prefix) {
+            found = true;
+            out.push_str(line);
+        } else {
+            out.push_str(l);
+        }
+        out.push('\n');
+    }
+    if found {
+        Ok(out)
+    } else {
+        Err(SpecError::Invalid(format!(
+            "the starter spec has no `{}` line to point at the firmware",
+            prefix.trim()
+        )))
+    }
+}
+
+/// Boot the firmware in the spec at `path` and read off what it did.
+///
+/// Two runs, because a net's waveform is only recorded for a net some
+/// assertion times: the first finds the nets that moved (and the UART text
+/// and the entry symbol), the second times each mover's edges.
+fn observe_firmware(path: &Path) -> Result<Seen, SpecError> {
+    use crate::spec::{Assertion, Spec};
+    let spec = Spec::load(path)?;
+    let first = runner::run_spec(&spec)?;
+    let out = first
+        .first()
+        .ok_or_else(|| SpecError::Invalid("the run produced no outcome".into()))?;
+
+    let mut movers: Vec<(String, u64)> = out
+        .toggles
+        .iter()
+        .filter(|&(net, &n)| {
+            n >= 2
+                && !is_ground(net)
+                && power_rail_voltage(net).is_none()
+                && !looks_like_power_name(net)
+        })
+        .map(|(net, &n)| (net.clone(), n))
+        .collect();
+    movers.sort();
+    movers.truncate(MAX_SUGGESTED_NETS);
+
+    let mut timed = spec.clone();
+    timed.asserts = movers
+        .iter()
+        .map(|(net, _)| Assertion {
+            kind: "toggle".into(),
+            net: Some(net.clone()),
+            ..Default::default()
+        })
+        .collect();
+    let dt_s = spec.frame_ms.max(1e-3) / 1000.0;
+    let series = if movers.is_empty() {
+        Vec::new()
+    } else {
+        runner::run_spec(&timed)?
+    };
+    let toggles = movers
+        .into_iter()
+        .map(|(net, edges)| {
+            let rate = series
+                .first()
+                .and_then(|o| o.net_series.get(&net))
+                .map_or_else(
+                    || Err("the run recorded no waveform for it".to_string()),
+                    |s| crate::assertions::edge_rate(s, dt_s).map(|(hz, _)| hz),
+                )
+                .and_then(|hz| {
+                    // The same refusal the toggle assertion makes: under ten
+                    // samples a period the grid is reporting itself, not a rate.
+                    if 1.0 / (hz * dt_s) < 10.0 {
+                        Err(format!(
+                            "{hz:.1} Hz is under-sampled at frame_ms = {}; lower frame_ms to time it",
+                            spec.frame_ms
+                        ))
+                    } else {
+                        Ok(hz)
+                    }
+                });
+            ToggleSeen { net, edges, rate }
+        })
+        .collect();
+
+    let uart_line = {
+        let mut texts: Vec<(&String, &String)> = out.uart.iter().collect();
+        texts.sort();
+        texts.into_iter().find_map(|(_, text)| {
+            text.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(|l| l.chars().take(80).collect::<String>())
+        })
+    };
+    let mut entries: Vec<String> = out
+        .execution
+        .iter()
+        .filter(|e| e.reached_entry == hauksbee_engine::execution::Observed::Yes)
+        .filter_map(|e| e.entry_symbol.clone())
+        .collect();
+    entries.sort();
+    entries.dedup();
+    let poll_pulse_floor_us = out
+        .timing_coverage
+        .iter()
+        .filter(|c| !c.cycle_exact && c.backend != hauksbee_engine::scheduler::CHUNK_SAMPLED_LOGIC)
+        .map(|c| c.minimum_guaranteed_pulse_s * 1e6)
+        .reduce(f64::max);
+    Ok(Seen {
+        toggles,
+        uart_line,
+        entries,
+        poll_pulse_floor_us,
+    })
+}
+
+/// The `[timing]` table a `toggle` suggestion needs on a polling backend, as
+/// live TOML with its reason, or nothing when no toggle is proposed or the
+/// backend sees every edge.
+///
+/// A poll cannot prove a pulse did not rise and fall between two samples, so
+/// the engine refuses a `toggle` there unless the spec says how narrow a pulse
+/// it needs seen. The value is the width the backend already guarantees,
+/// lowered to a quarter of the fastest timed period so the check never claims
+/// a pulse the polling cannot resolve.
+fn timing_declaration(seen: &Seen) -> String {
+    let Some(floor_us) = seen.poll_pulse_floor_us else {
+        return String::new();
+    };
+    if seen.toggles.is_empty() {
+        return String::new();
+    }
+    let quarter_period_us = seen
+        .toggles
+        .iter()
+        .filter_map(|t| t.rate.as_ref().ok())
+        .map(|hz| 0.25e6 / hz)
+        .fold(f64::INFINITY, f64::min);
+    let min_pulse_us = floor_us.min(quarter_period_us).max(1.0).floor();
+    format!(
+        "\n# The firmware runs on a polling backend, which cannot prove a pulse did not rise\n\
+         # and fall between two samples, so a `toggle` check must say how narrow a pulse\n\
+         # it needs seen. This is the width the backend already guarantees.\n\
+         [timing]\n\
+         min_pulse_us = {min_pulse_us}\n"
+    )
+}
+
+/// The commented blocks for what the run saw, and one summary line per block.
+fn suggestion_blocks(seen: &Seen) -> (String, Vec<String>) {
+    let (mut s, mut lines) = (String::new(), Vec::new());
+    let mut push = |kind: &str, fields: Vec<(String, toml::Value)>, note: String, line: String| {
+        s.push_str(&render_assert_block(kind, &fields, &[note], true));
+        lines.push(line);
+    };
+    if let Some(line) = &seen.uart_line {
+        push(
+            "uart",
+            vec![("contains".into(), toml::Value::String(line.clone()))],
+            format!("observed: the firmware printed {line:?}"),
+            format!("uart: prints {line:?}"),
+        );
+    }
+    for symbol in &seen.entries {
+        push(
+            "reaches",
+            vec![("symbol".into(), toml::Value::String(symbol.clone()))],
+            format!("observed: the core reached `{symbol}`"),
+            format!("reaches: {symbol}"),
+        );
+    }
+    for t in &seen.toggles {
+        let net = toml::Value::String(t.net.clone());
+        match &t.rate {
+            Ok(hz) => {
+                let mut fields = vec![("net".to_string(), net)];
+                fields.extend(
+                    crate::catalog::measured_fields("toggle", *hz)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v)),
+                );
+                push(
+                    "toggle",
+                    fields,
+                    format!("observed: {} toggled {} times, {hz:.2} Hz by edge timing", t.net, t.edges),
+                    format!("toggle: {} at {hz:.2} Hz", t.net),
+                );
+            }
+            Err(why) => push(
+                "toggle",
+                vec![
+                    ("net".to_string(), net),
+                    (
+                        "min_toggles".to_string(),
+                        toml::Value::Integer(i64::try_from((t.edges * 4 / 5).max(1)).unwrap_or(1)),
+                    ),
+                ],
+                format!(
+                    "observed: {} toggled {} times; no rate could be timed ({why}), so this counts instead",
+                    t.net, t.edges
+                ),
+                format!("toggle: {} at least {} times", t.net, (t.edges * 4 / 5).max(1)),
+            ),
+        }
+    }
+    (s, lines)
+}
+
+/// Where a scaffold lands: `(spec file, its directory, the `run` hint the spec
+/// prints for itself)`. Creates the directory and refuses an existing file, so
+/// every way of scaffolding shares one rule about not clobbering hand-written work.
+fn plan_destination(
+    board: &Path,
+    out: Option<&Path>,
+) -> Result<(PathBuf, PathBuf, String), SpecError> {
     let out = match out {
         None => {
             let cwd = std::env::current_dir()
@@ -95,10 +495,7 @@ pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
             .and_then(|cwd| relative_path(&cwd, &out))
             .unwrap_or_else(|| out.clone())
     };
-    let spec = render_spec_at_with_run_hint(board, &spec_dir, &run_hint.display().to_string())?;
-    std::fs::write(&out, spec)
-        .map_err(|e| SpecError::Io(format!("writing {}: {e}", out.display())))?;
-    Ok(out)
+    Ok((out, spec_dir, run_hint.display().to_string()))
 }
 
 /// The USB profile scaffolded for a detected USB rail: a BC1.2 / USB-C 1.5 A

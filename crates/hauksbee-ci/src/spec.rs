@@ -43,7 +43,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{near_matches, SpecError};
-use hauksbee_ir::units::{format_amps, format_celsius_to, format_volts};
+use hauksbee_ir::units::{format_amps, format_celsius_to, format_percent, format_volts};
 
 // ── Declarative sensor ────────────────────────────────────────────────────────
 
@@ -1213,6 +1213,11 @@ pub struct Assertion {
     /// their own supply. `fires`: the comparator `ref` fires (`min_toggles`
     /// times, default once), at the `target` trip level when one is given.
     /// Both are outcome assertions a `[search]` block searches.
+    /// `bus`: an I2C address ACKs (or an SPI frame holds `bytes`) on the bus
+    /// log. `resets`: the MCU resets at most `max_resets` times. `reaches`:
+    /// the firmware reaches `symbol` (or is not parked in `not_parked_in`).
+    /// `uart_baud`: the decoded UART baud is within `tolerance` of `baud`.
+    /// These four read the run's bench record.
     /// On the numeric kinds, omitting every bound makes the assertion a
     /// MEASUREMENT: the value is reported, nothing is judged.
     // Both `boot_coverage` spellings are listed: the canonical snake_case one
@@ -1223,7 +1228,8 @@ pub struct Assertion {
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
         "peripheral", "rail_window", "protection_trip", "boot_coverage",
         "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage",
-        "pulse_width", "logic_level", "fires", "increases", "decreases"
+        "pulse_width", "logic_level", "fires", "increases", "decreases",
+        "bus", "resets", "reaches", "uart_baud"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -1425,6 +1431,41 @@ pub struct Assertion {
     /// is the meaningful setting on a board you trust.
     #[serde(default)]
     pub max_active_unresolved: Option<usize>,
+
+    // ── observed-behaviour kinds (bus / resets / reaches / uart_baud) ───────
+    /// `bus`: the bus protocol, `"i2c"` or `"spi"`.
+    #[serde(default)]
+    #[schemars(extend("enum" = ["i2c", "spi"]))]
+    pub protocol: Option<String>,
+    /// `bus`: which bus controller, e.g. `I2C1`; absent means any bus of the protocol.
+    #[serde(default)]
+    pub bus: Option<String>,
+    /// `bus` over I2C: the 7-bit device address (0 to 127) that is addressed.
+    #[serde(default)]
+    #[schemars(range(min = 0, max = 127))]
+    pub addr: Option<u32>,
+    /// `bus` over I2C: whether the address ACKs (true, the default) or must NACK.
+    #[serde(default)]
+    pub acked: Option<bool>,
+    /// `bus`: at least this many transactions match (default 1).
+    #[serde(default)]
+    pub min_transactions: Option<u64>,
+    /// `resets`: the most resets the MCU may take over the run.
+    #[serde(default)]
+    pub max_resets: Option<u64>,
+    /// `resets`: count only resets of this cause.
+    #[serde(default)]
+    #[schemars(extend("enum" = ["power_on", "brown_out", "watchdog", "software", "pin"]))]
+    pub cause: Option<String>,
+    /// `reaches`: a function the firmware must reach (`main`, `app_start`).
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// `reaches`: a function the firmware must NOT end the run parked in.
+    #[serde(default)]
+    pub not_parked_in: Option<String>,
+    /// `uart_baud`: the nominal baud the firmware configured (9600, 115200).
+    #[serde(default)]
+    pub baud: Option<u32>,
 }
 
 /// Whether the "spec" handed to us is actually a BOARD design file, detected
@@ -2399,7 +2440,18 @@ pub(crate) const ASSERTION_KINDS: &[&str] = &[
     "fires",
     "increases",
     "decreases",
+    "bus",
+    "resets",
+    "reaches",
+    "uart_baud",
 ];
+
+/// The reset causes a `resets` assertion can name.
+pub(crate) const RESET_CAUSES: &[&str] = &["power_on", "brown_out", "watchdog", "software", "pin"];
+
+/// The `uart_baud` tolerance (a fraction of the nominal rate) used when a spec
+/// gives none: +-3 %, inside what an asynchronous receiver samples through.
+pub const UART_BAUD_TOLERANCE: f64 = 0.03;
 
 impl Assertion {
     /// Is this the boot-coverage kind, under either accepted spelling?
@@ -2780,6 +2832,109 @@ impl Assertion {
                     ),
                 )?;
             }
+            "bus" => {
+                let protocol = self.protocol.as_deref();
+                need(
+                    matches!(protocol, Some("i2c" | "spi")),
+                    format!(
+                        "bus assertion needs a `protocol`: {}",
+                        unknown_token("unknown protocol", protocol.unwrap_or(""), &["i2c", "spi"])
+                    ),
+                )?;
+                if protocol == Some("i2c") {
+                    need(
+                        self.addr.is_some_and(|a| a <= 0x7f),
+                        "bus assertion over i2c needs an `addr`, the 7-bit device address (0 to 127)"
+                            .into(),
+                    )?;
+                    need(
+                        self.bytes.is_none(),
+                        "bus assertion over i2c names a device by `addr`; `bytes` is for an spi frame"
+                            .into(),
+                    )?;
+                } else {
+                    need(
+                        self.bytes.is_some(),
+                        "bus assertion over spi needs `bytes`, the hex a frame must contain".into(),
+                    )?;
+                    need(
+                        self.addr.is_none() && self.acked.is_none(),
+                        "bus assertion over spi has no address to ACK; use `bytes`".into(),
+                    )?;
+                }
+                if let Some(bytes) = &self.bytes {
+                    let hex: String = bytes.chars().filter(|c| !c.is_whitespace()).collect();
+                    need(
+                        !hex.is_empty()
+                            && hex.len().is_multiple_of(2)
+                            && hex.chars().all(|c| c.is_ascii_hexdigit()),
+                        format!(
+                            "bus assertion `bytes` is whole hex bytes (\"48 69\"), got {bytes:?}"
+                        ),
+                    )?;
+                }
+                need(
+                    self.min_transactions.is_none_or(|n| n >= 1),
+                    "bus assertion `min_transactions` is at least 1".into(),
+                )?;
+            }
+            "resets" => {
+                need(
+                    self.max_resets.is_some(),
+                    "resets assertion needs `max_resets`, the most resets the MCU may take".into(),
+                )?;
+                need(
+                    self.cause
+                        .as_deref()
+                        .is_none_or(|c| RESET_CAUSES.contains(&c)),
+                    format!(
+                        "resets assertion: {}",
+                        unknown_token(
+                            "unknown cause",
+                            self.cause.as_deref().unwrap_or(""),
+                            RESET_CAUSES
+                        )
+                    ),
+                )?;
+            }
+            "reaches" => {
+                need(
+                    self.symbol.is_some() != self.not_parked_in.is_some(),
+                    "reaches assertion needs exactly one of `symbol` (a function the firmware \
+                     must reach) or `not_parked_in` (a function it must not end parked in)"
+                        .into(),
+                )?;
+                need(
+                    [&self.symbol, &self.not_parked_in]
+                        .into_iter()
+                        .flatten()
+                        .all(|s| !s.trim().is_empty()),
+                    "reaches assertion names an empty symbol".into(),
+                )?;
+                need(
+                    self.deadline_ms.is_none_or(|d| d > 0.0),
+                    "reaches assertion `deadline_ms` must be a positive time".into(),
+                )?;
+                need(
+                    self.not_parked_in.is_none() || self.deadline_ms.is_none(),
+                    "reaches assertion: `deadline_ms` bounds when `symbol` is reached; \
+                     `not_parked_in` judges where the run ends"
+                        .into(),
+                )?;
+            }
+            "uart_baud" => {
+                need(
+                    self.baud.is_some_and(|b| b > 0),
+                    "uart_baud assertion needs `baud`, the nominal rate (9600, 115200)".into(),
+                )?;
+                need(
+                    self.tolerance
+                        .is_none_or(|t| t.is_finite() && t > 0.0 && t <= 1.0),
+                    "uart_baud assertion `tolerance` is a fraction of `baud` in (0, 1]; \
+                     0.03 is +-3 %"
+                        .into(),
+                )?;
+            }
             "model_coverage" => {
                 // Caught here rather than at run time: an assertion with no
                 // threshold would otherwise sit in a spec looking like a
@@ -2867,6 +3022,51 @@ impl Assertion {
             "toggle" => self.freq_hz.map_or_else(
                 || format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
                 |f| format!("{net} toggles at ~{f} Hz"),
+            ),
+            "bus" => {
+                let bus = self
+                    .bus
+                    .as_deref()
+                    .map(|b| format!(" {b}"))
+                    .unwrap_or_default();
+                let n = self.min_transactions.unwrap_or(1);
+                if self.protocol.as_deref() == Some("spi") {
+                    format!(
+                        "SPI{bus} frame contains {} (>= {n})",
+                        self.bytes.as_deref().unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "I2C{bus} 0x{:02x} {} (>= {n})",
+                        self.addr.unwrap_or(0),
+                        if self.acked.unwrap_or(true) {
+                            "ACKs"
+                        } else {
+                            "NACKs"
+                        }
+                    )
+                }
+            }
+            "resets" => format!(
+                "MCU resets at most {} time(s){}",
+                self.max_resets.unwrap_or(0),
+                self.cause
+                    .as_deref()
+                    .map(|c| format!(" ({c})"))
+                    .unwrap_or_default()
+            ),
+            "reaches" => match (&self.symbol, &self.not_parked_in) {
+                (Some(s), _) => self.deadline_ms.map_or_else(
+                    || format!("firmware reaches {s}"),
+                    |d| format!("firmware reaches {s} within {d} ms"),
+                ),
+                (None, Some(p)) => format!("firmware is not parked in {p}"),
+                (None, None) => "firmware reaches".into(),
+            },
+            "uart_baud" => format!(
+                "UART runs at {} baud +-{}",
+                self.baud.unwrap_or(0),
+                format_percent(self.tolerance.unwrap_or(UART_BAUD_TOLERANCE) * 100.0, 1)
             ),
             "no_faults" => "no stress faults raised".into(),
             "logic_level" => format!(

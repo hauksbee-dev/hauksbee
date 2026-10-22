@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { BoardRequest, WebReport } from '../../types/report'
 import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
+import { TOGGLE_PERIODS as PERIODS } from '../../lib/check-catalog'
 import { DropBoardAgain } from '../UploadFailure'
 import type { LocateFn } from './Findings'
 import { runnableActions, type ActionHost, type RunnableAction } from '../../lib/web-actions'
@@ -22,9 +23,6 @@ export interface Suggestion {
 const MAX_HZ = 100
 /** A rail floor suggestion: the rail's nominal less this fraction. */
 const RAIL_FLOOR = 0.05
-/** Periods a toggle check needs in its run to time an edge-to-edge rate. */
-const PERIODS = 5
-
 const trim = (n: number, digits: number) => String(Number(n.toFixed(digits)))
 
 export function suggestions(r: WebReport): Suggestion[] {

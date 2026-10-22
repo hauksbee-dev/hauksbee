@@ -933,7 +933,9 @@ export type BoardRequest =
   /** Settle an open variant selection with `[[override]] select`. */
   | { type: 'select'; ref: string; select: string }
   /** One exact `[[assert]]` table from the in-place editor, queued as written. */
-  | { type: 'assert'; kind: string; toml: string }
+  | { type: 'assert'; kind: string; toml: string
+    /** The run length (ms) the check needs, raised never lowered, like a `check` request's. */
+    run_ms?: string }
 
 /** A request in the queue; `seq` orders and de-duplicates consumption across
  *  remounts. */

@@ -6,6 +6,7 @@ import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
+import { ScopeAssert } from './components/checks/ScopeAssert'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
 import { InputSourcesPanel } from './components/InputSourcesPanel'
 import { ProbeScopePanel } from './components/ProbeScopePanel'
@@ -695,6 +696,7 @@ export default function SimView({
                   exportRef={scopeRef}
                   height={narrow ? 96 : 150}
                 />
+                <ScopeAssert scope={scopeRef} probes={probes} />
               </div>
             )}
 

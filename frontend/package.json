@@ -11,6 +11,7 @@
     "mock-server": "bun run mock-server.ts",
     "visual-lint": "bun run tests/visual-lint/lint.ts",
     "lint": "eslint .",
+    "test": "bun test",
     "test:unit": "bun test",
     "test:e2e": "bun run tests/e2e/run.ts"
   },

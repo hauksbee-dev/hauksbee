@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { SerialLine } from './sim/sim-export'
+import { AssertThis } from './checks/CheckThis'
+import type { Observation } from '../lib/check-catalog'
 
 // The serial console for the live dock: one terminal per MCU (tabs when
 // several), stamped in SIM time (what a reviewer correlates with the scope),
 // with what the analysis's static co-sim printed one click above the live
 // output, and a send line wired to the MCU's UART. The transcript is owned by
-// SimView, so the export writes exactly what is shown here.
+// SimView, so the export writes exactly what is shown here. A printed line can be
+// picked (click it) and turned into a UART check: "Assert this" holds the
+// firmware to that line, "Assert what I expected" leaves the text to the user.
 
 interface SerialConsoleProps {
   mcus: [string, string][]
@@ -18,7 +22,9 @@ interface SerialConsoleProps {
   readOnly?: boolean
 }
 
-function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
+function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly, scoped }: {
+  /** Several MCUs share this board: a check made here names this one. */
+  scoped?: boolean
   mcu: [string, string]
   lines: SerialLine[]
   analysis?: { seconds: number; uart: string } | null
@@ -32,6 +38,15 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScroll = useRef(true)
   const mine = lines.filter(l => l.mcu === mcuRef)
+  // The line "Assert this" holds the firmware to: the one clicked, else the
+  // first the firmware printed (the catalogue's own starting point).
+  const [picked, setPicked] = useState<number | null>(null)
+  const printed = mine.map((l, i) => ({ l, i })).filter(({ l }) => l.dir === 'rx' && l.text.trim() !== '')
+  const chosen = printed.find(({ i }) => i === picked) ?? printed[0]
+  const observation = (): Observation => ({
+    kind: 'uart', line: chosen?.l.text ?? '', mcu: scoped ? mcuRef : undefined,
+    transcript: printed.map(({ l }) => l.text).join('\n'),
+  })
 
   useEffect(() => {
     if (autoScroll.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -90,7 +105,16 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
         )}
         {mine.length === 0 && <div style={{ color: 'var(--term-ts)' }}>No serial output yet. It appears here as the firmware prints.</div>}
         {mine.map((entry, i) => (
-          <div key={i} className="flex gap-2 mb-0.5">
+          <div
+            key={i} className="flex gap-2 mb-0.5"
+            data-testid="serial-line" data-picked={chosen?.i === i ? 'true' : undefined}
+            {...(entry.dir === 'rx' && entry.text.trim() !== '' ? {
+              role: 'button', tabIndex: 0, title: 'Pick this line to assert it',
+              onClick: () => setPicked(i),
+              onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPicked(i) } },
+            } : {})}
+            style={chosen?.i === i ? { background: 'var(--copper-tint)', cursor: 'pointer' } : entry.dir === 'rx' ? { cursor: 'pointer' } : undefined}
+          >
             <span className="tnum" style={{ color: 'var(--term-ts)', flexShrink: 0 }}>{(entry.t * 1000).toFixed(1)}ms</span>
             <span style={{ color: entry.dir === 'rx' ? 'var(--term-rx)' : 'var(--term-tx)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               {entry.dir === 'tx' && <span style={{ color: 'var(--term-prompt)' }}>{'> '}</span>}
@@ -98,6 +122,10 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
             </span>
           </div>
         ))}
+      </div>
+
+      <div className="px-2 py-1.5 shrink-0 overflow-y-auto empty:hidden" style={{ borderTop: '1px solid var(--rule)', maxHeight: '60%' }}>
+        <AssertThis observation={observation} compact />
       </div>
 
       {readOnly ? (
@@ -166,6 +194,7 @@ export function SerialConsole({ mcus, lines, analysis, onSend, onClear, readOnly
           onSend={onSend}
           onClear={onClear}
           readOnly={readOnly}
+          scoped={mcus.length > 1}
         />
       </div>
     </div>
