@@ -1976,6 +1976,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "An I2C bus needs its pull-up resistors powered, and every chip on it must let go of the lines when it is off. If the pull-ups hang on a rail the board can switch off while other chips keep using the bus, the lines float. If a chip on the bus loses its supply while the pull-ups stay up, its input protection diodes clamp the lines to about 0.6 V, which every other chip reads as a permanent low: the bus is dead until the chip is powered again.".to_string(),
                 "Put the pull-ups on a rail that stays on as long as any chip on the bus does, and keep every chip on the bus powered together, or isolate the switched chip with a bus switch (or an I2C buffer) that opens when its rail is off. If the datasheet says the chip's lines are high-impedance with its supply off, record it in its card.".to_string(),
             ),
+            LintCheck::MissingOpenDrainPullup => (
+                format!("An open-drain output ({parts}) on \"{net}\" has no pull-up. {}", f.message),
+                "An open-drain (or open-collector) output can only pull its line low; it never drives it high. A resistor to a power rail is what brings the line back up when the chip lets go. Without one the line floats, so a fault, alert, interrupt or power-good flag is never seen as released, or reads as random levels, and whatever listens to it misbehaves.".to_string(),
+                format!("Add a pull-up resistor (typically 10k ohm) from \"{net}\" to the supply rail the receiving chip reads, or turn on an internal pull-up on the receiving pin if its datasheet provides one."),
+            ),
             LintCheck::AudioBusWiring => (
                 format!("The digital-audio wiring on {parts} (net \"{net}\") disagrees with the pins' roles. {}", f.message),
                 "An I2S or TDM audio bus has one bit clock and one frame clock, each driven by exactly one part (the master) and listened to by the rest, and data lines that each have a transmitter and a receiver. Two outputs on one line, a line nobody sends on, a clock on the wrong pin, a clock driven by two parts or none, or a codec missing the master clock it needs all leave the bus silent or noisy, and nothing about the board looks wrong to a power or level check.".to_string(),

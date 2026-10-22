@@ -38,6 +38,19 @@ gnd_pin    = "10"         # VSS
 "9"  = "vout_d"
 "10" = "vss"
 
+[models.pin_capability.open_drain]
+basis = "Microchip MCP4728 DS22187E: Table 3-1 Pin Function Table (p.21) types RDY/BSY as OO (Open-Drain Output) and Section 3.5 (p.22) states the RDY/BSY pin is an open-drain N-channel driver"
+[models.pin_capability.open_drain.pads]
+"5" = "RDY/BSY"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22187E.pdf"
+title = "Microchip MCP4728 12-Bit, Quad Digital-to-Analog Converter with EEPROM Memory, DS22187E"
+locator = "Table 3-1 Pin Function Table p.21; Section 3.5 RDY/BSY p.22"
+sha256 = "7e6515c45a02ffe4ad7506f3347cce7714cdd56659ff2fb22b858fc0472f381e"
+
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 6.5
@@ -131,6 +144,19 @@ bits = 10
 "14" = "agnd"
 "15" = "vref"
 "16" = "vdd"
+
+[models.pin_capability.tri_state]
+basis = "Microchip MCP3004/3008 DS21295D (2008): Section 1.0 Electrical Characteristics, CS Rise To Output Disable tDIS 100 ns max (p.4), and Figure 5-1 (p.20) showing DOUT HI-Z outside the conversion; DOUT is pad 12 and CS/SHDN pad 10 (Table 3-1 Pin Function Table, p.15)"
+[models.pin_capability.tri_state.pads]
+"12" = "cs"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21295d.pdf"
+title = "Microchip MCP3004/3008 2.7V 4-Channel/8-Channel 10-Bit A/D Converters with SPI Serial Interface, DS21295D, 2008"
+locator = "Section 1.0 Electrical Characteristics (tDIS) p.4; Table 3-1 Pin Function Table p.15; Figure 5-1 p.20"
+sha256 = "e6c2231de727395ff42b094ed4ffd185db77b3958ac0b805f97330f4ad4b1122"
 
 [models.ratings]
 # DS21295D Section 1.1 Absolute Maximum Ratings: VDD 7.0 V, and +/-25 mA on any

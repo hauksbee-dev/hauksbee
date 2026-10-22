@@ -1827,11 +1827,12 @@ fn check_peripheral_limits(entry: &ModelEntry, p: &mut Problems) {
 /// card's pins use: every listed pad must exist there, must not be a supply or
 /// ground pad, and a channel is named for each; the basis cites the datasheet.
 fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
+    check_listed_pads(entry, p);
     let Some(adc) = &entry.pin_capability.adc else {
         return;
     };
     p.require(entry.kind == ComponentKind::Mcu, || {
-        "[models.pin_capability] belongs on an mcu card".into()
+        "[models.pin_capability.adc] belongs on an mcu card".into()
     });
     p.require(!adc.basis.trim().is_empty(), || {
         "[models.pin_capability.adc] needs a basis citing the datasheet table and page".into()
@@ -1853,6 +1854,74 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
                 "[models.pin_capability.adc] pad '{pad}' is the supply or ground role '{role}', not an ADC input"
             )
         });
+    }
+}
+
+/// The partial capability tables (`tri_state`, `open_drain`, `pull_up`): each
+/// needs a basis, lists only pads of `[models.pins]` that are not supply or
+/// ground pads, and names what the table promises for each (the releasing
+/// input of a tri-state pad, which must be a role of the card itself).
+fn check_listed_pads(entry: &ModelEntry, p: &mut Problems) {
+    let cap = &entry.pin_capability;
+    let tables = [
+        (
+            "tri_state",
+            cap.tri_state.as_ref().map(|t| (t.basis.as_str(), &t.pads)),
+        ),
+        (
+            "open_drain",
+            cap.open_drain.as_ref().map(|t| (t.basis.as_str(), &t.pads)),
+        ),
+        (
+            "pull_up",
+            cap.pull_up.as_ref().map(|t| (t.basis.as_str(), &t.pads)),
+        ),
+    ];
+    for (name, table) in tables {
+        let Some((basis, pads)) = table else { continue };
+        p.require(!basis.trim().is_empty(), || {
+            format!(
+                "[models.pin_capability.{name}] needs a basis citing the datasheet table and page"
+            )
+        });
+        p.require(!pads.is_empty(), || {
+            format!("[models.pin_capability.{name}] lists no pad: leave the table out instead")
+        });
+        p.require(
+            (name == "pull_up") == (entry.kind == ComponentKind::Mcu),
+            || {
+                if name == "pull_up" {
+                    "[models.pin_capability.pull_up] belongs on an mcu card".into()
+                } else {
+                    format!("[models.pin_capability.{name}] belongs on a card that is not an mcu")
+                }
+            },
+        );
+        for (pad, what) in pads {
+            let Some(role) = entry.pins.get(pad) else {
+                p.push(format!(
+                    "[models.pin_capability.{name}] pad '{pad}' is not a pad of [models.pins]"
+                ));
+                continue;
+            };
+            p.require(!what.trim().is_empty(), || {
+                format!("[models.pin_capability.{name}] pad '{pad}' needs its value")
+            });
+            let supply = crate::pin_roles::power_pin(&role.trim().to_ascii_lowercase(), entry.kind);
+            p.require(supply.is_none(), || {
+                format!(
+                    "[models.pin_capability.{name}] pad '{pad}' is the supply or ground role '{role}'"
+                )
+            });
+            if name == "tri_state" {
+                let known = entry.pins.values().any(|r| r == what);
+                p.require(known, || {
+                    format!(
+                        "[models.pin_capability.tri_state] pad '{pad}' is released by role '{what}', which no pad of [models.pins] carries"
+                    )
+                });
+            }
+        }
     }
 }
 
@@ -3735,5 +3804,107 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         }
         let off_pin = toml::from_str(&format!("{LDO_FIXTURE}\n[[resistor_bins]]\npin = \"strap\"\ntolerance = 0.05\n{}", row("ohms = 1.0", "vbat_reg_v = 4.2"))).unwrap();
         rejects(&off_pin, "resistor_bins.pin");
+    }
+
+    /// A card with pad 1 `cs`, pad 2 `do`, pad 3 `gnd` for the partial-table
+    /// rules; the diode fixture stands in for any non-MCU kind.
+    fn listed(kind: ComponentKind) -> ModelEntry {
+        let mut e = if kind == ComponentKind::Mcu {
+            entry(kind, &[])
+        } else {
+            diode()
+        };
+        pins(&mut e, &[("1", "cs"), ("2", "do"), ("3", "gnd")]);
+        e
+    }
+
+    fn table(basis: &str, pads: &[(&str, &str)]) -> (String, BTreeMap<String, String>) {
+        (
+            basis.into(),
+            pads.iter().map(|&(a, b)| (a.into(), b.into())).collect(),
+        )
+    }
+
+    fn tri_state(e: &mut ModelEntry, basis: &str, pads: &[(&str, &str)]) {
+        let (basis, pads) = table(basis, pads);
+        e.pin_capability.tri_state = Some(crate::schema::TriStatePins { basis, pads });
+    }
+
+    fn open_drain(e: &mut ModelEntry, basis: &str, pads: &[(&str, &str)]) {
+        let (basis, pads) = table(basis, pads);
+        e.pin_capability.open_drain = Some(crate::schema::OpenDrainPins { basis, pads });
+    }
+
+    fn pull_up(e: &mut ModelEntry, basis: &str, pads: &[(&str, &str)]) {
+        let (basis, pads) = table(basis, pads);
+        e.pin_capability.pull_up = Some(crate::schema::PullUpPins { basis, pads });
+    }
+
+    /// A tri-state pad names a role of the card as its release, and needs a
+    /// basis, a real pad that is not a supply pad.
+    #[test]
+    fn a_tri_state_table_needs_a_basis_a_real_pad_and_a_releasing_role() {
+        let mut ok = listed(ComponentKind::Diode);
+        tri_state(
+            &mut ok,
+            "DS Table 3 p.7: DO is Hi-Z when /CS is high",
+            &[("2", "cs")],
+        );
+        accepts(&ok);
+        let mut e = listed(ComponentKind::Diode);
+        tri_state(&mut e, " ", &[("2", "cs")]);
+        rejects(&e, "needs a basis");
+        let mut e = listed(ComponentKind::Diode);
+        tri_state(&mut e, "p.7", &[]);
+        rejects(&e, "lists no pad");
+        let mut e = listed(ComponentKind::Diode);
+        tri_state(&mut e, "p.7", &[("9", "cs")]);
+        rejects(&e, "not a pad of [models.pins]");
+        let mut e = listed(ComponentKind::Diode);
+        tri_state(&mut e, "p.7", &[("2", "oe")]);
+        rejects(&e, "which no pad of [models.pins] carries");
+        let mut e = listed(ComponentKind::Diode);
+        tri_state(&mut e, "p.7", &[("3", "cs")]);
+        rejects(&e, "supply or ground role");
+        let mut e = listed(ComponentKind::Mcu);
+        tri_state(&mut e, "p.7", &[("2", "cs")]);
+        rejects(&e, "belongs on a card that is not an mcu");
+    }
+
+    #[test]
+    fn an_open_drain_table_is_for_non_mcu_cards_with_a_basis() {
+        let mut ok = listed(ComponentKind::Diode);
+        open_drain(
+            &mut ok,
+            "DS Table 5-1 p.3: ALERT is open-drain",
+            &[("2", "ALERT")],
+        );
+        accepts(&ok);
+        let mut e = listed(ComponentKind::Diode);
+        open_drain(&mut e, "", &[("2", "ALERT")]);
+        rejects(&e, "needs a basis");
+        let mut e = listed(ComponentKind::Diode);
+        open_drain(&mut e, "p.3", &[("2", " ")]);
+        rejects(&e, "needs its value");
+        let mut e = listed(ComponentKind::Mcu);
+        open_drain(&mut e, "p.3", &[("2", "ALERT")]);
+        rejects(&e, "belongs on a card that is not an mcu");
+    }
+
+    #[test]
+    fn a_pull_up_table_is_for_mcu_cards_only() {
+        let mut ok = listed(ComponentKind::Mcu);
+        pull_up(
+            &mut ok,
+            "DS sec 14.2 p.85: PORTxn=1 with DDxn=0",
+            &[("2", "PORTD0")],
+        );
+        accepts(&ok);
+        let mut e = listed(ComponentKind::Diode);
+        pull_up(&mut e, "p.85", &[("2", "PORTD0")]);
+        rejects(&e, "belongs on an mcu card");
+        let mut e = listed(ComponentKind::Mcu);
+        pull_up(&mut e, "p.85", &[("3", "PORTD0")]);
+        rejects(&e, "supply or ground role");
     }
 }
