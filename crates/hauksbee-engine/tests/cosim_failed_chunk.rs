@@ -41,6 +41,7 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         activity_summary: Vec::new(),
         timing_coverage: sched.timing_coverage(),
         execution: sched.execution_evidence().to_vec(),
+        bench: None,
         timing_refusals: sched.timing_refusals().to_vec(),
         analog_valid: sched.analog_valid(),
         failed_windows: sched

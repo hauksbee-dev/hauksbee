@@ -29,6 +29,8 @@ mod binder_gpio_promotion;
 mod binder_pin_map_merge;
 #[path = "bitbang_spi_cosim.rs"]
 mod bitbang_spi_cosim;
+#[path = "bench_observability.rs"]
+mod bench_observability;
 #[path = "bom_identity.rs"]
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]

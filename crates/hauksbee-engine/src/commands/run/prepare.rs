@@ -84,6 +84,23 @@ fn validate_flag_consistency(cfg: &RunConfig, any_report_flag: bool) -> anyhow::
              add --probe <NET> (and --headless)"
         );
     }
+    if let Some(vcd) = cfg.vcd.as_deref() {
+        let inputs = [
+            ("the board file", Some(cfg.board.as_path())),
+            ("--bom", cfg.bom.as_deref()),
+            ("--placement", cfg.placement.as_deref()),
+            ("--firmware", cfg.firmware.as_deref()),
+            ("--asbuilt", cfg.asbuilt.as_deref()),
+        ];
+        for (what, input) in inputs {
+            if input.is_some_and(|input| crate::reports::ci_artifacts::paths_alias(input, vcd)) {
+                anyhow::bail!(
+                    "--vcd output must not overwrite {what} '{}'; choose a different path",
+                    vcd.display()
+                );
+            }
+        }
+    }
     if cfg.ac_csv.is_some() && cfg.ac.is_none() {
         anyhow::bail!(
             "--ac-csv names an output file, but no --ac sweep was requested; \

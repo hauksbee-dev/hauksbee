@@ -42,6 +42,16 @@ const SURFACE_FLAGS: &[SurfaceFlag] = &[
         ],
     },
     SurfaceFlag {
+        flag: "--vcd",
+        what: "the VCD waveform file",
+        used_by: &[SelectedSurface::Headless, SelectedSurface::CheckThenCosim],
+    },
+    SurfaceFlag {
+        flag: "--bus-log",
+        what: "the bus log",
+        used_by: &[SelectedSurface::Headless, SelectedSurface::CheckThenCosim],
+    },
+    SurfaceFlag {
         flag: "--firmware",
         what: "the firmware image",
         used_by: &[
