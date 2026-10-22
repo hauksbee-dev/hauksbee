@@ -872,8 +872,13 @@ abs_max_basis = "TI SN74LVC1G07 SCES296AG 5.1 Absolute Maximum Ratings, VI input
 # Behaviour source: TI SN74LVC1G07 SCES296AG 3 Description (the Boolean function of the gate).
 inputs = ["a"]
 outputs = ["y"]
+# Open drain: Y = A, so a low input pulls Y low and a high input leaves Y released to the external
+# pull-up (3 Description). Written as a constant low output that is enabled while A is low.
 [models.logic.comb]
-y = "a"
+y = "0"
+
+[models.logic.tristate]
+y = { enable = "a", active = "low" }
 
 [models.coverage]
 implements = ["buffer", "open_drain_output", "wire_and", "logic_levels"]
@@ -1002,8 +1007,13 @@ abs_max_basis = "TI SN74LVC1G07 SCES296AG 5.1 Absolute Maximum Ratings, VI input
 # Behaviour source: TI SN74LVC1G07 SCES296AG 3 Description (the Boolean function of the gate).
 inputs = ["a"]
 outputs = ["y"]
+# Open drain: Y = A, so a low input pulls Y low and a high input leaves Y released to the external
+# pull-up (3 Description). Written as a constant low output that is enabled while A is low.
 [models.logic.comb]
-y = "a"
+y = "0"
+
+[models.logic.tristate]
+y = { enable = "a", active = "low" }
 
 [models.coverage]
 implements = ["buffer", "open_drain_output", "wire_and", "logic_levels"]

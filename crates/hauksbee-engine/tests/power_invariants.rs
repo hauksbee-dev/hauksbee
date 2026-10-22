@@ -1230,6 +1230,20 @@ const STATIC_INERT: &[&str] = &[
     "txb0102",
     "txb0104",
     "txb0108",
+    "txs0102_dct",
+    "txs0102_dcu",
+    "txs0102_dtt",
+    "txs0102_dqe",
+    "txs0102_dqm",
+    "txs0102_yzp",
+    "txs0104e_d",
+    "txs0104e_pw",
+    "txs0104e_rgy",
+    "txs0104e_bqa",
+    "txs0104e_rut",
+    "txs0104e_yzt",
+    "txs0104e_zxu",
+    "txs0104e_nmn",
 ];
 
 /// Every digital card with outputs: for each input pattern that drives an
@@ -1312,10 +1326,16 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
 /// Returns the rig and the output nets.
 fn open_collector_rig(card: &Card, value: &str, on: bool, pull_up: bool) -> (Rig, Vec<String>) {
     let (inputs, outputs) = (card.logic("inputs"), card.logic("outputs"));
+    // Every tristate entry names the input level that enables (sinks) its output.
     let sink_when_high = card
         .table
         .get("logic")
-        .is_some_and(|l| l.get("tristate").is_some());
+        .and_then(|l| l.get("tristate"))
+        .and_then(toml::Value::as_table)
+        .is_none_or(|t| {
+            t.values()
+                .all(|e| e.get("active").and_then(toml::Value::as_str) != Some("low"))
+        });
     let mut rig = Rig::default();
     rig.net("GND");
     let mut pins = Vec::new();
@@ -1323,14 +1343,15 @@ fn open_collector_rig(card: &Card, value: &str, on: bool, pull_up: bool) -> (Rig
     for (pad, role) in card.pins() {
         let net = match role.as_str() {
             "gnd" | "vss" => "E".to_string(),
+            // A card with a supply pin (an open-drain buffer) runs from 3.3 V.
+            "vcc" | "vdd" => rail(3.3),
             r if outputs.iter().any(|o| o == r) => {
                 outs.push(format!("OUT_{r}"));
                 format!("OUT_{r}")
             }
             r if inputs.iter().any(|i| i == r) => {
-                // An array whose outputs are tri-stated by their inputs (ULN2003)
-                // sinks on a high input; a buffer whose output follows its input
-                // (74LVC1G07) sinks while its input is low.
+                // ULN2003 outputs are enabled (sink) by a high input; the
+                // 74LVC1G07 output is enabled while its input is low.
                 if on == sink_when_high {
                     rail(3.3)
                 } else {
@@ -1394,6 +1415,8 @@ fn open_collector_outputs_only_sink_into_the_ground_pin() {
     for (i, card) in cards.iter().enumerate() {
         let value = format!("PROBE{i}");
         let id = &card.id;
+        // The supply pin's own static draw returns through the ground pin too.
+        let iq = card.param("supply_static_ua").map_or(0.0, |ua| ua * 1e-6);
         let run =
             |on, pull_up, strip| open_collector_measure(card, &lib, &value, (on, pull_up, strip));
         let (Some((sunk, ie, _)), Some((_, off_ie, off_top)), Some((_, pd_ie, pd_top))) = (
@@ -1410,12 +1433,12 @@ fn open_collector_outputs_only_sink_into_the_ground_pin() {
                 "{id}: outputs sink {sunk:.4e} A, ground pin carries {ie:.4e} A"
             ));
         }
-        if off_ie.abs() > 1e-6 || off_top < 4.9 {
+        if off_ie.abs() > 1e-6 + iq || off_top < 4.9 {
             failures.push(format!(
                 "{id}: inputs low: ground pin {off_ie:.2e} A, outputs {off_top} V"
             ));
         }
-        if pd_top > 1e-3 || pd_ie.abs() > 1e-6 {
+        if pd_top > 1e-3 || pd_ie.abs() > 1e-6 + iq {
             failures.push(format!(
                 "{id}: on a pull-down the outputs read {pd_top} V and the ground pin carries \
                  {pd_ie:.2e} A: an open collector cannot source"
