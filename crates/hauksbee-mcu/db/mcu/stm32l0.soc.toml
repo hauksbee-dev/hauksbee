@@ -54,11 +54,13 @@ firmware recovery path that depends on it is untested on this run.\
 """
 
 timing_limitation = """\
-The STM32L0 core and SysTick run at 2 MHz in this co-simulator (the 2.097 MHz \
-MSI reset default rounded to whole MHz, 4.6% slow) and its TIMx blocks at \
-Renode's fixed 10 MHz; no clock tree follows the firmware's clock setup, so \
-firmware that clocks itself at 32 MHz sees SysTick-timed delays run 16x slow \
-on this run.\
+The STM32L0 core and SysTick are declared at 2 MHz (the 2.097 MHz MSI reset \
+default rounded to whole MHz) until the first slice, after which the backend \
+decodes RCC_CR/ICSCR/CFGR and retunes the SysTick and every TIMx block to the \
+clock tree the firmware set (MSI range, HSI16, HSE, PLL) exactly. The CPU's \
+instructions-per-second knob only takes whole MHz, so instruction-timed delay \
+loops (not SysTick or timer waits) run up to 4.6% slow at the 2.097 and \
+4.194 MHz MSI ranges. The HSE crystal value is taken as 8 MHz.\
 """
 
 [[soc.ports]]
@@ -109,3 +111,126 @@ controllers = []
 
 [soc.spi]
 controllers = []
+
+# ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
+# RM0377 Rev 10 s7.3: RCC_CR @ +0x00 (pp.181-183), RCC_ICSCR @ +0x04 (p.184),
+# RCC_CFGR @ +0x0C (pp.185-186).
+#   MSIRANGE (ICSCR 15:13): 0 65.536 kHz, 1 131.072 kHz, 2 262.144 kHz,
+#     3 524.288 kHz, 4 1.048 MHz, 5 2.097 MHz (reset), 6 4.194 MHz; 7 reserved.
+#   SWS/SW (CFGR 3:2 / 1:0): 00 MSI, 01 HSI16, 10 HSE, 11 PLL.
+#   HSI16DIVEN (CR bit 3): HSI16 divided by 4 (p.182).
+#   PLLSRC (CFGR bit 16): 0 HSI16, 1 HSE. PLLMUL (21:18): x3 x4 x6 x8 x12 x16
+#     x24 x32 x48 (p.186); PLLDIV (23:22): 01 /2, 10 /3, 11 /4, 00 not allowed
+#     (p.185).
+#   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512.
+#   PPRE1 (10:8), PPRE2 (13:11): 0xx /1, 100 /2 ... 111 /16.
+# Timer clock = the APB clock if its prescaler is 1, else twice it (p.172).
+# The PLL source taken from HSI16 is not divided by HSI16DIVEN here: the manual
+# text does not say (the clock-tree figure would). The HSE value is the Nucleo
+# 8 MHz; a board with another crystal needs that value passed in.
+[[soc.decode]]
+kind = "clock"
+name = "rcc"
+registers = { cr = 0x40021000, icscr = 0x40021004, cfgr = 0x4002100C }
+vars = [
+    ["msi", "pick(bits(icscr, 15, 13), 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304)"],
+    ["hsi", "16000000"],
+    ["hse", "8000000"],
+    ["pll_in", "if(bit(cfgr, 16), hse, hsi)"],
+    ["pll_out", "pll_in * pick(bits(cfgr, 21, 18), 3, 4, 6, 8, 12, 16, 24, 32, 48) / pick(bits(cfgr, 23, 22) - 1, 2, 3, 4)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2), msi, if(bit(cr, 3), hsi / 4, hsi), hse, pll_out)"],
+    ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
+    ["pclk1_div", "pick(bits(cfgr, 10, 8), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk1", "hclk / pclk1_div"],
+    ["pclk2_div", "pick(bits(cfgr, 13, 11), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk2", "hclk / pclk2_div"],
+    ["tim_apb1", "if(pclk1_div == 1, pclk1, pclk1 * 2)"],
+    ["tim_apb2", "if(pclk2_div == 1, pclk2, pclk2 * 2)"],
+    ["core_hz", "hclk"],
+]
+
+# Retune targets. Cortex-M0+: about one instruction per cycle; SysTick counts
+# HCLK here (the descriptor leaves CLKSOURCE to the firmware). TIM2, 3, 6, 7 are
+# on APB1, TIM21 and TIM22 on APB2 (RM0377 memory map).
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.cpu PerformanceInMips {mhz}"
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.nvic Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer2 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer3 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer6 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer7 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer21 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer22 Frequency {hz}"
+
+# ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
+# RCC_CR (RM0377 s7.3.1, pp.181-183): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
+# PLLRDY bit 25. HSE startup 2 ms (DS10685 p.81, tSU(HSE)); PLL lock 160 us
+# maximum (DS10685 p.86, tLOCK). The PLL waits for HSE only while CFGR.PLLSRC
+# selects it.
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "hse"
+enable_register = 0x00
+enable_mask = 0x10000
+ready_register = 0x00
+ready_mask = 0x20000
+requires_external = true
+startup_us = 2000.0
+
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "pll"
+enable_register = 0x00
+enable_mask = 0x1000000
+ready_register = 0x00
+ready_mask = 0x2000000
+startup_us = 160.0
+needs = [{ entry = "hse", when = { register = 0x0C, mask = 0x10000, value = 0x10000 } }]
+
+# Timer fixes (see `periph_snapshot::TimerFix`): UIF latches regardless of
+# TIMx_DIER.UIE and the counter wraps after ARR + 1 ticks, on silicon.
+[[soc.timer_fixes]]
+peripheral = "timer2"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer3"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer6"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer7"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer21"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer22"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
