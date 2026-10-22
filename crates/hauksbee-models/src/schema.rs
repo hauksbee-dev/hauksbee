@@ -442,6 +442,11 @@ pub struct ResetSpec {
     /// Reset-pin level (V) above which the pin releases reset (VIH minimum).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_vih_v: Option<f64>,
+    /// Time (s) the part stays in reset after the supply has risen past the
+    /// release threshold (a power-on reset temporization, typical). Applies to
+    /// the supply path only; a reset pin releases when it crosses `pin_vih_v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_delay_s: Option<f64>,
     /// The datasheet tables and pages the figures came from.
     pub basis: String,
 }

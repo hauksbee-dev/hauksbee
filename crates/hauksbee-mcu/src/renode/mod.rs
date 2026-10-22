@@ -2164,6 +2164,10 @@ impl Mcu for RenodeBackend {
         chans
     }
 
+    fn read_register(&mut self, addr: u32) -> Option<u32> {
+        self.read_word_abs(addr)
+    }
+
     fn supports_reset(&self) -> bool {
         self.reboots.can_reset()
     }

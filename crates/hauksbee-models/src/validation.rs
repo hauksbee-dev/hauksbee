@@ -844,7 +844,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     if let Some(r) = &entry.reset {
         let finite = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
         p.require(
-            finite(r.assert_below_v) && finite(r.release_above_v) && finite(r.pin_vil_v) && finite(r.pin_vih_v),
+            finite(r.assert_below_v) && finite(r.release_above_v) && finite(r.pin_vil_v) && finite(r.pin_vih_v) && finite(r.release_delay_s),
             || "[models.reset] thresholds must be finite and non-negative".to_string(),
         );
         p.require(
@@ -855,7 +855,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         p.require(!r.basis.trim().is_empty(), || {
             "[models.reset] needs a basis citing the datasheet tables and pages".to_string()
         });
-        if r.assert_below_v.is_some() || r.release_above_v.is_some() {
+        if r.assert_below_v.is_some() || r.release_above_v.is_some() || r.release_delay_s.is_some() {
             let ok = r
                 .supply_pin
                 .as_ref()

@@ -1754,9 +1754,10 @@ basis = "STM32F103x8/xB DS5319 Rev 20 Table 37 section 5.3.13 PDF p.64: CMOS por
 supply_pin = "vdd"
 assert_below_v = 1.88
 release_above_v = 1.92
+release_delay_s = 0.0025   # TRSTTEMPO typ 2.5 ms (min 1.0, max 4.5), Table 11 PDF p.39, specified by design
 pin_vil_v = 0.8
 pin_vih_v = 2.0
-basis = "STM32F103x8/xB DS5319 Rev 20: VPOR/PDR Table 11 section 5.3.3 PDF p.39 (typ 1.88 V falling, 1.92 V rising); NRST VIL/VIH Table 39 section 5.3.14 PDF p.66"
+basis = "STM32F103x8/xB DS5319 Rev 20: VPOR/PDR and TRSTTEMPO Table 11 section 5.3.3 PDF p.39 (typ 1.88 V falling, 1.92 V rising, 2.5 ms temporization); NRST VIL/VIH Table 39 section 5.3.14 PDF p.66"
 
 [models.coverage]
 implements = ["cortex_m3_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "uart_tx", "virtual_clock_and_systick", "i2c1_controller_bridge", "spi1_controller_bridge"]
