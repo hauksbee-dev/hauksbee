@@ -23,10 +23,52 @@ use hauksbee_models::{ComponentKind, Doubt, ModelLibrary};
 /// What a finding of `check` rests on, when that is one field group of the cards
 /// of the parts it names.
 const fn basis_of(check: LintCheck) -> Option<Basis> {
+    // Exhaustive on purpose: a new check must say whether its verdict rests on
+    // a drafted card, or a low-confidence card would raise gating findings of it.
     match check {
         LintCheck::OperatingEnvelope | LintCheck::BackPower => Some(Basis::Envelope),
         LintCheck::PowerPinWiring | LintCheck::SupplyGroundSwapped => Some(Basis::Pins),
-        _ => None,
+        // The card's thresholds, roles, strap levels or bus behaviour decide these
+        // verdicts: a card the drafter was unsure of must not fail a run alone.
+        LintCheck::StrapPin
+        | LintCheck::McuResourceConflict
+        | LintCheck::DeviceDecode
+        | LintCheck::I2cBusLoading
+        | LintCheck::FloatingInput
+        | LintCheck::DcOverstress
+        | LintCheck::RegulatorHeldOff
+        | LintCheck::ControlHeldOff
+        | LintCheck::PullupIneffective
+        | LintCheck::AudioBusWiring
+        | LintCheck::PowerDomainBackfeed
+        | LintCheck::PowerDomainBusLockup => Some(Basis::Card),
+        // Read from the schematic, the layout or the netlist alone.
+        LintCheck::MissingI2cPullup
+        | LintCheck::MissingSdPullup
+        | LintCheck::FloatingControlPin
+        | LintCheck::LedCurrentSanity
+        | LintCheck::OutputContention
+        | LintCheck::DesignatorFootprintMismatch
+        | LintCheck::ValuePackageSanity
+        | LintCheck::PlaceholderValue
+        | LintCheck::UncheckedMcu
+        | LintCheck::PinFunction
+        | LintCheck::UnroutedPad
+        | LintCheck::PcbSchematicMismatch
+        | LintCheck::RailConflict
+        | LintCheck::MissingDecoupling
+        | LintCheck::GroundIsland
+        | LintCheck::UnwiredConnector
+        | LintCheck::LedReversed
+        | LintCheck::SiblingMismatch
+        | LintCheck::UnlimitedBaseDrive
+        | LintCheck::CapNoDcPath
+        | LintCheck::FloatingGate
+        | LintCheck::GateUnderdrive
+        | LintCheck::DiodeReversed
+        | LintCheck::PolarisedCapReversed
+        | LintCheck::RailUnpowered
+        | LintCheck::DatasheetMismatch => None,
     }
 }
 
@@ -274,6 +316,103 @@ tier = "{tier}"
             found[0].message
         );
         assert!(found[0].severity != Severity::Low);
+    }
+
+    /// A drafted MCU card with one active-low boot strap (VIL 0.9 V, VIH 2.0 V)
+    /// and `source_extra` appended to its source table.
+    fn strap_card(tier: &str, source_extra: &str) -> String {
+        format!(
+            r#"
+[[models]]
+id = "dr_strap"
+kind = "mcu"
+description = "drafted strap fixture"
+[models.match]
+value_re = "^DR_STRAP$"
+[models.pins]
+"1" = "vdd"
+"2" = "boot0"
+"3" = "gnd"
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+vil = [0.0, 0.9]
+vih = [0.0, 2.0]
+[models.source]
+tier = "{tier}"
+{source_extra}
+"#
+        )
+    }
+
+    /// A 10k pull-up to 3V3 on a strap that must read low: a real board fault
+    /// as judged by the card, whatever the card's trust.
+    fn strap_findings(lib: &ModelLibrary) -> Vec<LintFinding> {
+        let b = board(
+            &[(1, "GND"), (2, "+3V3"), (3, "/BOOT0")],
+            vec![
+                part("U1", "DR_STRAP", &[("1", 2), ("2", 3), ("3", 1)]),
+                part("R1", "10k", &[("1", 3), ("2", 2)]),
+            ],
+        );
+        let mut report = crate::checks::straps::strap_lint(&b, lib);
+        cap_doubted_cards(&mut report, &b, lib);
+        report.findings
+    }
+
+    const LOW_CONFIDENCE: &str = "[[models.source.doubt]]\narea = \"card\"\nreason = \"the drafter reported low confidence: strap thresholds guessed\"\n";
+
+    /// A drafted card the drafter itself rated low confidence must not fail a
+    /// run: its strap finding is a non-gating note that links the card.
+    #[test]
+    fn a_low_confidence_drafted_card_raises_no_gating_strap_finding() {
+        let found = strap_findings(&library(
+            "lowconf",
+            &strap_card("datasheet-derived", LOW_CONFIDENCE),
+            true,
+        ));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Low, "{}", found[0].message);
+        let m = &found[0].message;
+        assert!(m.starts_with("Check this card"), "{m}");
+        assert!(m.contains("drafted, low confidence, verify"), "{m}");
+        assert!(m.contains("not a board fault"), "{m}");
+        assert!(hauksbee_extract::model_card_file_in(m).is_some(), "{m}");
+        // The same card once reviewed (no doubt) keeps the gating finding.
+        let reviewed = strap_findings(&library(
+            "reviewed",
+            &strap_card("datasheet-derived", ""),
+            true,
+        ));
+        assert_eq!(reviewed.len(), 1, "{reviewed:#?}");
+        assert!(reviewed[0].severity != Severity::Low, "{reviewed:#?}");
+        assert!(!reviewed[0].message.starts_with("Check this card"));
+        // A curated card is never capped, whatever rows it carries.
+        let curated = strap_findings(&library(
+            "curated",
+            &strap_card("curated-library", LOW_CONFIDENCE),
+            true,
+        ));
+        assert!(curated[0].severity != Severity::Low, "{curated:#?}");
+    }
+
+    /// A drafted card whose VIH is above its own supply is stamped at lint
+    /// time (a card drafted before the validator refused it), so the divider
+    /// verdict it feeds is a note too.
+    #[test]
+    fn a_vih_above_its_supply_makes_a_legacy_drafted_card_doubted() {
+        let text = strap_card("datasheet-derived", "").replace(
+            "[models.source]",
+            "[models.params]\nvih = 5.0\n[[models.envelope]]\nkind = \"supply_range\"\npin = \"vdd\"\nmin_v = 1.65\nmax_v = 3.6\nbasis = \"ROC\"\n[models.source]",
+        );
+        let found = strap_findings(&library("vih", &text, true));
+        assert!(!found.is_empty());
+        assert!(
+            found.iter().all(|f| f.severity == Severity::Low),
+            "{found:#?}"
+        );
     }
 
     /// A QFN-8-1EP card (pads 1..=8 and the exposed pad 9) bound to a footprint

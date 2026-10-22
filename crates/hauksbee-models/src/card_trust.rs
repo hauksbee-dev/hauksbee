@@ -279,7 +279,29 @@ fn sense_input(entry: &ModelEntry) -> Vec<Problem> {
 pub fn entry_problems(entry: &ModelEntry) -> Vec<Problem> {
     let mut out = split_supply(entry);
     out.extend(sense_input(entry));
+    out.extend(vih_over_supply(entry));
     out
+}
+
+/// Class 4: an input-high threshold above the supply it is read at. The figure
+/// is the wrong column, another supply's row, or a ratio (0.7 VDD) written as
+/// volts at a larger rail, so every divider and pull-up verdict built on it is
+/// wrong. The drafting validator refuses it ([`crate::plausibility`]); a card
+/// that got past it is stamped here.
+fn vih_over_supply(entry: &ModelEntry) -> Vec<Problem> {
+    crate::plausibility::vih_above_supply(entry)
+        .into_iter()
+        .map(|why| {
+            Problem::new(
+                DoubtArea::Card,
+                format!(
+                    "{why}: an input-high threshold cannot exceed its own supply. Re-read the \
+                     VIH row at the supply it is stated for (a ratio such as 0.7 VDD goes in \
+                     `levels.vih` as [vcc, volts] points, not as volts at the top rail)"
+                ),
+            )
+        })
+        .collect()
 }
 
 // ── Class 1: a power or return role on a pad the board wires as a signal ──────
@@ -416,6 +438,11 @@ pub enum Basis {
     Envelope,
     /// What a pad is for (power wiring: open, swapped, grounded supply).
     Pins,
+    /// Anything else the card says about the part (strap thresholds, pin
+    /// roles, bus and control behaviour, pull-up needs). Only the drafter's own
+    /// low-confidence doubt and a pad-map doubt cover it: a wrong pad map taints
+    /// every role-based verdict, a wrong ratings row does not.
+    Card,
 }
 
 /// Whether `doubt` covers findings of the `basis` family.
@@ -425,7 +452,7 @@ pub const fn covers(doubt: DoubtArea, basis: Basis) -> bool {
         (doubt, basis),
         (DoubtArea::Card, _)
             | (DoubtArea::Envelope, Basis::Envelope)
-            | (DoubtArea::Pins, Basis::Pins | Basis::Envelope)
+            | (DoubtArea::Pins, Basis::Pins | Basis::Envelope | Basis::Card)
     )
 }
 
@@ -443,6 +470,16 @@ pub const CHECK_CARD_MARKER: &str = "Check this card";
 /// drafted card `card`: reworded as a note to check the card, not a board fault.
 #[must_use]
 pub fn doubt_note(part: &str, card: &str, doubt: &Doubt, message: &str) -> String {
+    if doubt.area == DoubtArea::Card {
+        return format!(
+            "{CHECK_CARD_MARKER}: card '{card}' for {part} is drafted, low confidence, verify. \
+             It was drafted from the datasheet, not reviewed, and the drafter was not sure of it \
+             ({}). Judged by that card the board shows: {message} This is a note about the \
+             card, not a board fault, so it does not fail the run; check the card against the \
+             datasheet, then delete its [[models.source.doubt]] rows.",
+            doubt.reason.trim_end_matches('.')
+        );
+    }
     format!(
         "{CHECK_CARD_MARKER}: card '{card}' for {part} is drafted from the datasheet, not \
          reviewed, and the drafting check could not confirm it ({}). Judged by that card the \

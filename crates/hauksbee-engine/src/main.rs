@@ -42,7 +42,9 @@ Exit codes (hauksbee run / check):\n  \
 0  clean, or a report-only run without --strict\n  \
 1  input error: a board or other input could not be read\n  \
 2  findings under --strict, or a usage error\n  \
-3  invalid for analysis: the result cannot be trusted"
+3  invalid for analysis: the result cannot be trusted\n\n\
+hauksbee models extract --unmodelled also exits 4 for PARTIAL SUCCESS (some cards\n\
+saved and kept, some parts failed); see `hauksbee models extract --help`."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -294,12 +296,8 @@ enum ModelsCommand {
     /// unmodelled part on a board). Asks first: this sends the
     /// datasheet, and whatever the agent reads, to an LLM backend.
     ///
-    /// Exit status of --unmodelled: 0 when every part attempted was saved or
-    /// listed for hand supply (parts that already have a card, or that
-    /// failed before with these same inputs and were skipped, do not count
-    /// against it); 4 when some parts were saved and some failed; 1 when parts
-    /// failed and none was saved, or on a hard error (unreadable board, bad
-    /// settings, no consent).
+    /// The exit status of --unmodelled is listed at the end of this help
+    /// (4 is partial success: some cards saved and kept, some parts failed).
     Extract(Box<ModelsExtractArgs>),
     /// Scaffold a model entry for one board component, pre-seeded only from
     /// the board's own identity (reference and value). It never invents
@@ -481,6 +479,7 @@ struct ModelsCoverageArgs {
     clippy::struct_excessive_bools,
     reason = "independent command-line switches"
 )]
+#[command(after_help = hauksbee_models::extract_messages::EXIT_STATUS_HELP)]
 struct ModelsExtractArgs {
     /// The datasheet PDF to read.
     #[arg(long, required_unless_present = "unmodelled")]
@@ -1727,10 +1726,21 @@ fn main() -> anyhow::Result<()> {
             .map_or_else(hauksbee_engine::commands::run::error_exit_code, |()| 0),
     );
     if let Err(e) = &result {
+        // A batch that saved some cards and failed others is partial success:
+        // the cards are kept, so it is not worded as an error.
+        let partial = e
+            .downcast_ref::<hauksbee_engine::commands::models::BatchFailed>()
+            .is_some_and(hauksbee_engine::commands::models::BatchFailed::is_partial);
         if json {
             // serde_json escapes the message so the object is always well-formed.
-            let obj = serde_json::json!({ "ok": false, "error": e.to_string() });
+            let obj = if partial {
+                serde_json::json!({ "ok": false, "partial_success": true, "exit_code": hauksbee_engine::commands::models::EXIT_BATCH_PARTIAL, "error": e.to_string() })
+            } else {
+                serde_json::json!({ "ok": false, "error": e.to_string() })
+            };
             println!("{obj}");
+        } else if partial {
+            eprintln!("partial success: {e}");
         } else {
             eprintln!("error: {e}");
         }

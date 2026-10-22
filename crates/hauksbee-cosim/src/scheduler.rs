@@ -5522,6 +5522,7 @@ impl Scheduler {
     /// before reporting; [`Scheduler::execution_evidence`] returns the result.
     pub fn refresh_execution_evidence(&mut self) {
         let volts = &self.node_volts;
+        let symbols = self.firmware_symbols.as_ref();
         self.execution = self
             .mcus
             .iter_mut()
@@ -5537,13 +5538,14 @@ impl Scheduler {
                     supply_v: m.rails.supply_v(),
                     clock: m.binding.clock.clone(),
                 };
-                crate::execution::ExecutionEvidence::new(
+                crate::execution::ExecutionEvidence::with_symbols(
                     &m.binding.reference,
                     &m.binding.backend,
                     m.core.execution_probe(),
                     m.uart_bytes,
                     &m.pin_toggles,
                     board,
+                    symbols,
                 )
             })
             .collect();

@@ -960,6 +960,35 @@ pub enum JsonNoteKind {
     BootControlNet,
 }
 
+/// Most UART text `cosim.uart_output` carries; a long, chatty run would
+/// otherwise swell the report.
+pub const COSIM_UART_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+
+// serde's `skip_serializing_if` hands the field by reference, so the signature is fixed.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
+impl CosimJson {
+    /// Store the firmware's UART bytes as `uart_output`, cut at
+    /// [`COSIM_UART_OUTPUT_MAX_BYTES`] on a character boundary.
+    pub fn set_uart_output(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        if text.len() <= COSIM_UART_OUTPUT_MAX_BYTES {
+            self.uart_output = text.into_owned();
+            self.uart_output_dropped_bytes = 0;
+            return;
+        }
+        let mut end = COSIM_UART_OUTPUT_MAX_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.uart_output = text[..end].to_string();
+        self.uart_output_dropped_bytes = (text.len() - end) as u64;
+    }
+}
+
 /// Machine-readable co-sim summary (today only emitted as CLI text).
 ///
 /// Populated from the headless run + the MCU binding. `substituted` is true when
@@ -985,6 +1014,16 @@ pub struct CosimJson {
     /// Total net toggles seen during the run. `0` => stalled/quiet.
     pub total_toggles: u64,
     pub uart_seen: bool,
+    /// The text the firmware sent over UART, lossily decoded as UTF-8 and
+    /// capped at [`COSIM_UART_OUTPUT_MAX_BYTES`]. Omitted when the firmware sent
+    /// nothing; `uart_seen` says whether it did.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uart_output: String,
+    /// How many bytes of UART text `uart_output` leaves out because it was cut
+    /// at the cap; `0` (and omitted) when it is complete. The full text prints
+    /// in the default (non-JSON) run.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub uart_output_dropped_bytes: u64,
     /// Numerical qualification for this exact run. Solver tolerances and
     /// methods are inputs, the residual is measured when available, and failed
     /// windows are explicitly invalid rather than assigned invented precision.

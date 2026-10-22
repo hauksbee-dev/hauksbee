@@ -136,6 +136,8 @@ pub fn build_cosim_json(
         realtime_factor: 0.0,
         total_toggles,
         uart_seen,
+        uart_output: String::new(),
+        uart_output_dropped_bytes: 0,
         error_budget: sched.error_budget()?,
         activity_summary,
         timing_coverage: sched.timing_coverage(),
@@ -391,6 +393,9 @@ pub struct HeadlessRun {
     /// Sim seconds actually simulated. Falls short of the requested window
     /// when a `--strict` analog abort ended the run early.
     pub sim_s: f64,
+    /// Every UART byte the firmware sent, in order (one MCU after another on a
+    /// multi-MCU board). `--json` carries it as `cosim.uart_output`.
+    pub uart_output: Vec<u8>,
 }
 
 impl HeadlessRun {
@@ -856,6 +861,7 @@ pub fn run_headless(
         faults,
         wall_s,
         sim_s: engine.scheduler().sim_time,
+        uart_output: last_uart,
     })
 }
 

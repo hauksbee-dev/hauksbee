@@ -369,7 +369,9 @@ fn mcu_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
         out.push(Need {
             key: "straps".into(),
             ask: "[[models.straps]] for each boot/strap pin (role, level, only_with) the \
-                  boot-mode table names"
+                  boot-mode table names, each with vil/vih and `supply` set to the supply \
+                  role the datasheet's power-domain table puts that pad on (the IO supply, \
+                  not the core supply, for a GPIO or strap pad)"
                 .into(),
             look: "Boot configuration / boot modes",
         });
@@ -611,6 +613,7 @@ pub fn findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
         }
     }
     out.extend(boot_straps(entry, facts));
+    out.extend(strap_domain(entry));
     out.extend(crate::card_scope::entry_findings(entry, facts));
     out.extend(crate::card_provenance::findings(
         entry,
@@ -924,6 +927,52 @@ fn boot_straps(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
     }]
 }
 
+/// Whether a supply role is an IO-domain supply (`iovdd`, `vddio`, `vccio`, `vio`).
+fn is_io_supply(role: &str) -> bool {
+    crate::pin_roles::power_pin(role, ComponentKind::Mcu).is_some_and(|p| {
+        p.kind == crate::pin_roles::PowerKind::Supply
+            && (p.family.starts_with("io") || p.family.ends_with("io") || p.family == "vio")
+    })
+}
+
+/// A strap's thresholds are read at the supply its pad is powered from. A card
+/// that has both a core supply and an IO supply, and scales a strap's `vil`/`vih`
+/// on the core one, reads every divider on that pad at the wrong rail (a 1.2 V
+/// core against a 3.3 V strap): the datasheet's power-domain table says which.
+fn strap_domain(entry: &ModelEntry) -> Vec<Finding> {
+    let io: Vec<&str> = entry
+        .pins
+        .values()
+        .map(String::as_str)
+        .filter(|r| is_io_supply(r))
+        .collect();
+    let Some(io_supply) = io.first().copied() else {
+        return Vec::new();
+    };
+    let wrong: Vec<String> = entry
+        .straps
+        .iter()
+        .filter(|s| (s.vil.is_some() || s.vih.is_some()) && s.supply.is_none())
+        .filter(|s| !is_io_supply(s.supply_role(entry)))
+        .map(|s| format!("'{}' (read at '{}')", s.role, s.supply_role(entry)))
+        .collect();
+    if wrong.is_empty() {
+        return Vec::new();
+    }
+    vec![Finding {
+        severity: Severity::Warn,
+        check: "coverage",
+        message: format!(
+            "strap {} scales its vil/vih on the core supply, but the card also has the IO supply \
+             '{io_supply}': read the datasheet's power-domain table for the supply each strap \
+             pad is powered from. If it is the IO supply (usual for GPIO and strap pads), add \
+             `supply = \"{io_supply}\"` to the strap row; if the table puts the pad on the core \
+             supply, keep it and set `supply` to that role so the choice is explicit",
+            wrong.join(", ")
+        ),
+    }]
+}
+
 /// The pin-table column for the package the board (or, failing that, the card) is for.
 fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<Cow<'a, Column>> {
     if facts.pin_columns.is_empty() || entry.pins.is_empty() {
@@ -1229,6 +1278,30 @@ value_re = "(?i)^PGLDO$"
              [[models.straps]]\nrole = \"pb2\"\nlevel = \"low\"\nboot_select = false\n",
         );
         assert!(boot_straps(&both, &facts).is_empty());
+    }
+
+    /// A strap pad scaled on the core supply of a card that also has an IO
+    /// supply is the mapping error a drafted card makes; naming the supply (or
+    /// a `level_rails` entry) answers the finding.
+    #[test]
+    fn a_strap_read_at_the_core_supply_beside_an_io_supply_is_asked_about() {
+        let base = "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n1 = \"vdd\"\n2 = \"iovdd\"\n3 = \"boot0\"\n";
+        let strap = "[[models.straps]]\nrole = \"boot0\"\nlevel = \"low\"\nboot_select = true\n\
+                     vil = [0.3, 0.0]\nvih = [0.7, 0.0]\n";
+        let found = strap_domain(&entry(&format!("{base}{strap}")));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.contains("supply = \"iovdd\"") && found[0].message.contains("'boot0'"),
+            "{found:?}"
+        );
+        // Named on the strap, or by the pad's level rail: nothing to ask.
+        assert!(strap_domain(&entry(&format!("{base}{strap}supply = \"iovdd\"\n"))).is_empty());
+        let railed = format!("{base}[models.level_rails]\niovdd = [\"boot0\"]\n{strap}");
+        assert!(strap_domain(&entry(&railed)).is_empty());
+        // A card with one supply has no domain to confuse.
+        let single =
+            "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n1 = \"vdd\"\n3 = \"boot0\"\n";
+        assert!(strap_domain(&entry(&format!("{single}{strap}"))).is_empty());
     }
 
     #[test]
