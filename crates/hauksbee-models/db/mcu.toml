@@ -4268,12 +4268,13 @@ kind = "mcu"
 description = "Espressif ESP32 classic module (WROOM-32 / WROVER)"
 
 [models.match]
-# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules. The
+# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules (not the
+# ESP32-WROOM-DA, whose pinout differs: datasheet v0.7 Table 2). The
 # trailing flash/PSRAM/revision suffixes (e.g. "ESP32-WROOM-32E-N4" on the
 # Olimex EVB rev L) must all match the same strap table, so the suffix is left
 # open after "32". The value names the module, so it fixes the pad map. A bare
 # "ESP32"/"ESP32-D0WD" value is a QFN chip: see esp32 / esp32_qfn48 below.
-value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WRO(OM|VER)([-_ ]?32)?.*)$"
+value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WROOM[-_ ]?32.*|ESP32[-_ ]?WROVER.*)$"
 # No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
 # of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
@@ -5377,7 +5378,7 @@ missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation",
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ESP32-S2-MINI-1 / -1U module (65 pads; -N4 / -N4R2 variants).
+# ESP32-S2-MINI-1 / -1U module (65 pads; -N4 / -N4R2 and end-of-life -H4 variants, datasheet v1.6 Tables 1-2 p.10).
 # Source: Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 3 Pin
 # Definitions (PDF pp.11-12), Tables 9-11 (VDD33 maximum 3.6 V, recommended
 # 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD). No co-sim core exists for
@@ -5399,7 +5400,7 @@ locator = "Table 3 Pin Definitions (PDF pp.11-12); Table 9 Absolute Maximum Rati
 sha256 = "06999476c9d1dede2e6828384dc79aa1e7935059e0fc8349e51f0c962fcfa882"
 
 [models.match]
-value_re = "(?i)^ESP32[-_ ]?S2[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?N\\d+(R\\d+)?)?$"
+value_re = "(?i)^ESP32[-_ ]?S2[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N\\d+(R\\d+)?|H\\d+))?$"
 
 [models.params]
 must_not_float_roles = "en"
