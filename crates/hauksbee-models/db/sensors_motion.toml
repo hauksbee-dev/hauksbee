@@ -2,3 +2,3199 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADXL345: Analog Devices 3-axis +-2/4/8/16 g digital accelerometer, 14-terminal
+# LGA 3 x 5 x 1 mm (CC-14-1).
+#
+# Source: Analog Devices "3-Axis, +-2 g/+-4 g/+-8 g/+-16 g Digital Accelerometer",
+#   ADXL345 data sheet Rev. G, May 2022. Table 1 Specifications, Table 2 Absolute
+#   Maximum Ratings, Table 3 Package Characteristics, Table 5 Pin Function
+#   Descriptions, Tables 7 and 8 current consumption, Tables 9, 11, 13 digital
+#   levels, Serial Communications (I2C addressing, ALT ADDRESS), Table 19 Register
+#   Map. The register addresses and DEVID were cross-checked against the Renode
+#   ADXL345 model (Antmicro, MIT licence; its register enum and DevID = 0xE5 agree).
+#   Renode models no reset values or configuration read-back, so those come from
+#   Table 19 alone; nothing was copied from it.
+#
+# BUS PERSONALITY. This card models the I2C personality (CS tied high, ALT ADDRESS
+# at VDD I/O = 0x1D, at GND = 0x53). The part's SPI personality (3- and 4-wire,
+# CPOL = CPHA = 1, 5 MHz max) is the same register map on the same pads, but a
+# card carries one [models.peripheral], so it is not modelled here (a schema gap).
+# The sheet gives CS and ALT ADDRESS no internal pull ("there is no known state or
+# default state for the CS or ALT ADDRESS pin if left floating"), so both are
+# must_not_float roles and a floating strap leaves the address assumed and disclosed.
+#
+# LOGIC LEVELS are fractions of VDD I/O (Tables 9, 11, 13), evaluated here at the
+# Table 1 typical VDD I/O = 1.8 V (the I2C VOL row for VDD I/O < 2 V is 0.2 x VDD I/O).
+#
+# BEHAVIOUR. DEVID, every read/write configuration register (read back as
+# written) and the six data registers answer. Data registers read zero in standby
+# (Measure = 0) and the accel_x_g/y_g/z_g inputs scaled per DATA_FORMAT once
+# Measure is set. Not modelled: FIFO contents and modes, the interrupt engine
+# (INT_SOURCE/INT_ENABLE are plain registers; only DATA_READY follows Measure), tap
+# and activity detection, self-test, the Justify bit, the 3200/1600 Hz data format,
+# sequential multi-byte register writes (only the first byte after the pointer is
+# decoded), the SPI personality, and ODR timing.
+[[models]]
+id = "adxl345"
+kind = "digital"
+description = "Analog Devices ADXL345 3-axis digital accelerometer, 14-terminal LGA (strap-selected I2C register map: DEVID, configuration registers, acceleration data; pad map, logic levels and supply draw)"
+
+[models.match]
+# Ordering Guide: ADXL345BCCZ, ADXL345BCCZ-RL, ADXL345BCCZ-RL7. ADXL343, ADXL346,
+# ADXL344 and ADXL375 are different parts with different DEVID values.
+value_re = "(?i)^ADXL345(BCCZ(-RL7?)?)?$"
+
+[models.params]
+# Tables 9, 11 and 13 are fractions of VDD I/O; values below are those fractions at
+# VDD I/O = 1.8 V (Table 1 typical). The printed fractions are the characteristic
+# rows at the end of the card.
+voh   = 1.44     # VOH 0.8 x VDD I/O min (Tables 9 and 13)
+vol   = 0.36     # VOL 0.2 x VDD I/O max at IOL = 300 uA (Table 13); the I2C row (Table 11) is the same 0.2 x VDD I/O at 3 mA for VDD I/O < 2 V
+vih   = 1.26     # VIH 0.7 x VDD I/O min
+vil   = 0.54     # VIL 0.3 x VDD I/O max
+supply_static_ua = 140.0   # Table 1 supply current typ, ODR >= 100 Hz
+supply_pin = "6"           # VS
+gnd_pin    = "2"           # GND
+warning = "I2C register map is executable (DEVID, configuration registers, acceleration data); SPI personality, FIFO, interrupts, tap/activity detection and self-test are not modelled"
+# Serial Communications: no internal pull on CS or ALT ADDRESS.
+must_not_float_roles = "cs,sdo"
+
+[models.pins]
+# Table 5 Pin Function Descriptions, all 14 terminals. SCL/SCLK, SDA/SDI/SDIO and
+# SDO/ALT ADDRESS use the bus vocabulary.
+"1"  = "vddio"   # VDD I/O, digital interface supply, 1.7 V to VS
+"2"  = "gnd"
+"3"  = "res_a"   # reserved: connect to VS or leave open
+"4"  = "gnd2"
+"5"  = "gnd3"
+"6"  = "vdd"     # VS, supply voltage, 2.0 V to 3.6 V
+"7"  = "cs"      # chip select: high selects I2C
+"8"  = "int1"    # interrupt 1 output
+"9"  = "int2"    # interrupt 2 output
+"10" = "nc"      # not internally connected
+"11" = "res_b"   # reserved: connect to GND or leave open
+"12" = "sdo"     # SPI SDO; in I2C the ALT ADDRESS select (VDD I/O = 0x1D, GND = 0x53)
+"13" = "sda"     # I2C SDA / SPI SDI / 3-wire SDIO
+"14" = "scl"     # I2C SCL / SPI SCLK
+
+[models.ratings]
+# Table 2: VS and VDD I/O -0.3 V to +3.9 V; digital pins -0.3 V to VDD I/O + 0.3 V or
+# 3.9 V, whichever is less. Table 3: thetaJA 150, thetaJC 85 C/W (14-terminal LGA).
+# Table 2 powered temperature range -40 C to +105 C.
+max_voltage_v = 3.9
+theta_ja_c_per_w = 150.0
+theta_jc_c_per_w = 85.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 3.6
+abs_max_v = 3.9
+basis = "ADI ADXL345 Rev. G, Table 1 Operating Voltage Range (VS) 2.0 V to 3.6 V; Table 2 Absolute Maximum Ratings, VS -0.3 V to +3.9 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 3.9
+basis = "ADI ADXL345 Rev. G, Table 1 Interface Voltage Range (VDD I/O) 1.7 V to VS (3.6 V at the VS maximum); Table 2 Absolute Maximum Ratings, VDD I/O -0.3 V to +3.9 V"
+
+# Serial Communications: "It is required that the CS pin be connected to VDD I/O and
+# that the ALT ADDRESS pin be connected to either VDD I/O or GND when using I2C."
+# Figure 41: ALT ADDRESS high gives 0x1D (0011101), grounded gives 0x53 (1010011).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x53
+address_when_high = 0x1D
+spec_toml = '''
+[sensor]
+name = "ADXL345 register map"
+bus = "i2c"
+i2c_address = 0x53
+
+# Rev. G stimulus: the acceleration on each axis, in g. The default is the part
+# lying flat and still (+1 g on Z, an ASSUMED orientation; the sheet's own test
+# condition is 0 g). Data registers read zero until POWER_CTL.Measure is set.
+
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+# Table 19: DEVID (0x00) = 0xE5, read only.
+[[sensor.register]]
+addr = 0x00
+const = [0xE5]
+
+# Table 19 read/write registers, each reading back what firmware wrote. Reset 0x00 unless noted.
+# THRESH_TAP, 62.5 mg/LSB
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "thresh_tap"
+default = 0
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "thresh_tap"
+
+# OFSX, 15.6 mg/LSB, two's complement (read back as written)
+[[sensor.write_register]]
+addr = 0x1E
+encoding = "u8"
+store = "ofsx"
+default = 0
+[[sensor.register]]
+addr = 0x1E
+encoding = "u8"
+expr = "ofsx"
+
+# OFSY
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "ofsy"
+default = 0
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "ofsy"
+
+# OFSZ
+[[sensor.write_register]]
+addr = 0x20
+encoding = "u8"
+store = "ofsz"
+default = 0
+[[sensor.register]]
+addr = 0x20
+encoding = "u8"
+expr = "ofsz"
+
+# DUR, 625 us/LSB
+[[sensor.write_register]]
+addr = 0x21
+encoding = "u8"
+store = "dur"
+default = 0
+[[sensor.register]]
+addr = 0x21
+encoding = "u8"
+expr = "dur"
+
+# Latent, 1.25 ms/LSB
+[[sensor.write_register]]
+addr = 0x22
+encoding = "u8"
+store = "latent"
+default = 0
+[[sensor.register]]
+addr = 0x22
+encoding = "u8"
+expr = "latent"
+
+# Window, 1.25 ms/LSB
+[[sensor.write_register]]
+addr = 0x23
+encoding = "u8"
+store = "window"
+default = 0
+[[sensor.register]]
+addr = 0x23
+encoding = "u8"
+expr = "window"
+
+# THRESH_ACT, 62.5 mg/LSB
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u8"
+store = "thresh_act"
+default = 0
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "thresh_act"
+
+# THRESH_INACT, 62.5 mg/LSB
+[[sensor.write_register]]
+addr = 0x25
+encoding = "u8"
+store = "thresh_inact"
+default = 0
+[[sensor.register]]
+addr = 0x25
+encoding = "u8"
+expr = "thresh_inact"
+
+# TIME_INACT, 1 s/LSB
+[[sensor.write_register]]
+addr = 0x26
+encoding = "u8"
+store = "time_inact"
+default = 0
+[[sensor.register]]
+addr = 0x26
+encoding = "u8"
+expr = "time_inact"
+
+# ACT_INACT_CTL
+[[sensor.write_register]]
+addr = 0x27
+encoding = "u8"
+store = "act_inact_ctl"
+default = 0
+[[sensor.register]]
+addr = 0x27
+encoding = "u8"
+expr = "act_inact_ctl"
+
+# THRESH_FF, 62.5 mg/LSB
+[[sensor.write_register]]
+addr = 0x28
+encoding = "u8"
+store = "thresh_ff"
+default = 0
+[[sensor.register]]
+addr = 0x28
+encoding = "u8"
+expr = "thresh_ff"
+
+# TIME_FF, 5 ms/LSB
+[[sensor.write_register]]
+addr = 0x29
+encoding = "u8"
+store = "time_ff"
+default = 0
+[[sensor.register]]
+addr = 0x29
+encoding = "u8"
+expr = "time_ff"
+
+# TAP_AXES
+[[sensor.write_register]]
+addr = 0x2A
+encoding = "u8"
+store = "tap_axes"
+default = 0
+[[sensor.register]]
+addr = 0x2A
+encoding = "u8"
+expr = "tap_axes"
+
+# BW_RATE, reset 0x0A (100 Hz, normal power)
+[[sensor.write_register]]
+addr = 0x2C
+encoding = "u8"
+store = "bw_rate"
+default = 10
+[[sensor.register]]
+addr = 0x2C
+encoding = "u8"
+expr = "bw_rate"
+
+# POWER_CTL, reset 0x00 (standby); Measure is bit 3
+[[sensor.write_register]]
+addr = 0x2D
+encoding = "u8"
+store = "power_ctl"
+default = 0
+[[sensor.write_register.field]]
+name = "pc_measure"
+bits = [3, 3]
+[[sensor.register]]
+addr = 0x2D
+encoding = "u8"
+expr = "power_ctl"
+
+# INT_ENABLE
+[[sensor.write_register]]
+addr = 0x2E
+encoding = "u8"
+store = "int_enable"
+default = 0
+[[sensor.register]]
+addr = 0x2E
+encoding = "u8"
+expr = "int_enable"
+
+# INT_MAP
+[[sensor.write_register]]
+addr = 0x2F
+encoding = "u8"
+store = "int_map"
+default = 0
+[[sensor.register]]
+addr = 0x2F
+encoding = "u8"
+expr = "int_map"
+
+# DATA_FORMAT, reset 0x00; FULL_RES bit 3, Justify bit 2, Range bits 1:0
+[[sensor.write_register]]
+addr = 0x31
+encoding = "u8"
+store = "data_format"
+default = 0
+[[sensor.write_register.field]]
+name = "df_full_res"
+bits = [3, 3]
+[[sensor.write_register.field]]
+name = "df_range"
+bits = [1, 0]
+[[sensor.register]]
+addr = 0x31
+encoding = "u8"
+expr = "data_format"
+
+# FIFO_CTL
+[[sensor.write_register]]
+addr = 0x38
+encoding = "u8"
+store = "fifo_ctl"
+default = 0
+[[sensor.register]]
+addr = 0x38
+encoding = "u8"
+expr = "fifo_ctl"
+
+# ACT_TAP_STATUS (0x2B), read only, reset 0x00
+[[sensor.register]]
+addr = 0x2B
+const = [0x00]
+
+# INT_SOURCE (0x30), read only, reset 0x02; DATA_READY (bit 7) is set once Measure is on (data is available at once; the ODR is not timed)
+[[sensor.register]]
+addr = 0x30
+encoding = "u8"
+expr = "2.0 + 128.0 * pc_measure"
+
+# FIFO_STATUS (0x39), read only, reset 0x00 (FIFO bypassed, empty)
+[[sensor.register]]
+addr = 0x39
+const = [0x00]
+
+# Table 19: DATAX0..DATAZ1 (0x32..0x37), two's complement, LSB first. Counts follow
+# DATA_FORMAT: 256 LSB/g in full resolution; 256/128/64/32 LSB/g at +-2/4/8/16 g
+# with 10-bit resolution (Table 1). Saturates at the output resolution. The Justify bit
+# is not applied.
+[[sensor.register]]
+addr = 0x32
+encoding = "i16_le"
+expr = "pc_measure * max(0.0 - if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0), min(if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0) - 1.0, accel_x_g * if(df_full_res == 1.0, 256.0, if(df_range == 0.0, 256.0, if(df_range == 1.0, 128.0, if(df_range == 2.0, 64.0, 32.0))))))"
+
+[[sensor.register]]
+addr = 0x34
+encoding = "i16_le"
+expr = "pc_measure * max(0.0 - if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0), min(if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0) - 1.0, accel_y_g * if(df_full_res == 1.0, 256.0, if(df_range == 0.0, 256.0, if(df_range == 1.0, 128.0, if(df_range == 2.0, 64.0, 32.0))))))"
+
+[[sensor.register]]
+addr = 0x36
+encoding = "i16_le"
+expr = "pc_measure * max(0.0 - if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0), min(if(df_full_res == 1.0, if(df_range == 0.0, 512.0, if(df_range == 1.0, 1024.0, if(df_range == 2.0, 2048.0, 4096.0))), 512.0) - 1.0, accel_z_g * if(df_full_res == 1.0, 256.0, if(df_range == 0.0, 256.0, if(df_range == 1.0, 128.0, if(df_range == 2.0, 64.0, 32.0))))))"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0    # Table 1, VS min (no POR voltage is published)
+idle_a = 0.000140             # Table 1, supply current typ, ODR >= 100 Hz
+read_a = 0.000140
+write_a = 0.000140
+low_power_a = 0.0000001       # Table 1, standby mode leakage typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "measurement_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "devid_read", "reset_values", "configuration_register_readback", "acceleration_data_registers", "data_format_range_scaling", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "fifo", "interrupt_engine", "tap_and_activity_detection", "self_test", "justify_bit", "high_odr_data_format", "odr_timing", "sequential_register_write", "per_odr_supply_current", "vddio_supply_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/ADXL345.pdf"
+title = "Analog Devices ADXL345 3-Axis, +-2 g/+-4 g/+-8 g/+-16 g Digital Accelerometer, Rev. G, May 2022"
+locator = "Table 1 Specifications; Table 2 Absolute Maximum Ratings; Table 3 Package Characteristics; Table 5 Pin Function Descriptions p.6; Tables 7 and 8; Tables 9, 11 and 13 digital levels; Serial Communications (I2C, Figure 41); Table 19 Register Map p.23"
+sha256 = "87ae2212498c35a6759d8732adee0ec9b9d8d60fa95688bc5904f1f07ceb8ff6"
+
+# Tables 9 and 13 as printed, in fractions of VDD I/O (Table 11 repeats VIH/VIL).
+[[models.source.characteristic]]
+parameter = "VIL input low level"
+max = 0.3
+unit = "VDDIO"
+conditions = "SPI and I2C digital inputs"
+basis = "Tables 9 and 11, 0.3 x VDD I/O max"
+
+[[models.source.characteristic]]
+parameter = "VIH input high level"
+min = 0.7
+unit = "VDDIO"
+conditions = "SPI and I2C digital inputs"
+basis = "Tables 9 and 11, 0.7 x VDD I/O min"
+
+[[models.source.characteristic]]
+parameter = "VOH output high level (interrupt pins)"
+min = 0.8
+unit = "VDDIO"
+conditions = "IOH = -150 uA"
+basis = "Table 13, 0.8 x VDD I/O min"
+
+# Table 13 VOL 0.2 x VDD I/O max at IOL = 300 uA is the `vol` param above; it is not cited as a row because 300 uA counts as a heavy test current
+# to the output-load rule, and the sheet prints no lighter VOL point.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MPU-6050: InvenSense (TDK) 6-axis motion sensor (3-axis gyroscope, 3-axis
+# accelerometer, on-chip temperature sensor), 24-pin QFN 4 x 4 x 0.9 mm.
+#
+# Source: InvenSense "MPU-6000 and MPU-6050 Product Specification", PS-MPU-6000A-00
+#   Revision 3.2, 11/16/2011 (Sections 6.2 to 6.9 specifications, Section 7.1 Pin Out
+#   and Signal Description) and "MPU-6000 and MPU-6050 Register Map and Descriptions",
+#   RM-MPU-6000A-00 Revision 4.0, 03/09/2012 (Section 3 Register Map, Section 4
+#   register descriptions). These are the newest copies obtainable: the TDK site
+#   serves an HTML bot page for the current revisions (PS Rev 3.4, RM Rev 4.2), and the
+#   copies read are the mirrors at alliance.seas.upenn.edu and cdn.sparkfun.com.
+#
+# I2C ONLY. The MPU-6050 has no SPI port (pin 8 is VLOGIC, not /CS; the SPI port is the
+# MPU-6000). AD0 (pin 9) sets the address LSB: low 0x68 (1101000), high 0x69 (1101001).
+# WHO_AM_I (0x75) reads 0x68 on this part whichever address is selected.
+#
+# THE PART POWERS UP ASLEEP: PWR_MGMT_1 resets to 0x40 (SLEEP = 1), and the model's
+# measurement registers read zero until firmware clears SLEEP. That is the datasheet's
+# power-on behaviour, not a model limitation.
+#
+# LOGIC LEVELS are fractions of VLOGIC (Section 6.4), evaluated at the stated
+# VLOGIC = 1.8 V +-5% (VIH/VIL, VOH); the I2C VOL is the absolute 0.4 V at 3 mA (Section 6.5).
+#
+# Not modelled: the auxiliary I2C master and its slave registers, the FIFO and FIFO
+# count, the DMP, motion/zero-motion detection, interrupt generation and latching,
+# self-test, the digital low-pass filter, sample-rate timing, CLKOUT, the TEMP_DIS and
+# CYCLE modes, and read-to-clear behaviour. No thermal resistance is printed in
+# this revision.
+[[models]]
+id = "mpu6050"
+kind = "digital"
+description = "InvenSense MPU-6050 6-axis gyro/accelerometer/temperature sensor, 24-pin QFN (strap-selected I2C register map: WHO_AM_I, configuration registers, power-up sleep, sensor data; pad map, logic levels and supply draw)"
+
+[models.match]
+# MPU-6000 is the SPI-capable sibling and MPU-6500/9150/9250 are different dies with
+# different WHO_AM_I values; the anchored number excludes them all.
+value_re = "(?i)^MPU-?6050$"
+
+[models.params]
+voh   = 1.62     # VOH 0.9 x VLOGIC min (RLOAD = 1 Mohm, SDO/INT) at VLOGIC = 1.8 V
+vol   = 0.4      # Section 6.5, I2C VOL1 0 to 0.4 V at 3 mA sink
+vih   = 1.26     # VIH 0.7 x VLOGIC min at VLOGIC = 1.8 V
+vil   = 0.54     # VIL 0.3 x VLOGIC max at VLOGIC = 1.8 V
+supply_static_ua = 3800.0   # Section 6.3, normal operating current, gyroscope + accelerometer (DMP disabled) 3.8 mA
+supply_pin = "13"           # VDD
+gnd_pin    = "18"           # GND
+warning = "I2C register map is executable (WHO_AM_I, configuration registers, power-up sleep, accelerometer/gyroscope/temperature data); the auxiliary I2C master, FIFO, DMP, interrupts and self-test are not modelled"
+
+[models.pins]
+# Section 7.1 Pin Out and Signal Description, QFN-24. NC pads are numbered apart
+# because a role names one pad.
+"1"  = "clkin"   # optional external reference clock input; connect to GND if unused
+"2"  = "nc"
+"3"  = "nc2"
+"4"  = "nc3"
+"5"  = "nc4"
+"6"  = "aux_da"  # auxiliary I2C master data
+"7"  = "aux_cl"  # auxiliary I2C master clock
+"8"  = "vddio"   # VLOGIC, digital I/O supply (MPU-6050 only), 1.71 V to VDD
+"9"  = "ad0"     # I2C slave address LSB
+"10" = "regout"  # regulator filter capacitor connection
+"11" = "fsync"   # frame synchronization input; connect to GND if unused
+"12" = "int"     # interrupt output (push-pull or open drain)
+"13" = "vdd"     # power supply, 2.375 V to 3.46 V
+"14" = "nc5"
+"15" = "nc6"
+"16" = "nc7"
+"17" = "nc8"
+"18" = "gnd"
+"19" = "resv"    # reserved: do not connect
+"20" = "cpout"   # charge pump capacitor connection
+"21" = "resv2"   # reserved: do not connect
+"22" = "clkout"  # system clock output
+"23" = "scl"
+"24" = "sda"
+
+[models.ratings]
+# Section 6.9: VDD -0.5 V to +6 V; inputs -0.5 V to VDD + 0.5 V.
+max_voltage_v = 6.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.375
+max_v = 3.46
+abs_max_v = 6.0
+basis = "InvenSense PS-MPU-6000A-00 Rev 3.2, Section 6.3 VDD Power Supply Operating Voltages 2.375 V to 3.46 V; Section 6.9 Absolute Maximum Ratings, VDD -0.5 V to +6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.71
+max_v = 3.46
+basis = "InvenSense PS-MPU-6000A-00 Rev 3.2, Section 6.3 VLOGIC reference voltage range 1.71 V to VDD (VDD maximum 3.46 V); VLOGIC must be <= VDD at all times"
+
+# Section 6.4: I2C address AD0 = 0 gives 1101000 (0x68), AD0 = 1 gives 1101001 (0x69).
+[models.peripheral]
+kind = "register_map"
+address_select_role = "ad0"
+address_when_low = 0x68
+address_when_high = 0x69
+spec_toml = '''
+[sensor]
+name = "MPU-6050 register map"
+bus = "i2c"
+i2c_address = 0x68
+
+# Stimulus: acceleration in g (flat and still, +1 g on Z is an ASSUMED orientation), angular
+# rate in deg/s and die temperature in degC (25 degC is an ASSUMED room-temperature default).
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+[[sensor.input]]
+name = "gyro_x_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_y_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_z_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Register Map Rev 4.0 section 4.34: WHO_AM_I (0x75) = 0x68, read only (the 6 upper bits of the I2C address;
+# AD0 is not reflected).
+[[sensor.register]]
+addr = 0x75
+const = [0x68]
+
+# Register Map Rev 4.0 section 3: every register resets to 0x00 except 107 (0x6B) = 0x40 and 117 (0x75) = 0x68.
+# SELF_TEST_X (0x0D)
+[[sensor.write_register]]
+addr = 0x0D
+encoding = "u8"
+store = "self_test_x"
+default = 0
+[[sensor.register]]
+addr = 0x0D
+encoding = "u8"
+expr = "self_test_x"
+
+# SELF_TEST_Y (0x0E)
+[[sensor.write_register]]
+addr = 0x0E
+encoding = "u8"
+store = "self_test_y"
+default = 0
+[[sensor.register]]
+addr = 0x0E
+encoding = "u8"
+expr = "self_test_y"
+
+# SELF_TEST_Z (0x0F)
+[[sensor.write_register]]
+addr = 0x0F
+encoding = "u8"
+store = "self_test_z"
+default = 0
+[[sensor.register]]
+addr = 0x0F
+encoding = "u8"
+expr = "self_test_z"
+
+# SELF_TEST_A (0x10)
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "self_test_a"
+default = 0
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "self_test_a"
+
+# SMPLRT_DIV (0x19)
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "smplrt_div"
+default = 0
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "smplrt_div"
+
+# CONFIG (0x1A): EXT_SYNC_SET[5:3], DLPF_CFG[2:0]
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "config"
+default = 0
+[[sensor.register]]
+addr = 0x1A
+encoding = "u8"
+expr = "config"
+
+# GYRO_CONFIG (0x1B): FS_SEL is bits 4:3
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "gyro_config"
+default = 0
+[[sensor.write_register.field]]
+name = "fs_sel"
+bits = [4, 3]
+[[sensor.register]]
+addr = 0x1B
+encoding = "u8"
+expr = "gyro_config"
+
+# ACCEL_CONFIG (0x1C): AFS_SEL is bits 4:3
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "accel_config"
+default = 0
+[[sensor.write_register.field]]
+name = "afs_sel"
+bits = [4, 3]
+[[sensor.register]]
+addr = 0x1C
+encoding = "u8"
+expr = "accel_config"
+
+# MOT_THR (0x1F)
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "mot_thr"
+default = 0
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "mot_thr"
+
+# FIFO_EN (0x23)
+[[sensor.write_register]]
+addr = 0x23
+encoding = "u8"
+store = "fifo_en"
+default = 0
+[[sensor.register]]
+addr = 0x23
+encoding = "u8"
+expr = "fifo_en"
+
+# I2C_MST_CTRL (0x24)
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u8"
+store = "i2c_mst_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "i2c_mst_ctrl"
+
+# INT_PIN_CFG (0x37)
+[[sensor.write_register]]
+addr = 0x37
+encoding = "u8"
+store = "int_pin_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x37
+encoding = "u8"
+expr = "int_pin_cfg"
+
+# INT_ENABLE (0x38)
+[[sensor.write_register]]
+addr = 0x38
+encoding = "u8"
+store = "int_enable"
+default = 0
+[[sensor.register]]
+addr = 0x38
+encoding = "u8"
+expr = "int_enable"
+
+# MOT_DETECT_CTRL (0x69)
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "mot_detect_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x69
+encoding = "u8"
+expr = "mot_detect_ctrl"
+
+# USER_CTRL (0x6A)
+[[sensor.write_register]]
+addr = 0x6A
+encoding = "u8"
+store = "user_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x6A
+encoding = "u8"
+expr = "user_ctrl"
+
+# PWR_MGMT_1 (0x6B), reset 0x40: the part powers up asleep (DEVICE_RESET bit 7, SLEEP bit 6, CYCLE bit 5, TEMP_DIS bit 3, CLKSEL[2:0])
+[[sensor.write_register]]
+addr = 0x6B
+encoding = "u8"
+store = "pwr_mgmt_1"
+default = 64
+[[sensor.write_register.field]]
+name = "pm_reset"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "pm_sleep"
+bits = [6, 6]
+
+# DEVICE_RESET (bit 7) self-clears: once set, the register reads back its reset value 0x40 (asleep).
+# The other registers are not restored to their defaults.
+[[sensor.register]]
+addr = 0x6B
+encoding = "u8"
+expr = "if(pm_reset == 1.0, 64.0, pwr_mgmt_1)"
+
+# PWR_MGMT_2 (0x6C)
+[[sensor.write_register]]
+addr = 0x6C
+encoding = "u8"
+store = "pwr_mgmt_2"
+default = 0
+[[sensor.register]]
+addr = 0x6C
+encoding = "u8"
+expr = "pwr_mgmt_2"
+
+# INT_STATUS (0x3A): DATA_RDY_INT (bit 0) is modelled as set whenever the part is awake (sample timing is not
+# modelled). Read to clear is not modelled.
+[[sensor.register]]
+addr = 0x3A
+encoding = "u8"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset))"
+
+# FIFO_COUNT (0x72, 0x73): the FIFO is not modelled and reads empty.
+[[sensor.register]]
+addr = 0x72
+const = [0x00, 0x00]
+
+# Measurement registers 59 to 72, big-endian signed 16-bit. They read zero while SLEEP is set.
+# Sensitivities: AFS_SEL 0..3 = 16384/8192/4096/2048 LSB/g; FS_SEL 0..3 = 131/65.5/32.8/16.4 LSB/(deg/s);
+# temperature = TEMP_OUT/340 + 36.53 degC.
+[[sensor.register]]
+addr = 0x3B
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * accel_x_g * if(afs_sel == 0.0, 16384.0, if(afs_sel == 1.0, 8192.0, if(afs_sel == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x3D
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * accel_y_g * if(afs_sel == 0.0, 16384.0, if(afs_sel == 1.0, 8192.0, if(afs_sel == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x3F
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * accel_z_g * if(afs_sel == 0.0, 16384.0, if(afs_sel == 1.0, 8192.0, if(afs_sel == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x41
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (temp_c - 36.53) * 340.0"
+
+[[sensor.register]]
+addr = 0x43
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * gyro_x_dps * if(fs_sel == 0.0, 131.0, if(fs_sel == 1.0, 65.5, if(fs_sel == 2.0, 32.8, 16.4)))"
+
+[[sensor.register]]
+addr = 0x45
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * gyro_y_dps * if(fs_sel == 0.0, 131.0, if(fs_sel == 1.0, 65.5, if(fs_sel == 2.0, 32.8, 16.4)))"
+
+[[sensor.register]]
+addr = 0x47
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * gyro_z_dps * if(fs_sel == 0.0, 131.0, if(fs_sel == 1.0, 65.5, if(fs_sel == 2.0, 32.8, 16.4)))"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.375  # Section 6.3, VDD min (no POR voltage is published)
+idle_a = 0.0038               # Section 6.3, gyroscope + accelerometer, DMP disabled
+read_a = 0.0038
+write_a = 0.0038
+low_power_a = 0.000005        # Section 6.3, full-chip idle mode supply current
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vlogic", "normal_mode_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map", "who_am_i_read", "reset_values", "power_up_sleep", "configuration_register_readback", "accelerometer_gyroscope_temperature_data", "full_scale_range_scaling", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["auxiliary_i2c_master", "fifo", "digital_motion_processor", "motion_detection", "interrupt_engine", "self_test", "digital_low_pass_filter", "sample_rate_timing", "temp_dis_and_cycle_modes", "thermal_resistance", "supply_domain_current_split"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://alliance.seas.upenn.edu/~medesign/wiki/uploads/Guides/MPU6050_datasheet.pdf"
+title = "InvenSense MPU-6000 and MPU-6050 Product Specification, PS-MPU-6000A-00 Revision 3.2, 11/16/2011"
+locator = "Section 6.3 Electrical and Other Common Specifications; Section 6.4 Electrical Specifications (serial interface, I2C address, digital inputs and outputs); Section 6.5; Section 6.9 Absolute Maximum Ratings; Section 7.1 Pin Out and Signal Description"
+sha256 = "75d163b19dccec6b6a038e90b95976eab5028cabf00035d84b2c012e8d46cfb5"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/datasheets/Sensors/Accelerometers/RM-MPU-6000A.pdf"
+title = "InvenSense MPU-6000 and MPU-6050 Register Map and Descriptions, RM-MPU-6000A-00 Revision 4.0, 03/09/2012"
+locator = "Section 3 Register Map (reset values); Sections 4.2 to 4.7 and 4.15 to 4.17 (configuration and interrupt status); Registers 59 to 72 (accelerometer, temperature and gyroscope measurements, sensitivities); Sections 4.29 to 4.31 and 4.34 (USER_CTRL, PWR_MGMT_1/2, WHO_AM_I)"
+sha256 = "ccaa6312b9d86a9da79e26e511101e1150dc85a48255600010a854369cf7c05d"
+
+# Section 6.4, as printed, in fractions of VLOGIC (the I2C VIL/VIH rows repeat them).
+[[models.source.characteristic]]
+parameter = "VIH high level input voltage"
+min = 0.7
+unit = "VLOGIC"
+conditions = "MPU-6050"
+basis = "Section 6.4, 0.7*VLOGIC min"
+
+[[models.source.characteristic]]
+parameter = "VIL low level input voltage"
+max = 0.3
+unit = "VLOGIC"
+conditions = "MPU-6050"
+basis = "Section 6.4, 0.3*VLOGIC max"
+
+[[models.source.characteristic]]
+parameter = "VOH high level output voltage"
+min = 0.9
+unit = "VLOGIC"
+conditions = "RLOAD = 1 Mohm, MPU-6050"
+basis = "Section 6.4, 0.9*VLOGIC min"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LSM6DSO: STMicroelectronics iNEMO inertial module, 3-axis accelerometer and
+# 3-axis gyroscope, LGA-14L 2.5 x 3.0 x 0.83 mm.
+#
+# Source: STMicroelectronics LSM6DSO datasheet DS12140 - Rev 3, June 2024. Table 1 Pin
+#   description, Table 2 Mechanical characteristics, Table 3 Electrical characteristics,
+#   Table 4 Temperature sensor characteristics, Table 7 Absolute maximum ratings,
+#   Section 5.1.1 I2C serial interface (SAD = 110101x), Table 19 Internal pin status,
+#   Table 20 Registers address map, Section 9.11 WHO_AM_I (0Fh) = 6Ch.
+#
+# TWO CARDS, ONE WHO_AM_I. The LSM6DSO and LSM6DSOX both read 6Ch, and the same I2C
+# address, so firmware cannot tell them apart by identity; each part has its own card
+# because each is its own datasheet. The LSM6DSOX adds the machine learning core and
+# sensor synchronisation (S4S) registers, not modelled in either card.
+#
+# I2C PERSONALITY ONLY. CS high selects I2C (Table 1), and SDO/SA0 sets the address LSB:
+# ground gives 1101010 (0x6A), VDDIO gives 1101011 (0x6B). The SPI personality (3- and
+# 4-wire, mode 3) is the same map on the same pads but a card carries one
+# [models.peripheral]. SDO/SA0 has no internal pull-up by default (Table 19), so it is
+# must_not_float. CS has a 30 to 50 kohm internal pull-up by default.
+#
+# LOGIC LEVELS are fractions of VDDIO (Table 3: VIH 0.7 x VDDIO, VIL 0.3 x VDDIO, VOH
+# VDDIO - 0.2 V at 4 mA, VOL 0.2 V at 4 mA), evaluated at VDDIO = 1.8 V, the table's
+# test supply.
+#
+# Not modelled: the SPI personality, the FIFO and timestamp, the interrupt/event
+# engine and tap/free-fall/wake-up detection, the embedded functions (pedometer, tilt,
+# the finite state machine), the sensor hub, the auxiliary SPI (OIS) interface, MIPI I3C, ODR timing,
+# the CTRL8_XL filter-bandwidth/XL_FS_MODE variants, and the register restore that a
+# software reset performs (SW_RESET and BOOT simply read back clear). No thermal
+# resistance is printed in the datasheet.
+[[models]]
+id = "lsm6dso"
+kind = "digital"
+description = "STMicroelectronics LSM6DSO 6-axis IMU, LGA-14 (strap-selected I2C register map: WHO_AM_I 6Ch, control registers, acceleration/angular rate/temperature data; pad map, logic levels and supply draw)"
+
+[models.match]
+# Order codes: LSM6DSO and LSM6DSOTR. Neighbouring parts have their own cards or none: LSM6DSOX (machine-learning core, same WHO_AM_I), LSM6DSO32, LSM6DSR, LSM6DSL, LSM6DSM, LSM6DS3, LSM6DS33 and LSM6DSV.
+value_re = "(?i)^LSM6DSO(TR)?$"
+
+[models.params]
+voh   = 1.6      # Table 3, VOH VDDIO - 0.2 V min at IOH = 4 mA, at VDDIO = 1.8 V
+vol   = 0.2      # Table 3, VOL max at IOL = 4 mA
+vih   = 1.26     # Table 3, VIH 0.7 x VDDIO min at VDDIO = 1.8 V
+vil   = 0.54     # Table 3, VIL 0.3 x VDDIO max at VDDIO = 1.8 V
+supply_static_ua = 550.0   # Table 3, IddHP typ, gyroscope and accelerometer in high-performance mode
+supply_pin = "8"           # VDD
+gnd_pin    = "6"           # GND
+warning = "I2C register map is executable (WHO_AM_I, control registers, acceleration/angular rate/temperature data); the SPI personality, FIFO, interrupt engine, embedded functions and sensor hub are not modelled"
+# Table 19: SDO/SA0 default is an input without pull-up.
+must_not_float_roles = "sdo"
+
+[models.pins]
+# Table 1 Pin description, LGA-14. The mode 1 function is used for the roles.
+"1"  = "sdo"      # SPI SDO; in I2C the address LSB SA0
+"2"  = "sdx"      # mode 1: connect to VDDIO or GND (I2C master data in mode 2)
+"3"  = "scx"      # mode 1: connect to VDDIO or GND (I2C master clock in mode 2)
+"4"  = "int1"     # programmable interrupt 1
+"5"  = "vddio"    # power supply for I/O pins (recommended 100 nF filter capacitor)
+"6"  = "gnd"
+"7"  = "gnd2"
+"8"  = "vdd"      # power supply (recommended 100 nF filter capacitor)
+"9"  = "int2"     # programmable interrupt 2 / data enable
+"10" = "ocs_aux"  # leave unconnected in modes 1 and 2
+"11" = "sdo_aux"  # connect to VDDIO or leave unconnected in modes 1 and 2
+"12" = "cs"       # I2C/SPI mode selection: 1 = I2C enabled
+"13" = "scl"      # I2C SCL / SPI SPC
+"14" = "sda"      # I2C SDA / SPI SDI / 3-wire SDO
+
+[models.ratings]
+# Table 7: VDD -0.3 V to +4.8 V; control pins -0.3 V to VDDIO + 0.3 V; supply on any pin never above 4.8 V.
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.8
+basis = "ST DS12140 Rev 3, Table 3 Electrical characteristics, VDD supply voltage 1.71 V to 3.6 V; Table 7 Absolute maximum ratings, VDD -0.3 V to +4.8 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.62
+max_v = 3.6
+abs_max_v = 4.8
+basis = "ST DS12140 Rev 3, Table 3 Electrical characteristics, VDDIO power supply for I/O 1.62 V to 3.6 V; Table 7 Absolute maximum ratings, supply voltage on any pin never above 4.8 V"
+
+# Table 1: CS high selects I2C. Section 5.1.1: SAD = 110101x; SA0 to the supply gives
+# 1101011 (0x6B), to ground 1101010 (0x6A).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x6A
+address_when_high = 0x6B
+spec_toml = '''
+[sensor]
+name = "LSM6DSO register map"
+bus = "i2c"
+i2c_address = 0x6A
+
+# Stimulus: acceleration in g (flat and still, +1 g on Z is an ASSUMED orientation), angular rate in
+# deg/s and die temperature in degC (25 degC, where Table 4 says the output is 0 LSB, is the default).
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+[[sensor.input]]
+name = "gyro_x_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_y_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_z_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Section 9.11: WHO_AM_I (0Fh) is fixed at 6Ch (Table 20).
+[[sensor.register]]
+addr = 0x0F
+const = [0x6C]
+
+# Table 20, default values. Writable registers read back what was written.
+# FUNC_CFG_ACCESS (01h), default 00h
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u8"
+store = "func_cfg_access"
+default = 0
+[[sensor.register]]
+addr = 0x01
+encoding = "u8"
+expr = "func_cfg_access"
+
+# FIFO_CTRL1 (07h), default 00h
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u8"
+store = "fifo_ctrl1"
+default = 0
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "fifo_ctrl1"
+
+# FIFO_CTRL2 (08h), default 00h
+[[sensor.write_register]]
+addr = 0x08
+encoding = "u8"
+store = "fifo_ctrl2"
+default = 0
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "fifo_ctrl2"
+
+# FIFO_CTRL3 (09h), default 00h
+[[sensor.write_register]]
+addr = 0x09
+encoding = "u8"
+store = "fifo_ctrl3"
+default = 0
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "fifo_ctrl3"
+
+# FIFO_CTRL4 (0Ah), default 00h
+[[sensor.write_register]]
+addr = 0x0A
+encoding = "u8"
+store = "fifo_ctrl4"
+default = 0
+[[sensor.register]]
+addr = 0x0A
+encoding = "u8"
+expr = "fifo_ctrl4"
+
+# COUNTER_BDR_REG1 (0Bh), default 00h
+[[sensor.write_register]]
+addr = 0x0B
+encoding = "u8"
+store = "counter_bdr_reg1"
+default = 0
+[[sensor.register]]
+addr = 0x0B
+encoding = "u8"
+expr = "counter_bdr_reg1"
+
+# COUNTER_BDR_REG2 (0Ch), default 00h
+[[sensor.write_register]]
+addr = 0x0C
+encoding = "u8"
+store = "counter_bdr_reg2"
+default = 0
+[[sensor.register]]
+addr = 0x0C
+encoding = "u8"
+expr = "counter_bdr_reg2"
+
+# INT1_CTRL (0Dh), default 00h
+[[sensor.write_register]]
+addr = 0x0D
+encoding = "u8"
+store = "int1_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x0D
+encoding = "u8"
+expr = "int1_ctrl"
+
+# INT2_CTRL (0Eh), default 00h
+[[sensor.write_register]]
+addr = 0x0E
+encoding = "u8"
+store = "int2_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x0E
+encoding = "u8"
+expr = "int2_ctrl"
+
+# CTRL4_C (13h), default 00h
+[[sensor.write_register]]
+addr = 0x13
+encoding = "u8"
+store = "ctrl4_c"
+default = 0
+[[sensor.register]]
+addr = 0x13
+encoding = "u8"
+expr = "ctrl4_c"
+
+# CTRL5_C (14h), default 00h
+[[sensor.write_register]]
+addr = 0x14
+encoding = "u8"
+store = "ctrl5_c"
+default = 0
+[[sensor.register]]
+addr = 0x14
+encoding = "u8"
+expr = "ctrl5_c"
+
+# CTRL6_C (15h), default 00h
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "ctrl6_c"
+default = 0
+[[sensor.register]]
+addr = 0x15
+encoding = "u8"
+expr = "ctrl6_c"
+
+# CTRL7_G (16h), default 00h
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "ctrl7_g"
+default = 0
+[[sensor.register]]
+addr = 0x16
+encoding = "u8"
+expr = "ctrl7_g"
+
+# CTRL8_XL (17h), default 00h
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "ctrl8_xl"
+default = 0
+[[sensor.register]]
+addr = 0x17
+encoding = "u8"
+expr = "ctrl8_xl"
+
+# CTRL10_C (19h), default 00h
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "ctrl10_c"
+default = 0
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "ctrl10_c"
+
+# TAP_CFG0 (56h), default 00h
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "tap_cfg0"
+default = 0
+[[sensor.register]]
+addr = 0x56
+encoding = "u8"
+expr = "tap_cfg0"
+
+# TAP_CFG1 (57h), default 00h
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "tap_cfg1"
+default = 0
+[[sensor.register]]
+addr = 0x57
+encoding = "u8"
+expr = "tap_cfg1"
+
+# TAP_CFG2 (58h), default 00h
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "tap_cfg2"
+default = 0
+[[sensor.register]]
+addr = 0x58
+encoding = "u8"
+expr = "tap_cfg2"
+
+# TAP_THS_6D (59h), default 00h
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "tap_ths_6d"
+default = 0
+[[sensor.register]]
+addr = 0x59
+encoding = "u8"
+expr = "tap_ths_6d"
+
+# INT_DUR2 (5Ah), default 00h
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "int_dur2"
+default = 0
+[[sensor.register]]
+addr = 0x5A
+encoding = "u8"
+expr = "int_dur2"
+
+# WAKE_UP_THS (5Bh), default 00h
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "wake_up_ths"
+default = 0
+[[sensor.register]]
+addr = 0x5B
+encoding = "u8"
+expr = "wake_up_ths"
+
+# WAKE_UP_DUR (5Ch), default 00h
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "wake_up_dur"
+default = 0
+[[sensor.register]]
+addr = 0x5C
+encoding = "u8"
+expr = "wake_up_dur"
+
+# FREE_FALL (5Dh), default 00h
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "free_fall"
+default = 0
+[[sensor.register]]
+addr = 0x5D
+encoding = "u8"
+expr = "free_fall"
+
+# MD1_CFG (5Eh), default 00h
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "md1_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x5E
+encoding = "u8"
+expr = "md1_cfg"
+
+# MD2_CFG (5Fh), default 00h
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "md2_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x5F
+encoding = "u8"
+expr = "md2_cfg"
+
+# I3C_BUS_AVB (62h), default 00h
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "i3c_bus_avb"
+default = 0
+[[sensor.register]]
+addr = 0x62
+encoding = "u8"
+expr = "i3c_bus_avb"
+
+# X_OFS_USR (73h), default 00h
+[[sensor.write_register]]
+addr = 0x73
+encoding = "u8"
+store = "x_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x73
+encoding = "u8"
+expr = "x_ofs_usr"
+
+# Y_OFS_USR (74h), default 00h
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "y_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x74
+encoding = "u8"
+expr = "y_ofs_usr"
+
+# Z_OFS_USR (75h), default 00h
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "z_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x75
+encoding = "u8"
+expr = "z_ofs_usr"
+
+# PIN_CTRL (02h), default 3Fh
+[[sensor.write_register]]
+addr = 0x02
+encoding = "u8"
+store = "pin_ctrl"
+default = 63
+[[sensor.register]]
+addr = 0x02
+encoding = "u8"
+expr = "pin_ctrl"
+
+# CTRL1_XL (10h), default 00h: ODR_XL[3:0] bits 7:4 (0 = power-down), FS[1:0]_XL bits 3:2
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "ctrl1_xl"
+default = 0
+[[sensor.write_register.field]]
+name = "odr_xl"
+bits = [7, 4]
+[[sensor.write_register.field]]
+name = "fs_xl"
+bits = [3, 2]
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "ctrl1_xl"
+
+# CTRL2_G (11h), default 00h: ODR_G[3:0] bits 7:4 (0 = power-down), FS[1:0]_G bits 3:2, FS_125 bit 1
+[[sensor.write_register]]
+addr = 0x11
+encoding = "u8"
+store = "ctrl2_g"
+default = 0
+[[sensor.write_register.field]]
+name = "odr_g"
+bits = [7, 4]
+[[sensor.write_register.field]]
+name = "fs_g"
+bits = [3, 2]
+[[sensor.write_register.field]]
+name = "fs_125"
+bits = [1, 1]
+[[sensor.register]]
+addr = 0x11
+encoding = "u8"
+expr = "ctrl2_g"
+
+# CTRL3_C (12h), default 04h (IF_INC = 1): BOOT bit 7 and SW_RESET bit 0 self-clear
+[[sensor.write_register]]
+addr = 0x12
+encoding = "u8"
+store = "ctrl3_c"
+default = 4
+[[sensor.write_register.field]]
+name = "c3_boot"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "c3_sw_reset"
+bits = [0, 0]
+
+[[sensor.register]]
+addr = 0x12
+encoding = "u8"
+expr = "ctrl3_c - 128.0 * c3_boot - c3_sw_reset"
+
+# CTRL9_XL (18h), default E0h
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "ctrl9_xl"
+default = 224
+[[sensor.register]]
+addr = 0x18
+encoding = "u8"
+expr = "ctrl9_xl"
+
+# Interrupt and event sources (1Ah to 1Dh, 35h to 3Bh) read 00h: no event engine is modelled.
+[[sensor.register]]
+addr = 0x1A
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1B
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x35
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x36
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x37
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x39
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x3A
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x3B
+const = [0x00]
+
+# STATUS_REG (1Eh): XLDA bit 0, GDA bit 1, TDA bit 2, set while the matching sensor is out of power-down (ODR timing is not modelled).
+[[sensor.register]]
+addr = 0x1E
+encoding = "u8"
+expr = "if(odr_xl > 0.0, 1.0, 0.0) + if(odr_g > 0.0, 2.0, 0.0) + if(odr_xl + odr_g > 0.0, 4.0, 0.0)"
+
+# Output registers, low byte first, 16-bit two's complement. Sensitivities are Table 2: linear acceleration
+# 0.061/0.122/0.244/0.488 mg/LSB at +-2/4/8/16 g (FS_XL 00/10/11/01), angular rate 4.375/8.75/17.5/35/70
+# mdps/LSB at +-125/250/500/1000/2000 dps; temperature 256 LSB/degC with 0 LSB at 25 degC (Table 4).
+# Each reads zero while its sensor is in power-down.
+[[sensor.register]]
+addr = 0x20
+encoding = "i16_le"
+expr = "if(odr_xl + odr_g > 0.0, (temp_c - 25.0) * 256.0, 0.0)"
+
+[[sensor.register]]
+addr = 0x22
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_x_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x24
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_y_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x26
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_z_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x28
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_x_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2A
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_y_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2C
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_z_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 3, VDD min (no POR voltage is published)
+idle_a = 0.00055              # Table 3, IddHP typ
+read_a = 0.00055
+write_a = 0.00055
+low_power_a = 0.000003        # Table 3, IddPD typ, gyroscope and accelerometer power-down
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "high_performance_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "who_am_i_read", "reset_values", "configuration_register_readback", "accelerometer_gyroscope_temperature_data", "full_scale_range_scaling", "power_down_gating", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "mipi_i3c", "fifo", "interrupt_engine", "tap_free_fall_wake_up_detection", "embedded_functions_pedometer_tilt", "finite_state_machine", "sensor_hub_i2c_master", "auxiliary_spi_ois", "timestamp", "software_reset_register_restore", "xl_fs_mode_and_filter_bandwidths", "odr_timing", "per_mode_supply_current"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/lsm6dso.pdf"
+title = "STMicroelectronics LSM6DSO iNEMO inertial module, DS12140 - Rev 3, June 2024"
+locator = "Table 1 Pin description; Table 2 Mechanical characteristics; Table 3 Electrical characteristics; Table 4 Temperature sensor characteristics; Table 7 Absolute maximum ratings; Section 5.1.1 I2C serial interface; Table 19 Internal pin status; Table 20 Registers address map; Section 9.11 WHO_AM_I"
+sha256 = "dd899e37f2fc33b8592fbf6b5b9d9caa94b47c455d4d2edc3512ba2a5c3f0055"
+
+# Table 3 as printed, in fractions of VDDIO.
+[[models.source.characteristic]]
+parameter = "VIH digital high-level input voltage"
+min = 0.7
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, SDO/SA0, CS)"
+basis = "Table 3, 0.7 x VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "VIL digital low-level input voltage"
+max = 0.3
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, SDO/SA0, CS)"
+basis = "Table 3, 0.3 x VDDIO max"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LSM6DSOX: STMicroelectronics iNEMO inertial module, 3-axis accelerometer and
+# 3-axis gyroscope, LGA-14L 2.5 x 3.0 x 0.83 mm.
+#
+# Source: STMicroelectronics LSM6DSOX datasheet DS12814 - Rev 4, June 2024. Table 1 Pin
+#   description, Table 2 Mechanical characteristics, Table 3 Electrical characteristics,
+#   Table 4 Temperature sensor characteristics, Table 7 Absolute maximum ratings,
+#   Section 5.1.1 I2C serial interface (SAD = 110101x), Table 19 Internal pin status,
+#   Table 21 Registers address map, Section 9.14 WHO_AM_I (0Fh) = 6Ch.
+#
+# TWO CARDS, ONE WHO_AM_I. The LSM6DSO and LSM6DSOX both read 6Ch, and the same I2C
+# address, so firmware cannot tell them apart by identity; each part has its own card
+# because each is its own datasheet. The LSM6DSOX adds the machine learning core and
+# sensor synchronisation (S4S) registers, not modelled in either card.
+#
+# I2C PERSONALITY ONLY. CS high selects I2C (Table 1), and SDO/SA0 sets the address LSB:
+# ground gives 1101010 (0x6A), VDDIO gives 1101011 (0x6B). The SPI personality (3- and
+# 4-wire, mode 3) is the same map on the same pads but a card carries one
+# [models.peripheral]. SDO/SA0 has no internal pull-up by default (Table 19), so it is
+# must_not_float. CS has a 30 to 50 kohm internal pull-up by default.
+#
+# LOGIC LEVELS are fractions of VDDIO (Table 3: VIH 0.7 x VDDIO, VIL 0.3 x VDDIO, VOH
+# VDDIO - 0.2 V at 4 mA, VOL 0.2 V at 4 mA), evaluated at VDDIO = 1.8 V, the table's
+# test supply.
+#
+# Not modelled: the SPI personality, the FIFO and timestamp, the interrupt/event
+# engine and tap/free-fall/wake-up detection, the embedded functions (pedometer, tilt,
+# the machine learning core and finite state machine), the sensor hub, the auxiliary SPI (OIS) interface, MIPI I3C, ODR timing,
+# the CTRL8_XL filter-bandwidth/XL_FS_MODE variants, and the register restore that a
+# software reset performs (SW_RESET and BOOT simply read back clear). No thermal
+# resistance is printed in the datasheet.
+[[models]]
+id = "lsm6dsox"
+kind = "digital"
+description = "STMicroelectronics LSM6DSOX 6-axis IMU, LGA-14 (strap-selected I2C register map: WHO_AM_I 6Ch, control registers, acceleration/angular rate/temperature data; pad map, logic levels and supply draw)"
+
+[models.match]
+# Order codes: LSM6DSOX and LSM6DSOXTR. Neighbouring parts have their own cards or none: LSM6DSO (no machine-learning core, same WHO_AM_I), LSM6DSO32, LSM6DSR, LSM6DSL, LSM6DSM, LSM6DS3, LSM6DS33 and LSM6DSV.
+value_re = "(?i)^LSM6DSOX(TR)?$"
+
+[models.params]
+voh   = 1.6      # Table 3, VOH VDDIO - 0.2 V min at IOH = 4 mA, at VDDIO = 1.8 V
+vol   = 0.2      # Table 3, VOL max at IOL = 4 mA
+vih   = 1.26     # Table 3, VIH 0.7 x VDDIO min at VDDIO = 1.8 V
+vil   = 0.54     # Table 3, VIL 0.3 x VDDIO max at VDDIO = 1.8 V
+supply_static_ua = 550.0   # Table 3, IddHP typ, gyroscope and accelerometer in high-performance mode
+supply_pin = "8"           # VDD
+gnd_pin    = "6"           # GND
+warning = "I2C register map is executable (WHO_AM_I, control registers, acceleration/angular rate/temperature data); the SPI personality, FIFO, interrupt engine, embedded functions and sensor hub are not modelled"
+# Table 19: SDO/SA0 default is an input without pull-up.
+must_not_float_roles = "sdo"
+
+[models.pins]
+# Table 1 Pin description, LGA-14. The mode 1 function is used for the roles.
+"1"  = "sdo"      # SPI SDO; in I2C the address LSB SA0
+"2"  = "sdx"      # mode 1: connect to VDDIO or GND (I2C master data in mode 2)
+"3"  = "scx"      # mode 1: connect to VDDIO or GND (I2C master clock in mode 2)
+"4"  = "int1"     # programmable interrupt 1
+"5"  = "vddio"    # power supply for I/O pins (recommended 100 nF filter capacitor)
+"6"  = "gnd"
+"7"  = "gnd2"
+"8"  = "vdd"      # power supply (recommended 100 nF filter capacitor)
+"9"  = "int2"     # programmable interrupt 2 / data enable
+"10" = "ocs_aux"  # leave unconnected in modes 1 and 2
+"11" = "sdo_aux"  # connect to VDDIO or leave unconnected in modes 1 and 2
+"12" = "cs"       # I2C/SPI mode selection: 1 = I2C enabled
+"13" = "scl"      # I2C SCL / SPI SPC
+"14" = "sda"      # I2C SDA / SPI SDI / 3-wire SDO
+
+[models.ratings]
+# Table 7: VDD -0.3 V to +4.8 V; control pins -0.3 V to VDDIO + 0.3 V; supply on any pin never above 4.8 V.
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.8
+basis = "ST DS12814 Rev 4, Table 3 Electrical characteristics, VDD supply voltage 1.71 V to 3.6 V; Table 7 Absolute maximum ratings, VDD -0.3 V to +4.8 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.62
+max_v = 3.6
+abs_max_v = 4.8
+basis = "ST DS12814 Rev 4, Table 3 Electrical characteristics, VDDIO power supply for I/O 1.62 V to 3.6 V; Table 7 Absolute maximum ratings, supply voltage on any pin never above 4.8 V"
+
+# Table 1: CS high selects I2C. Section 5.1.1: SAD = 110101x; SA0 to the supply gives
+# 1101011 (0x6B), to ground 1101010 (0x6A).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs"]
+address_select_role = "sdo"
+address_when_low = 0x6A
+address_when_high = 0x6B
+spec_toml = '''
+[sensor]
+name = "LSM6DSOX register map"
+bus = "i2c"
+i2c_address = 0x6A
+
+# Stimulus: acceleration in g (flat and still, +1 g on Z is an ASSUMED orientation), angular rate in
+# deg/s and die temperature in degC (25 degC, where Table 4 says the output is 0 LSB, is the default).
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+[[sensor.input]]
+name = "gyro_x_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_y_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_z_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Section 9.14: WHO_AM_I (0Fh) is fixed at 6Ch (Table 21).
+[[sensor.register]]
+addr = 0x0F
+const = [0x6C]
+
+# Table 21, default values. Writable registers read back what was written.
+# FUNC_CFG_ACCESS (01h), default 00h
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u8"
+store = "func_cfg_access"
+default = 0
+[[sensor.register]]
+addr = 0x01
+encoding = "u8"
+expr = "func_cfg_access"
+
+# FIFO_CTRL1 (07h), default 00h
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u8"
+store = "fifo_ctrl1"
+default = 0
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "fifo_ctrl1"
+
+# FIFO_CTRL2 (08h), default 00h
+[[sensor.write_register]]
+addr = 0x08
+encoding = "u8"
+store = "fifo_ctrl2"
+default = 0
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "fifo_ctrl2"
+
+# FIFO_CTRL3 (09h), default 00h
+[[sensor.write_register]]
+addr = 0x09
+encoding = "u8"
+store = "fifo_ctrl3"
+default = 0
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "fifo_ctrl3"
+
+# FIFO_CTRL4 (0Ah), default 00h
+[[sensor.write_register]]
+addr = 0x0A
+encoding = "u8"
+store = "fifo_ctrl4"
+default = 0
+[[sensor.register]]
+addr = 0x0A
+encoding = "u8"
+expr = "fifo_ctrl4"
+
+# COUNTER_BDR_REG1 (0Bh), default 00h
+[[sensor.write_register]]
+addr = 0x0B
+encoding = "u8"
+store = "counter_bdr_reg1"
+default = 0
+[[sensor.register]]
+addr = 0x0B
+encoding = "u8"
+expr = "counter_bdr_reg1"
+
+# COUNTER_BDR_REG2 (0Ch), default 00h
+[[sensor.write_register]]
+addr = 0x0C
+encoding = "u8"
+store = "counter_bdr_reg2"
+default = 0
+[[sensor.register]]
+addr = 0x0C
+encoding = "u8"
+expr = "counter_bdr_reg2"
+
+# INT1_CTRL (0Dh), default 00h
+[[sensor.write_register]]
+addr = 0x0D
+encoding = "u8"
+store = "int1_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x0D
+encoding = "u8"
+expr = "int1_ctrl"
+
+# INT2_CTRL (0Eh), default 00h
+[[sensor.write_register]]
+addr = 0x0E
+encoding = "u8"
+store = "int2_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x0E
+encoding = "u8"
+expr = "int2_ctrl"
+
+# CTRL4_C (13h), default 00h
+[[sensor.write_register]]
+addr = 0x13
+encoding = "u8"
+store = "ctrl4_c"
+default = 0
+[[sensor.register]]
+addr = 0x13
+encoding = "u8"
+expr = "ctrl4_c"
+
+# CTRL5_C (14h), default 00h
+[[sensor.write_register]]
+addr = 0x14
+encoding = "u8"
+store = "ctrl5_c"
+default = 0
+[[sensor.register]]
+addr = 0x14
+encoding = "u8"
+expr = "ctrl5_c"
+
+# CTRL6_C (15h), default 00h
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "ctrl6_c"
+default = 0
+[[sensor.register]]
+addr = 0x15
+encoding = "u8"
+expr = "ctrl6_c"
+
+# CTRL7_G (16h), default 00h
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "ctrl7_g"
+default = 0
+[[sensor.register]]
+addr = 0x16
+encoding = "u8"
+expr = "ctrl7_g"
+
+# CTRL8_XL (17h), default 00h
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "ctrl8_xl"
+default = 0
+[[sensor.register]]
+addr = 0x17
+encoding = "u8"
+expr = "ctrl8_xl"
+
+# CTRL10_C (19h), default 00h
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "ctrl10_c"
+default = 0
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "ctrl10_c"
+
+# TAP_CFG0 (56h), default 00h
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "tap_cfg0"
+default = 0
+[[sensor.register]]
+addr = 0x56
+encoding = "u8"
+expr = "tap_cfg0"
+
+# TAP_CFG1 (57h), default 00h
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "tap_cfg1"
+default = 0
+[[sensor.register]]
+addr = 0x57
+encoding = "u8"
+expr = "tap_cfg1"
+
+# TAP_CFG2 (58h), default 00h
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "tap_cfg2"
+default = 0
+[[sensor.register]]
+addr = 0x58
+encoding = "u8"
+expr = "tap_cfg2"
+
+# TAP_THS_6D (59h), default 00h
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "tap_ths_6d"
+default = 0
+[[sensor.register]]
+addr = 0x59
+encoding = "u8"
+expr = "tap_ths_6d"
+
+# INT_DUR2 (5Ah), default 00h
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "int_dur2"
+default = 0
+[[sensor.register]]
+addr = 0x5A
+encoding = "u8"
+expr = "int_dur2"
+
+# WAKE_UP_THS (5Bh), default 00h
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "wake_up_ths"
+default = 0
+[[sensor.register]]
+addr = 0x5B
+encoding = "u8"
+expr = "wake_up_ths"
+
+# WAKE_UP_DUR (5Ch), default 00h
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "wake_up_dur"
+default = 0
+[[sensor.register]]
+addr = 0x5C
+encoding = "u8"
+expr = "wake_up_dur"
+
+# FREE_FALL (5Dh), default 00h
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "free_fall"
+default = 0
+[[sensor.register]]
+addr = 0x5D
+encoding = "u8"
+expr = "free_fall"
+
+# MD1_CFG (5Eh), default 00h
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "md1_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x5E
+encoding = "u8"
+expr = "md1_cfg"
+
+# MD2_CFG (5Fh), default 00h
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "md2_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x5F
+encoding = "u8"
+expr = "md2_cfg"
+
+# I3C_BUS_AVB (62h), default 00h
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "i3c_bus_avb"
+default = 0
+[[sensor.register]]
+addr = 0x62
+encoding = "u8"
+expr = "i3c_bus_avb"
+
+# X_OFS_USR (73h), default 00h
+[[sensor.write_register]]
+addr = 0x73
+encoding = "u8"
+store = "x_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x73
+encoding = "u8"
+expr = "x_ofs_usr"
+
+# Y_OFS_USR (74h), default 00h
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "y_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x74
+encoding = "u8"
+expr = "y_ofs_usr"
+
+# Z_OFS_USR (75h), default 00h
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "z_ofs_usr"
+default = 0
+[[sensor.register]]
+addr = 0x75
+encoding = "u8"
+expr = "z_ofs_usr"
+
+# PIN_CTRL (02h), default 3Fh
+[[sensor.write_register]]
+addr = 0x02
+encoding = "u8"
+store = "pin_ctrl"
+default = 63
+[[sensor.register]]
+addr = 0x02
+encoding = "u8"
+expr = "pin_ctrl"
+
+# CTRL1_XL (10h), default 00h: ODR_XL[3:0] bits 7:4 (0 = power-down), FS[1:0]_XL bits 3:2
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "ctrl1_xl"
+default = 0
+[[sensor.write_register.field]]
+name = "odr_xl"
+bits = [7, 4]
+[[sensor.write_register.field]]
+name = "fs_xl"
+bits = [3, 2]
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "ctrl1_xl"
+
+# CTRL2_G (11h), default 00h: ODR_G[3:0] bits 7:4 (0 = power-down), FS[1:0]_G bits 3:2, FS_125 bit 1
+[[sensor.write_register]]
+addr = 0x11
+encoding = "u8"
+store = "ctrl2_g"
+default = 0
+[[sensor.write_register.field]]
+name = "odr_g"
+bits = [7, 4]
+[[sensor.write_register.field]]
+name = "fs_g"
+bits = [3, 2]
+[[sensor.write_register.field]]
+name = "fs_125"
+bits = [1, 1]
+[[sensor.register]]
+addr = 0x11
+encoding = "u8"
+expr = "ctrl2_g"
+
+# CTRL3_C (12h), default 04h (IF_INC = 1): BOOT bit 7 and SW_RESET bit 0 self-clear
+[[sensor.write_register]]
+addr = 0x12
+encoding = "u8"
+store = "ctrl3_c"
+default = 4
+[[sensor.write_register.field]]
+name = "c3_boot"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "c3_sw_reset"
+bits = [0, 0]
+
+[[sensor.register]]
+addr = 0x12
+encoding = "u8"
+expr = "ctrl3_c - 128.0 * c3_boot - c3_sw_reset"
+
+# CTRL9_XL (18h), default E0h
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "ctrl9_xl"
+default = 224
+[[sensor.register]]
+addr = 0x18
+encoding = "u8"
+expr = "ctrl9_xl"
+
+# Interrupt and event sources (1Ah to 1Dh, 35h to 3Bh) read 00h: no event engine is modelled.
+[[sensor.register]]
+addr = 0x1A
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1B
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x35
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x36
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x37
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x39
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x3A
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x3B
+const = [0x00]
+
+# STATUS_REG (1Eh): XLDA bit 0, GDA bit 1, TDA bit 2, set while the matching sensor is out of power-down (ODR timing is not modelled).
+[[sensor.register]]
+addr = 0x1E
+encoding = "u8"
+expr = "if(odr_xl > 0.0, 1.0, 0.0) + if(odr_g > 0.0, 2.0, 0.0) + if(odr_xl + odr_g > 0.0, 4.0, 0.0)"
+
+# Output registers, low byte first, 16-bit two's complement. Sensitivities are Table 2: linear acceleration
+# 0.061/0.122/0.244/0.488 mg/LSB at +-2/4/8/16 g (FS_XL 00/10/11/01), angular rate 4.375/8.75/17.5/35/70
+# mdps/LSB at +-125/250/500/1000/2000 dps; temperature 256 LSB/degC with 0 LSB at 25 degC (Table 4).
+# Each reads zero while its sensor is in power-down.
+[[sensor.register]]
+addr = 0x20
+encoding = "i16_le"
+expr = "if(odr_xl + odr_g > 0.0, (temp_c - 25.0) * 256.0, 0.0)"
+
+[[sensor.register]]
+addr = 0x22
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_x_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x24
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_y_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x26
+encoding = "i16_le"
+expr = "if(odr_g > 0.0, gyro_z_dps * 1000.0 / if(fs_125 == 1.0, 4.375, if(fs_g == 0.0, 8.75, if(fs_g == 1.0, 17.5, if(fs_g == 2.0, 35.0, 70.0)))), 0.0)"
+
+[[sensor.register]]
+addr = 0x28
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_x_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2A
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_y_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2C
+encoding = "i16_le"
+expr = "if(odr_xl > 0.0, accel_z_g * 1000.0 / if(fs_xl == 0.0, 0.061, if(fs_xl == 1.0, 0.488, if(fs_xl == 2.0, 0.122, 0.244))), 0.0)"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 3, VDD min (no POR voltage is published)
+idle_a = 0.00055              # Table 3, IddHP typ
+read_a = 0.00055
+write_a = 0.00055
+low_power_a = 0.000003        # Table 3, IddPD typ, gyroscope and accelerometer power-down
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "high_performance_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "who_am_i_read", "reset_values", "configuration_register_readback", "accelerometer_gyroscope_temperature_data", "full_scale_range_scaling", "power_down_gating", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "mipi_i3c", "fifo", "interrupt_engine", "tap_free_fall_wake_up_detection", "embedded_functions_pedometer_tilt", "finite_state_machine", "sensor_hub_i2c_master", "auxiliary_spi_ois", "timestamp", "software_reset_register_restore", "xl_fs_mode_and_filter_bandwidths", "odr_timing", "per_mode_supply_current", "machine_learning_core", "sensor_synchronization_s4s"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/lsm6dsox.pdf"
+title = "STMicroelectronics LSM6DSOX iNEMO inertial module, DS12814 - Rev 4, June 2024"
+locator = "Table 1 Pin description; Table 2 Mechanical characteristics; Table 3 Electrical characteristics; Table 4 Temperature sensor characteristics; Table 7 Absolute maximum ratings; Section 5.1.1 I2C serial interface; Table 19 Internal pin status; Table 21 Registers address map; Section 9.14 WHO_AM_I"
+sha256 = "4c7b834fcc5ca298e0a7cbe796d9f7d2def3fc19682ee490d8b6f75ecdeb71f7"
+
+# Table 3 as printed, in fractions of VDDIO.
+[[models.source.characteristic]]
+parameter = "VIH digital high-level input voltage"
+min = 0.7
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, SDO/SA0, CS)"
+basis = "Table 3, 0.7 x VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "VIL digital low-level input voltage"
+max = 0.3
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, SDO/SA0, CS)"
+basis = "Table 3, 0.3 x VDDIO max"
+
+# -----------------------------------------------------------------------------
+# LSM303AGR: STMicroelectronics ultra-compact high-performance eCompass module,
+# 3-axis accelerometer and 3-axis magnetometer, LGA-12L 2 x 2 x 1 mm.
+#
+# Source: STMicroelectronics LSM303AGR datasheet DocID027765 Rev 11, August 2022.
+#   Table 2 Pin description, Table 3 Sensor characteristics, Table 4 Temperature sensor
+#   characteristics, Table 5 Electrical characteristics, Table 9 Absolute maximum ratings,
+#   Section 4.2.1 Accelerometer power modes (Table 14), Section 6.1 I2C serial interface
+#   (Tables 24 and 25: the accelerometer is 0011001b, the magnetometer 0011110b),
+#   Table 26 Register address map, Section 8 Register description.
+#
+# THE ACCELEROMETER ONLY. The package holds two I2C slaves, the accelerometer at 0x19
+# and the magnetometer at 0x1E (registers 40h to 6Fh, WHO_AM_I_M = 40h). A card carries
+# one [models.peripheral], one I2C address, so this card is the accelerometer
+# personality (the one that WHO_AM_I_A = 33h and the 00h to 3Fh map identify). The
+# magnetometer slave, and the SPI mode (CS_XL / CS_MAG low), are not modelled.
+#
+# The address is fixed by the part (no strap pin), so no address_select is used. CS_XL
+# high selects I2C; CS_MAG is also a mode pin (1 = I2C), so neither may float.
+#
+# LOGIC LEVELS are fractions of Vdd_IO (Table 5: VIH 0.7 x Vdd_IO, VIL 0.3 x Vdd_IO,
+# VOH Vdd_IO - 0.2 V and VOL 0.2 V at 4 mA), evaluated at Vdd_IO = 1.8 V, the table's
+# typical.
+#
+# Not modelled, with the reason: the temperature output (OUT_TEMP_H_A is 8-bit, 1 digit
+# per degC, but the datasheet prints no offset), FIFO_SRC_REG_A (the default is printed
+# as the seven digits 0010000, ambiguous), INT_COUNTER_REG_A, the interrupt, click and
+# activity engines, the FIFO, the high-pass filter, self-test, big-endian output (BLE),
+# the 3-wire SPI enable, ODR timing, and the register restore that BOOT performs
+# (BOOT reads back clear). The magnetometer 3-axis output is a second slave.
+[[models]]
+id = "lsm303agr"
+kind = "digital"
+description = "STMicroelectronics LSM303AGR accelerometer + magnetometer module, LGA-12 (accelerometer I2C register map at 0x19: WHO_AM_I_A 33h, control registers, 12/10/8-bit left-justified acceleration; the magnetometer slave at 0x1E is not modelled)"
+
+[models.match]
+# Order codes: LSM303AGR and LSM303AGRTR. The older LSM303DLHC / LSM303C / LSM303D are different dies.
+value_re = "(?i)^LSM303AGR(TR)?$"
+
+[models.params]
+voh   = 1.6      # Table 5, VOH Vdd_IO - 0.2 V min at IOH = 4 mA, at Vdd_IO = 1.8 V
+vol   = 0.2      # Table 5, VOL max at IOL = 4 mA
+vih   = 1.26     # Table 5, VIH 0.7 x Vdd_IO min at Vdd_IO = 1.8 V
+vil   = 0.54     # Table 5, VIL 0.3 x Vdd_IO max at Vdd_IO = 1.8 V
+supply_static_ua = 2.0     # Table 5, Idd_PD current consumption in power-down (the reset state)
+supply_pin = "9"           # Vdd
+gnd_pin    = "6"           # GND
+warning = "accelerometer I2C register map only (WHO_AM_I_A, control registers, acceleration data); the magnetometer slave at 0x1E, SPI, FIFO and interrupt engine are not modelled"
+must_not_float_roles = "cs_xl,cs_mag"
+
+[models.pins]
+# Table 2 Pin description, LGA-12.
+"1"  = "scl"      # I2C SCL / SPI SPC
+"2"  = "cs_xl"    # accelerometer: 1 = SPI idle / I2C enabled; 0 = SPI mode
+"3"  = "cs_mag"   # magnetometer: 1 = SPI idle / I2C enabled; 0 = SPI mode
+"4"  = "sda"      # I2C SDA / SPI SDI / 3-wire SDO
+"5"  = "c1"       # capacitor connection (C1 = 220 nF)
+"6"  = "gnd"
+"7"  = "int_mag"  # magnetometer interrupt / data ready
+"8"  = "gnd2"
+"9"  = "vdd"      # power supply
+"10" = "vddio"    # power supply for I/O pins
+"11" = "int2_xl"  # accelerometer interrupt 2
+"12" = "int1_xl"  # accelerometer interrupt 1
+
+[models.ratings]
+# Table 9: Vdd and Vdd_IO -0.3 V to +4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V; no pin supply above 4.8 V.
+max_voltage_v = 4.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.8
+basis = "ST DocID027765 Rev 11, Table 5 Electrical characteristics, Vdd supply voltage 1.71 V to 3.6 V; Table 9 Absolute maximum ratings, Vdd -0.3 V to 4.8 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.71
+max_v = 3.7
+abs_max_v = 4.8
+basis = "ST DocID027765 Rev 11, Table 5, Vdd_IO power supply for I/O 1.71 V to Vdd + 0.1 V (3.7 V at the Vdd maximum of 3.6 V); Table 9, Vdd_IO -0.3 V to 4.8 V"
+
+# Table 2: CS_XL high enables I2C; Tables 24 and 25: the accelerometer slave address is 0011001b (0x19).
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["cs_xl"]
+spec_toml = '''
+[sensor]
+name = "LSM303AGR accelerometer register map"
+bus = "i2c"
+i2c_address = 0x19
+
+# Stimulus: acceleration in g (flat and still, +1 g on Z is an ASSUMED orientation).
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+# Section 8.4: WHO_AM_I_A (0Fh) = 00110011 (33h).
+[[sensor.register]]
+addr = 0x0F
+const = [0x33]
+
+# Table 26 defaults. Writable registers read back what was written.
+# TEMP_CFG_REG_A (1Fh), default 00h
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "temp_cfg_reg_a"
+default = 0
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "temp_cfg_reg_a"
+
+# CTRL_REG1_A (20h), default 07h: ODR[3:0] bits 7:4 (0 = power-down), LPen bit 3, Zen/Yen/Xen bits 2:0
+[[sensor.write_register]]
+addr = 0x20
+encoding = "u8"
+store = "ctrl_reg1_a"
+default = 7
+[[sensor.write_register.field]]
+name = "odr_a"
+bits = [7, 4]
+[[sensor.write_register.field]]
+name = "lpen"
+bits = [3, 3]
+[[sensor.write_register.field]]
+name = "zen"
+bits = [2, 2]
+[[sensor.write_register.field]]
+name = "yen"
+bits = [1, 1]
+[[sensor.write_register.field]]
+name = "xen"
+bits = [0, 0]
+[[sensor.register]]
+addr = 0x20
+encoding = "u8"
+expr = "ctrl_reg1_a"
+
+# CTRL_REG2_A (21h), default 00h
+[[sensor.write_register]]
+addr = 0x21
+encoding = "u8"
+store = "ctrl_reg2_a"
+default = 0
+[[sensor.register]]
+addr = 0x21
+encoding = "u8"
+expr = "ctrl_reg2_a"
+
+# CTRL_REG3_A (22h), default 00h
+[[sensor.write_register]]
+addr = 0x22
+encoding = "u8"
+store = "ctrl_reg3_a"
+default = 0
+[[sensor.register]]
+addr = 0x22
+encoding = "u8"
+expr = "ctrl_reg3_a"
+
+# CTRL_REG4_A (23h), default 00h: BDU bit 7, FS[1:0] bits 5:4 (00 +-2 g, 01 +-4 g, 10 +-8 g, 11 +-16 g), HR bit 3
+[[sensor.write_register]]
+addr = 0x23
+encoding = "u8"
+store = "ctrl_reg4_a"
+default = 0
+[[sensor.write_register.field]]
+name = "bdu"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "fs_a"
+bits = [5, 4]
+[[sensor.write_register.field]]
+name = "hr"
+bits = [3, 3]
+[[sensor.register]]
+addr = 0x23
+encoding = "u8"
+expr = "ctrl_reg4_a"
+
+# CTRL_REG5_A (24h), default 00h: BOOT bit 7 self-clears
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u8"
+store = "ctrl_reg5_a"
+default = 0
+[[sensor.write_register.field]]
+name = "a_boot"
+bits = [7, 7]
+
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "ctrl_reg5_a - 128.0 * a_boot"
+
+# CTRL_REG6_A (25h), default 00h
+[[sensor.write_register]]
+addr = 0x25
+encoding = "u8"
+store = "ctrl_reg6_a"
+default = 0
+[[sensor.register]]
+addr = 0x25
+encoding = "u8"
+expr = "ctrl_reg6_a"
+
+# REFERENCE/DATACAPTURE_A (26h), default 00h
+[[sensor.write_register]]
+addr = 0x26
+encoding = "u8"
+store = "reference_a"
+default = 0
+[[sensor.register]]
+addr = 0x26
+encoding = "u8"
+expr = "reference_a"
+
+# FIFO_CTRL_REG_A (2Eh), default 00h
+[[sensor.write_register]]
+addr = 0x2E
+encoding = "u8"
+store = "fifo_ctrl_reg_a"
+default = 0
+[[sensor.register]]
+addr = 0x2E
+encoding = "u8"
+expr = "fifo_ctrl_reg_a"
+
+# INT1_CFG_A (30h), default 00h
+[[sensor.write_register]]
+addr = 0x30
+encoding = "u8"
+store = "int1_cfg_a"
+default = 0
+[[sensor.register]]
+addr = 0x30
+encoding = "u8"
+expr = "int1_cfg_a"
+
+# INT1_THS_A (32h), default 00h
+[[sensor.write_register]]
+addr = 0x32
+encoding = "u8"
+store = "int1_ths_a"
+default = 0
+[[sensor.register]]
+addr = 0x32
+encoding = "u8"
+expr = "int1_ths_a"
+
+# INT1_DURATION_A (33h), default 00h
+[[sensor.write_register]]
+addr = 0x33
+encoding = "u8"
+store = "int1_duration_a"
+default = 0
+[[sensor.register]]
+addr = 0x33
+encoding = "u8"
+expr = "int1_duration_a"
+
+# INT2_CFG_A (34h), default 00h
+[[sensor.write_register]]
+addr = 0x34
+encoding = "u8"
+store = "int2_cfg_a"
+default = 0
+[[sensor.register]]
+addr = 0x34
+encoding = "u8"
+expr = "int2_cfg_a"
+
+# INT2_THS_A (36h), default 00h
+[[sensor.write_register]]
+addr = 0x36
+encoding = "u8"
+store = "int2_ths_a"
+default = 0
+[[sensor.register]]
+addr = 0x36
+encoding = "u8"
+expr = "int2_ths_a"
+
+# INT2_DURATION_A (37h), default 00h
+[[sensor.write_register]]
+addr = 0x37
+encoding = "u8"
+store = "int2_duration_a"
+default = 0
+[[sensor.register]]
+addr = 0x37
+encoding = "u8"
+expr = "int2_duration_a"
+
+# CLICK_CFG_A (38h), default 00h
+[[sensor.write_register]]
+addr = 0x38
+encoding = "u8"
+store = "click_cfg_a"
+default = 0
+[[sensor.register]]
+addr = 0x38
+encoding = "u8"
+expr = "click_cfg_a"
+
+# CLICK_THS_A (3Ah), default 00h
+[[sensor.write_register]]
+addr = 0x3A
+encoding = "u8"
+store = "click_ths_a"
+default = 0
+[[sensor.register]]
+addr = 0x3A
+encoding = "u8"
+expr = "click_ths_a"
+
+# TIME_LIMIT_A (3Bh), default 00h
+[[sensor.write_register]]
+addr = 0x3B
+encoding = "u8"
+store = "time_limit_a"
+default = 0
+[[sensor.register]]
+addr = 0x3B
+encoding = "u8"
+expr = "time_limit_a"
+
+# TIME_LATENCY_A (3Ch), default 00h
+[[sensor.write_register]]
+addr = 0x3C
+encoding = "u8"
+store = "time_latency_a"
+default = 0
+[[sensor.register]]
+addr = 0x3C
+encoding = "u8"
+expr = "time_latency_a"
+
+# TIME_WINDOW_A (3Dh), default 00h
+[[sensor.write_register]]
+addr = 0x3D
+encoding = "u8"
+store = "time_window_a"
+default = 0
+[[sensor.register]]
+addr = 0x3D
+encoding = "u8"
+expr = "time_window_a"
+
+# Act_THS_A (3Eh), default 00h
+[[sensor.write_register]]
+addr = 0x3E
+encoding = "u8"
+store = "act_ths_a"
+default = 0
+[[sensor.register]]
+addr = 0x3E
+encoding = "u8"
+expr = "act_ths_a"
+
+# Act_DUR_A (3Fh), default 00h
+[[sensor.write_register]]
+addr = 0x3F
+encoding = "u8"
+store = "act_dur_a"
+default = 0
+[[sensor.register]]
+addr = 0x3F
+encoding = "u8"
+expr = "act_dur_a"
+
+# Interrupt sources INT1_SRC_A (31h), INT2_SRC_A (35h) and CLICK_SRC_A (39h) read their default 00h: no event engine is modelled.
+[[sensor.register]]
+addr = 0x31
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x35
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x39
+const = [0x00]
+
+# STATUS_REG_A (27h): XDA bit 0, YDA bit 1, ZDA bit 2, ZYXDA bit 3. Set while ODR != 0 for each enabled axis (ODR timing is not modelled).
+[[sensor.register]]
+addr = 0x27
+encoding = "u8"
+expr = "if(odr_a > 0.0, xen + 2.0 * yen + 4.0 * zen + 8.0 * xen * yen * zen, 0.0)"
+
+# Output registers, low byte first (BLE = 0), 16-bit two's complement LEFT-JUSTIFIED (Section 8.14): the 12-bit (HR), 10-bit
+# (normal) or 8-bit (low-power) digit sits in the top bits, so the word is digit x 16, x 64 or x 256. Digit sensitivity is
+# Table 3 (typical, FS +-2/4/8/16 g): HR 0.98/1.95/3.9/11.72, normal 3.9/7.82/15.63/46.9, low-power 15.63/31.26/62.52/187.58
+# mg/LSB. A disabled axis or ODR = 0 (power-down) reads zero. BLE = 1 big-endian output is not modelled.
+[[sensor.register]]
+addr = 0x28
+encoding = "i16_le"
+expr = "if(odr_a > 0.0, xen * (if(lpen == 1.0, 256.0, if(hr == 1.0, 16.0, 64.0))) * (accel_x_g * 1000.0 / (if(lpen == 1.0, if(fs_a == 0.0, 15.63, if(fs_a == 1.0, 31.26, if(fs_a == 2.0, 62.52, 187.58))), if(hr == 1.0, if(fs_a == 0.0, 0.98, if(fs_a == 1.0, 1.95, if(fs_a == 2.0, 3.9, 11.72))), if(fs_a == 0.0, 3.9, if(fs_a == 1.0, 7.82, if(fs_a == 2.0, 15.63, 46.9))))))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2A
+encoding = "i16_le"
+expr = "if(odr_a > 0.0, yen * (if(lpen == 1.0, 256.0, if(hr == 1.0, 16.0, 64.0))) * (accel_y_g * 1000.0 / (if(lpen == 1.0, if(fs_a == 0.0, 15.63, if(fs_a == 1.0, 31.26, if(fs_a == 2.0, 62.52, 187.58))), if(hr == 1.0, if(fs_a == 0.0, 0.98, if(fs_a == 1.0, 1.95, if(fs_a == 2.0, 3.9, 11.72))), if(fs_a == 0.0, 3.9, if(fs_a == 1.0, 7.82, if(fs_a == 2.0, 15.63, 46.9))))))), 0.0)"
+
+[[sensor.register]]
+addr = 0x2C
+encoding = "i16_le"
+expr = "if(odr_a > 0.0, zen * (if(lpen == 1.0, 256.0, if(hr == 1.0, 16.0, 64.0))) * (accel_z_g * 1000.0 / (if(lpen == 1.0, if(fs_a == 0.0, 15.63, if(fs_a == 1.0, 31.26, if(fs_a == 2.0, 62.52, 187.58))), if(hr == 1.0, if(fs_a == 0.0, 0.98, if(fs_a == 1.0, 1.95, if(fs_a == 2.0, 3.9, 11.72))), if(fs_a == 0.0, 3.9, if(fs_a == 1.0, 7.82, if(fs_a == 2.0, 15.63, 46.9))))))), 0.0)"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 5, Vdd min (no POR voltage is published)
+idle_a = 0.000002             # Table 5, Idd_PD power-down
+read_a = 0.0000126            # Table 5, LA_Idd_NM, 50 Hz ODR in normal mode
+write_a = 0.0000126
+low_power_a = 0.000002        # Table 5, Idd_PD
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "power_down_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "register_map", "who_am_i_read", "reset_values", "configuration_register_readback", "accelerometer_data", "full_scale_range_scaling", "operating_mode_resolution", "axis_enable_gating", "power_down_gating", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["magnetometer_slave_0x1e", "spi_register_map", "temperature_output_offset_not_printed", "fifo", "interrupt_engine", "click_and_activity_detection", "high_pass_filter", "self_test", "big_endian_output", "odr_timing", "per_odr_supply_current", "boot_register_restore"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/lsm303agr.pdf"
+title = "STMicroelectronics LSM303AGR ultra-compact high-performance eCompass module, DocID027765 Rev 11, August 2022"
+locator = "Table 2 Pin description; Table 3 Sensor characteristics; Table 5 Electrical characteristics; Table 9 Absolute maximum ratings; Section 4.2.1 Accelerometer power modes; Section 6.1 I2C serial interface, Tables 24 and 25; Table 26 Register address map; Section 8 Register description"
+sha256 = "97635d4cc37b14b46a1ffdbda9349d2e75b9604248d03b77d4e1971171f813da"
+
+# Table 5 as printed, in fractions of Vdd_IO.
+[[models.source.characteristic]]
+parameter = "VIH digital high-level input voltage"
+min = 0.7
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, CS_XL, CS_MAG)"
+basis = "Table 5, 0.7 x Vdd_IO min"
+
+[[models.source.characteristic]]
+parameter = "VIL digital low-level input voltage"
+max = 0.3
+unit = "VDDIO"
+conditions = "digital inputs (SCL, SDA, CS_XL, CS_MAG)"
+basis = "Table 5, 0.3 x Vdd_IO max"
+
+# -----------------------------------------------------------------------------
+# ICM-20948: TDK InvenSense 9-axis MotionTracking device (3-axis gyroscope, 3-axis
+# accelerometer, AK09916 3-axis magnetometer), 24-pin QFN 3 x 3 x 1 mm.
+#
+# Source: TDK InvenSense ICM-20948 datasheet DS-000189 Revision 1.6. Section 3.1 and 3.2
+#   (sensitivity), Table 4 D.C. electrical characteristics, Table 5 A.C. electrical
+#   characteristics (I2C address, logic levels, temperature sensor), Table 9 Absolute
+#   maximum ratings, Table 10 Signal descriptions, Section 6.2 I2C interface, Section 7
+#   register map, Section 8 User Bank 0 registers, Sections 10.2 and 10.15 (User Bank 2).
+#
+# BANK 0 ONLY, AND THE MAP IS NOT BANKED. The part has four register banks selected by
+# REG_BANK_SEL (7Fh, USER_BANK bits 5:4); the same address means different registers in
+# different banks. The sensor-spec has no bank concept: a card is one flat 8-bit address
+# space. This card therefore models User Bank 0 (identity, power management, status
+# and the 16-bit data registers) as a flat map, plus the two User Bank 2 registers that
+# set the full-scale ranges (GYRO_CONFIG_1 at 01h and ACCEL_CONFIG at 14h) because bank 0
+# leaves those addresses unused and every driver sets the ranges there. A write made
+# while another bank is selected lands on the bank-0 register at the same address:
+# bank 2 writes to 03h/05h/06h/07h and bank 3 writes to 03h/05h/06h/07h/0Fh/10h-13h
+# alias USER_CTRL, LP_CONFIG, PWR_MGMT_1, PWR_MGMT_2, INT_PIN_CFG and INT_ENABLE*. Only
+# PWR_MGMT_1 and PWR_MGMT_2 feed the data registers. Bank 1, bank 2 offset registers
+# and the bank-3 auxiliary I2C master are not modelled. SCHEMA GAP: bank-qualified
+# registers.
+#
+# I2C PERSONALITY ONLY. AD0 (pin 9, shared with SDO) sets the address LSB: AD0 low gives
+# 1101000 (0x68), AD0 high 1101001 (0x69) (Table 5 and Section 6.2). The SPI personality
+# is the same map on the same pads, but a card carries one [models.peripheral]. AD0 is a
+# digital input with no stated pull, so it is must_not_float.
+#
+# THE MAGNETOMETER is a separate AK09916 die behind the auxiliary I2C master (pins 7 and
+# 21); it is reached through the bank-3 slave registers and EXT_SLV_SENS_DATA_xx, none of
+# which is modelled.
+#
+# LOGIC LEVELS are fractions of VDDIO (Table 5: VIH 0.7 x VDDIO, VIL 0.3 x VDDIO, VOH
+# 0.9 x VDDIO and VOL 0.1 x VDDIO at RLOAD = 1 Mohm), evaluated at the table's
+# VDDIO = 1.8 V. The I2C pins' own VOL is 0.4 V at 3 mA (open drain).
+#
+# VDDIO IS THE TIGHT RAIL: operating 1.71 V to 1.95 V and absolute maximum 2.5 V
+# (Table 4 and Table 9), unlike VDD (1.71 V to 3.6 V, absolute maximum 4 V).
+#
+# Not modelled: the SPI personality, banks 1 to 3 (offsets, self-test, the auxiliary
+# I2C master, sample-rate dividers), the FIFO and DMP, the interrupt engine, wake-on-
+# motion, the digital low-pass filters, ODR timing, the magnetometer, and the register
+# restore that DEVICE_RESET performs (it reads back clear).
+[[models]]
+id = "icm20948"
+kind = "digital"
+description = "TDK InvenSense ICM-20948 9-axis motion sensor, QFN-24 (strap-selected I2C user-bank-0 register map: WHO_AM_I 0xEA, power management, 16-bit accelerometer/gyroscope/temperature data; pad map, logic levels and supply draw)"
+
+[models.match]
+# The sensor module. ICM-20649, ICM-20600, ICM-20602, ICM-20689, ICM-42605 and MPU-9250 are different dies.
+value_re = "(?i)^ICM-?20948$"
+
+[models.params]
+voh   = 1.62     # Table 5, VOH 0.9 x VDDIO min (RLOAD = 1 Mohm) at VDDIO = 1.8 V
+vol   = 0.18     # Table 5, VOL1 0.1 x VDDIO max (RLOAD = 1 Mohm) at VDDIO = 1.8 V
+vih   = 1.26     # Table 5, VIH 0.7 x VDDIO min at VDDIO = 1.8 V
+vil   = 0.54     # Table 5, VIL 0.3 x VDDIO max at VDDIO = 1.8 V
+supply_static_ua = 8.0     # Table 4, full-chip sleep mode (the reset state: PWR_MGMT_1 SLEEP = 1)
+supply_pin = "13"          # VDD
+gnd_pin    = "18"          # GND
+warning = "I2C user-bank-0 register map only (WHO_AM_I, power management, data); the map is not banked, the SPI personality, banks 1 to 3, FIFO/DMP and the magnetometer are not modelled"
+must_not_float_roles = "ad0"
+
+[models.pins]
+# Table 10 Signal descriptions, QFN-24.
+"1"  = "nc"
+"2"  = "nc2"
+"3"  = "nc3"
+"4"  = "nc4"
+"5"  = "nc5"
+"6"  = "nc6"
+"7"  = "aux_cl"   # I2C master serial clock, for external sensors
+"8"  = "vddio"    # digital I/O supply voltage
+"9"  = "ad0"      # I2C slave address LSB (AD0) / SPI serial data output (SDO)
+"10" = "regout"   # regulator filter capacitor
+"11" = "fsync"    # frame synchronisation input, GND if unused
+"12" = "int1"
+"13" = "vdd"
+"14" = "nc7"
+"15" = "nc8"
+"16" = "nc9"
+"17" = "nc10"
+"18" = "gnd"
+"19" = "resv"     # reserved, do not connect
+"20" = "resv2"    # reserved, connect to GND
+"21" = "aux_da"   # I2C master serial data, for external sensors
+"22" = "ncs"      # chip select (SPI mode only)
+"23" = "scl"      # I2C SCL / SPI SCLK
+"24" = "sda"      # I2C SDA / SPI SDI
+
+[models.ratings]
+# Table 9: VDD -0.5 V to +4 V; VDDIO -0.3 V to +2.5 V; inputs -0.5 V to VDDIO + 0.5 V.
+max_voltage_v = 4.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.0
+basis = "TDK DS-000189 Rev 1.6, Table 4 D.C. Electrical Characteristics, VDD 1.71 V min, 1.8 V typ, 3.6 V max; Table 9 Absolute Maximum Ratings, VDD -0.5 V to +4 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.71
+max_v = 1.95
+abs_max_v = 2.5
+basis = "TDK DS-000189 Rev 1.6, Table 4, VDDIO 1.71 V min, 1.8 V typ, 1.95 V max; Table 9, VDDIO -0.3 V to +2.5 V"
+
+# Table 5: AD0 = 0 gives 1101000 (0x68), AD0 = 1 gives 1101001 (0x69).
+[models.peripheral]
+kind = "register_map"
+address_select_role = "ad0"
+address_when_low = 0x68
+address_when_high = 0x69
+spec_toml = '''
+[sensor]
+name = "ICM-20948 user bank 0 register map"
+bus = "i2c"
+i2c_address = 0x68
+
+# Stimulus: acceleration in g (flat and still, +1 g on Z is an ASSUMED orientation), angular rate in deg/s and die
+# temperature in degC (the datasheet's 21 degC room-temperature offset is the default, where the output is 0 LSB).
+[[sensor.input]]
+name = "accel_x_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_y_g"
+default = 0.0
+
+[[sensor.input]]
+name = "accel_z_g"
+default = 1.0
+
+[[sensor.input]]
+name = "gyro_x_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_y_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "gyro_z_dps"
+default = 0.0
+
+[[sensor.input]]
+name = "temp_c"
+default = 21.0
+
+# Section 8.1: WHO_AM_I (User Bank 0, 00h) = 0xEA.
+[[sensor.register]]
+addr = 0x00
+const = [0xEA]
+
+# Section 7.1 User Bank 0 and Section 8, reset values. Writable registers read back what was written.
+# USER_CTRL (03h), reset 00h
+[[sensor.write_register]]
+addr = 0x03
+encoding = "u8"
+store = "user_ctrl"
+default = 0
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "user_ctrl"
+
+# LP_CONFIG (05h), reset 40h
+[[sensor.write_register]]
+addr = 0x05
+encoding = "u8"
+store = "lp_config"
+default = 64
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "lp_config"
+
+# PWR_MGMT_1 (06h), reset 41h: DEVICE_RESET bit 7 (auto-clears), SLEEP bit 6, LP_EN bit 5, TEMP_DIS bit 3, CLKSEL bits 2:0
+[[sensor.write_register]]
+addr = 0x06
+encoding = "u8"
+store = "pwr_mgmt_1"
+default = 65
+[[sensor.write_register.field]]
+name = "pm_reset"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "pm_sleep"
+bits = [6, 6]
+[[sensor.write_register.field]]
+name = "pm_tempdis"
+bits = [3, 3]
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "if(pm_reset == 1.0, 65.0, pwr_mgmt_1)"
+
+# PWR_MGMT_2 (07h), reset 00h: DISABLE_ACCEL bits 5:3 and DISABLE_GYRO bits 2:0 (111 = disabled, 000 = on)
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u8"
+store = "pwr_mgmt_2"
+default = 0
+[[sensor.write_register.field]]
+name = "dis_accel"
+bits = [5, 3]
+[[sensor.write_register.field]]
+name = "dis_gyro"
+bits = [2, 0]
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "pwr_mgmt_2"
+
+# INT_PIN_CFG (0Fh), reset 00h
+[[sensor.write_register]]
+addr = 0x0F
+encoding = "u8"
+store = "int_pin_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x0F
+encoding = "u8"
+expr = "int_pin_cfg"
+
+# INT_ENABLE (10h), reset 00h
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "int_enable"
+default = 0
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "int_enable"
+
+# INT_ENABLE_1 (11h), reset 00h
+[[sensor.write_register]]
+addr = 0x11
+encoding = "u8"
+store = "int_enable_1"
+default = 0
+[[sensor.register]]
+addr = 0x11
+encoding = "u8"
+expr = "int_enable_1"
+
+# INT_ENABLE_2 (12h), reset 00h
+[[sensor.write_register]]
+addr = 0x12
+encoding = "u8"
+store = "int_enable_2"
+default = 0
+[[sensor.register]]
+addr = 0x12
+encoding = "u8"
+expr = "int_enable_2"
+
+# INT_ENABLE_3 (13h), reset 00h
+[[sensor.write_register]]
+addr = 0x13
+encoding = "u8"
+store = "int_enable_3"
+default = 0
+[[sensor.register]]
+addr = 0x13
+encoding = "u8"
+expr = "int_enable_3"
+
+# FIFO_EN_1 (66h), reset 00h
+[[sensor.write_register]]
+addr = 0x66
+encoding = "u8"
+store = "fifo_en_1"
+default = 0
+[[sensor.register]]
+addr = 0x66
+encoding = "u8"
+expr = "fifo_en_1"
+
+# FIFO_EN_2 (67h), reset 00h
+[[sensor.write_register]]
+addr = 0x67
+encoding = "u8"
+store = "fifo_en_2"
+default = 0
+[[sensor.register]]
+addr = 0x67
+encoding = "u8"
+expr = "fifo_en_2"
+
+# FIFO_RST (68h), reset 00h
+[[sensor.write_register]]
+addr = 0x68
+encoding = "u8"
+store = "fifo_rst"
+default = 0
+[[sensor.register]]
+addr = 0x68
+encoding = "u8"
+expr = "fifo_rst"
+
+# FIFO_MODE (69h), reset 00h
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "fifo_mode"
+default = 0
+[[sensor.register]]
+addr = 0x69
+encoding = "u8"
+expr = "fifo_mode"
+
+# FIFO_CFG (76h), reset 00h
+[[sensor.write_register]]
+addr = 0x76
+encoding = "u8"
+store = "fifo_cfg"
+default = 0
+[[sensor.register]]
+addr = 0x76
+encoding = "u8"
+expr = "fifo_cfg"
+
+# REG_BANK_SEL (7Fh, in every bank), reset 00h: USER_BANK bits 5:4. Recorded and read back; the map is NOT banked (see the card header).
+[[sensor.write_register]]
+addr = 0x7F
+encoding = "u8"
+store = "reg_bank_sel"
+default = 0
+[[sensor.write_register.field]]
+name = "user_bank"
+bits = [5, 4]
+[[sensor.register]]
+addr = 0x7F
+encoding = "u8"
+expr = "reg_bank_sel"
+
+# User Bank 2 registers at addresses bank 0 leaves unused, so they cannot alias a bank-0 register: GYRO_CONFIG_1 (01h) reset 01h
+# with GYRO_FS_SEL bits 2:1, and ACCEL_CONFIG (14h) reset 01h with ACCEL_FS_SEL bits 2:1 (Sections 10.2 and 10.15). They set the
+# data scale below. Bank 3 uses 14h too (I2C_SLV4_REG), so a bank-3 write there would alias ACCEL_CONFIG.
+# GYRO_CONFIG_1 (bank 2, 01h)
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u8"
+store = "gyro_config_1"
+default = 1
+[[sensor.write_register.field]]
+name = "gyro_fs"
+bits = [2, 1]
+[[sensor.register]]
+addr = 0x01
+encoding = "u8"
+expr = "gyro_config_1"
+
+# ACCEL_CONFIG (bank 2, 14h)
+[[sensor.write_register]]
+addr = 0x14
+encoding = "u8"
+store = "accel_config"
+default = 1
+[[sensor.write_register.field]]
+name = "accel_fs"
+bits = [2, 1]
+[[sensor.register]]
+addr = 0x14
+encoding = "u8"
+expr = "accel_config"
+
+# Event/status registers read their reset value 00h (no event engine, auxiliary master or FIFO is modelled).
+[[sensor.register]]
+addr = 0x17
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x19
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1A
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1B
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x1C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x28
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x29
+const = [0x00]
+
+# FIFO_COUNTH / FIFO_COUNTL (70h, 71h): the FIFO stays empty
+[[sensor.register]]
+addr = 0x70
+const = [0x00, 0x00]
+
+# DATA_RDY_STATUS (74h) RAW_DATA_RDY[3:0]: set while a sensor is running (output rates are not modelled).
+[[sensor.register]]
+addr = 0x74
+encoding = "u8"
+expr = "if(((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_accel == 7.0, 0.0, 1.0)) + ((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_gyro == 7.0, 0.0, 1.0)) > 0.0, 1.0, 0.0)"
+
+# Output registers, high byte first, 16-bit two's complement (Sections 8.18 to 8.31). Sensitivity at the reset full scale and by
+# GYRO_FS_SEL / ACCEL_FS_SEL: accelerometer 16384/8192/4096/2048 LSB/g, gyroscope 131/65.5/32.8/16.4 LSB/dps (Tables 1 and 2);
+# temperature TEMP_degC = (TEMP_OUT - RoomTemp_Offset)/333.87 + 21 degC with a 0 LSB offset (Table 5). Each reads zero while its
+# sensor is asleep, in reset or disabled.
+[[sensor.register]]
+addr = 0x2D
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_accel == 7.0, 0.0, 1.0)) * accel_x_g * if(accel_fs == 0.0, 16384.0, if(accel_fs == 1.0, 8192.0, if(accel_fs == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x2F
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_accel == 7.0, 0.0, 1.0)) * accel_y_g * if(accel_fs == 0.0, 16384.0, if(accel_fs == 1.0, 8192.0, if(accel_fs == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x31
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_accel == 7.0, 0.0, 1.0)) * accel_z_g * if(accel_fs == 0.0, 16384.0, if(accel_fs == 1.0, 8192.0, if(accel_fs == 2.0, 4096.0, 2048.0)))"
+
+[[sensor.register]]
+addr = 0x33
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_gyro == 7.0, 0.0, 1.0)) * gyro_x_dps * if(gyro_fs == 0.0, 131.0, if(gyro_fs == 1.0, 65.5, if(gyro_fs == 2.0, 32.8, 16.4)))"
+
+[[sensor.register]]
+addr = 0x35
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_gyro == 7.0, 0.0, 1.0)) * gyro_y_dps * if(gyro_fs == 0.0, 131.0, if(gyro_fs == 1.0, 65.5, if(gyro_fs == 2.0, 32.8, 16.4)))"
+
+[[sensor.register]]
+addr = 0x37
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (if(dis_gyro == 7.0, 0.0, 1.0)) * gyro_z_dps * if(gyro_fs == 0.0, 131.0, if(gyro_fs == 1.0, 65.5, if(gyro_fs == 2.0, 32.8, 16.4)))"
+
+[[sensor.register]]
+addr = 0x39
+encoding = "i16_be"
+expr = "((1.0 - pm_sleep) * (1.0 - pm_reset)) * (1.0 - pm_tempdis) * (temp_c - 21.0) * 333.87"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 4, VDD min (no POR voltage is published)
+idle_a = 0.000008             # Table 4, full-chip sleep mode
+read_a = 0.00311              # Table 4, 9-axis low-noise mode with the compass in continuous mode
+write_a = 0.00311
+low_power_a = 0.000008        # Table 4, full-chip sleep mode
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "sleep_supply_current", "absolute_ratings", "supply_ranges", "i2c_address_strap", "register_map_bank0", "who_am_i_read", "reset_values", "power_management_readback", "device_reset_self_clear", "accelerometer_gyroscope_temperature_data", "full_scale_range_scaling", "sensor_disable_gating", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["register_banks_1_to_3", "bank_qualified_registers", "spi_register_map", "magnetometer_ak09916", "auxiliary_i2c_master", "fifo", "dmp", "interrupt_engine", "wake_on_motion", "digital_low_pass_filters", "sample_rate_dividers", "self_test", "odr_timing", "per_mode_supply_current", "device_reset_register_restore"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://invensense.tdk.com/download-pdf/icm-20948-datasheet/"
+title = "TDK InvenSense ICM-20948 World's Lowest Power 9-Axis MEMS MotionTracking Device, DS-000189 Revision 1.6"
+locator = "Table 1 and Table 2 sensitivity; Table 4 D.C. Electrical Characteristics; Table 5 A.C. Electrical Characteristics; Table 9 Absolute Maximum Ratings; Table 10 Signal Descriptions; Section 6.2 I2C interface; Section 7.1 User Bank 0 register map; Section 8 register descriptions; Sections 10.2 and 10.15"
+sha256 = "0588625f4f1d6d27382a4322f48073dc0ce569e537c63786b13aab3eeb76b718"
+
+# Table 5 as printed, in fractions of VDDIO.
+[[models.source.characteristic]]
+parameter = "VIH digital high-level input voltage"
+min = 0.7
+unit = "VDDIO"
+conditions = "digital inputs (FSYNC, AD0, SCLK, SDI, CS)"
+basis = "Table 5, 0.7 x VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "VIL digital low-level input voltage"
+max = 0.3
+unit = "VDDIO"
+conditions = "digital inputs (FSYNC, AD0, SCLK, SDI, CS)"
+basis = "Table 5, 0.3 x VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "VOH digital output high-level voltage"
+min = 0.9
+unit = "VDDIO"
+conditions = "RLOAD = 1 Mohm, digital outputs (SDO, INT)"
+basis = "Table 5, 0.9 x VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "VOL1 digital output low-level voltage"
+max = 0.1
+unit = "VDDIO"
+conditions = "RLOAD = 1 Mohm, digital outputs (SDO, INT)"
+basis = "Table 5, 0.1 x VDDIO max"
