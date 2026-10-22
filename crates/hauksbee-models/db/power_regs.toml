@@ -11771,7 +11771,7 @@ abs_max_basis = "TI TLV702 SLVSAG6D (July 2019) p.4, 6.1 Absolute Maximum Rating
 # LP5907 (TI SNVS798Q, July 2025): 250 mA ultra-low-noise LDO. SOT-23-5 (DBV, ordering code MFX) and
 # X2SON-4 (DQN, code SNX) cards per orderable voltage. The DSBGA bodies (YKE/YKG/YKM/YCR, codes UVE,
 # UVX, YKGR, A28/A33YKMR) are not carded: their pads are named A1/A2/B1/B2 and the batch has no
-# footprint to test them against. The bare value LP5907-3.3 binds the DBV card.
+# footprint to test them against. A bare LP5907-3.3 names no package (the two bodies number in/out differently), so it stays unresolved.
 # ═════════════════════════════════════════════════════════════════════════════
 
 [[models]]
@@ -12008,7 +12008,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?1[._]2(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?1[._]2(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 1.2   # 1.2 V nominal from the ordering code; tolerance +-3% (5.5 p.5)
@@ -12284,7 +12284,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?1[._]5(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?1[._]5(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 1.5   # 1.5 V nominal from the ordering code; tolerance +-3% (5.5 p.5)
@@ -12560,7 +12560,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?1[._]8(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?1[._]8(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 1.8   # 1.8 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -12836,7 +12836,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?2[._]5(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?2[._]5(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 2.5   # 2.5 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -13112,7 +13112,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?2[._]8(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?2[._]8(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 2.8   # 2.8 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -13388,7 +13388,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?2[._]85(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?2[._]85(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 2.85   # 2.85 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -13664,7 +13664,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?2[._]9(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?2[._]9(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 2.9   # 2.9 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -13940,7 +13940,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?3[._]0(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?3[._]0(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 3.0   # 3.0 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -14216,7 +14216,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?3[._]1(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?3[._]1(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 3.1   # 3.1 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -14492,7 +14492,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?3[._]2(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?3[._]2(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 3.2   # 3.2 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -14768,7 +14768,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?3[._]3(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?3[._]3(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 3.3   # 3.3 V nominal from the ordering code; tolerance +-2% (5.5 p.5)
@@ -15044,7 +15044,7 @@ package = "SOT-23-5"
 basis = "TI LP5907 SNVS798Q (July 2025) p.5, 5.4 Thermal Information, DBV column, RθJC(top)"
 
 [models.match]
-value_re = '(?i)^LP5907(?:MFX)?[-_]?4[._]5(?:/?NOPB)?(?:\.[AB])?$'
+value_re = '(?i)^LP5907MFX[-_]?4[._]5(?:/?NOPB)?(?:\.[AB])?$'
 
 [models.params]
 vout      = 4.5   # 4.5 V nominal from the ordering code; tolerance +-2% (5.5 p.5)

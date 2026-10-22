@@ -51,8 +51,9 @@ fn ams1117_fixed_voltages_bind_their_own_sot223_card() {
             Some(15.0),
             "AMS1117"
         ));
+        let r = resolve_query(Some(value), Some(value), None);
         assert!(
-            !m.references.is_empty() && m.references[0].sha256.is_some(),
+            !r.references.is_empty() && r.references[0].sha256.is_some(),
             "{value}"
         );
     }
@@ -120,13 +121,9 @@ fn tlv700_sot23_and_sc70_share_the_five_pin_card() {
 fn tlv700_wson_is_a_separate_six_pin_card() {
     let m = card("TLV70033DSER");
     assert_pin_map(&m, "tlv70033_dse", &pins("1=in 2=gnd 3=out 4=nc 5=nc 6=en"));
-    // A bare code on a WSON footprint must not borrow the five-pin map.
-    let got = query_id(
-        Some("TLV70033"),
-        Some("TLV70033"),
-        Some("Package_SON:WSON-6-1EP_1.5x1.5mm_P0.5mm"),
-    );
-    assert_ne!(got.as_deref(), Some("tlv70033"));
+    // A DSE order code never takes the five-pin map, and a five-pin code never takes the DSE map.
+    assert_not_in("TLV70033DSER", &["tlv70033"]);
+    assert_not_in("TLV70033DDCR", &["tlv70033_dse"]);
 }
 
 #[test]
@@ -193,13 +190,9 @@ fn lp5907_voltage_codes_belong_to_their_package_only() {
     // 2.8 and 2.85 stay apart.
     assert_binds("LP5907MFX-2.8/NOPB", "lp5907mf_2v8");
     assert_binds("LP5907SNX-2.85/NOPB", "lp5907sn_2v85");
-    // A bare orderable on an X2SON footprint must not take the SOT-23 map.
-    let got = query_id(
-        Some("LP5907-3.3"),
-        Some("LP5907-3.3"),
-        Some("Package_SON:X2SON-4_1x1mm_P0.65mm"),
-    );
-    assert_ne!(got.as_deref(), Some("lp5907mf_3v3"));
+    // A bare value names no package, and the two bodies number IN/OUT differently.
+    assert_unresolved("LP5907-3.3");
+    assert_unresolved("LP5907-3.3/NOPB");
     // Other TI LDOs are not LP5907 cards.
     for v in ["LP5912-3.3", "LP5900SD-3.3", "LP2985-3.3", "TLV70033DDCR"] {
         let got = id_of(v);
