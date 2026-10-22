@@ -1,4 +1,4 @@
-//! Official-parts batch serial_logic: resolution and behaviour tests for the cards added in that batch.
+//! Official-parts batch `serial_logic`: resolution and behaviour tests for the cards added in that batch.
 //!
 //! Section 1 covers the 74-series logic cards in db/logic.toml (74LVC1G02/07/32, 74HC138/139/240/244/373/573).
 //! Every card is resolved by its ordering code, its full pin map is pinned against the datasheet, key params
