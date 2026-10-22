@@ -3898,6 +3898,21 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
         | LintCheck::PowerDomainBusLockup => supply_fix_hint(check),
+        LintCheck::SignalDirection => {
+            "Rewire so each net has one driver and a listener (TX to RX, an output to the other part's input), or add the missing driver."
+        }
+        LintCheck::DebugHeaderPinout => {
+            "Reorder the header to the standard pinout the finding names, or label it as a crossover that needs a matching cable."
+        }
+        LintCheck::SwitchShort => {
+            "Put a resistor in series with the switch, or switch a signal pin that has a pull resistor, not a supply."
+        }
+        LintCheck::PinMuxCapability => {
+            "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it."
+        }
+        LintCheck::SymbolCardPinMismatch => {
+            "Compare the symbol and the card against the datasheet pin table for this package and correct whichever is wrong."
+        }
     })
 }
 
