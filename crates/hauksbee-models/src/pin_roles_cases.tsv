@@ -89,13 +89,16 @@ vdd33_a	*	supply vdd 0
 vdd33_b	*	supply vdd 0
 vdd4	*	supply vdd 0
 vdd5	*	supply vdd 0
+vdd6	*	supply vdd 0
 vdda	*	supply vdda 1
+vdda2	*	supply vdda 0
 vdda33_a	*	supply vdda 0
 vdda33_b	*	supply vdda 0
 vdda33_c	*	supply vdda 0
 vdda33_d	*	supply vdda 0
 vddana	*	supply vddana 1
 vddcore	*	none
+vddd	*	supply vddd 1
 vddcp	*	none
 vddcr	*	none
 vddio	*	supply vddio 1

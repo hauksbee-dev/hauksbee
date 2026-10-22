@@ -2,3 +2,2018 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F411CC/CE, UFQFPN48 (7 x 7 mm, ordering code F411C[CE]U).
+#
+# Source: STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024).
+#   Table 8 pin definitions pp.39-47 (UFQFPN48 column); Table 11 voltage and
+#   Table 12 current limits pp.61-62; Table 13 TJ p.62; Table 14 operating
+#   conditions pp.63-64; Table 53 I/O static characteristics pp.98-99; Table 54
+#   output levels p.101; Table 56 NRST p.104; Table 65 ADC p.114; Table 86 thetaJA
+#   p.140; Table 87 ordering information p.141 (package letter: H UFBGA,
+#   T LQFP, U UFQFPN, Y WLCSP).
+#
+# ONE CARD PER PACKAGE. The five packages number their pads differently, so the
+# pad map is true only on the package it was read from and the footprint rule
+# gates the card (a bare ordering code names no footprint and keeps the family
+# routing). The datasheet prints NO LQFP48 package for the F411.
+#
+# BACKEND. renode:stm32f4 is the generic STM32F4 platform (an F407 core), not an
+# F411-specific model; the card claims no co-sim fidelity beyond what the
+# existing stm32f401c card claims.
+[[models]]
+id = "stm32f411c_ufqfpn48"
+kind = "mcu"
+description = "STM32F411CC/CE, UFQFPN48 (7 x 7 mm, ordering code F411C[CE]U)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/stm32f411ce.pdf"
+title = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024); the sha256 is of the copy read from the third-party mirror mischianti.org/wp-content/uploads/2026/09/stm32f411ce_datasheet.pdf because st.com refuses automated download"
+locator = "Table 8 pin definitions pp.39-47 (UFQFPN48 column); Tables 11-14 pp.61-64; Table 53 pp.98-99; Table 54 p.101; Table 56 p.104; Table 65 p.114; Table 86 p.140; Table 87 p.141"
+sha256 = "ec4a7521b0074f4ad5ca2d6a59d00886c946658014a456d364089e75ae008ece"
+[[models.source.pinout]]
+package = "UFQFPN48"
+pins = { "1" = "VBAT", "2" = "PC13-ANTI_TAMP", "3" = "PC14-OSC32_IN", "4" = "PC15-OSC32_OUT", "5" = "PH0 - OSC_IN", "6" = "PH1 - OSC_OUT", "7" = "NRST", "8" = "VSSA/VREF-", "9" = "VDDA/VREF+", "10" = "PA0-WKUP", "11" = "PA1", "12" = "PA2", "13" = "PA3", "14" = "PA4", "15" = "PA5", "16" = "PA6", "17" = "PA7", "18" = "PB0", "19" = "PB1", "20" = "PB2", "21" = "PB10", "22" = "VCAP_1", "23" = "VSS", "24" = "VDD", "25" = "PB12", "26" = "PB13", "27" = "PB14", "28" = "PB15", "29" = "PA8", "30" = "PA9", "31" = "PA10", "32" = "PA11", "33" = "PA12", "34" = "PA13", "35" = "VSS", "36" = "VDD", "37" = "PA14", "38" = "PA15", "39" = "PB3", "40" = "PB4", "41" = "PB5", "42" = "PB6", "43" = "PB7", "44" = "BOOT0", "45" = "PB8", "46" = "PB9", "47" = "VSS", "48" = "VDD" }
+
+[models.match]
+value_re = '(?i)^STM32F411C[CE](U[0-9x]?(TR)?)?$'
+footprint_re = '(?i)(^|[:_])(UFQFPN|V?QFN)[-_]?48([^0-9]|$)'
+
+[models.params]
+backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"   # p.20: on reset the 16 MHz internal RC oscillator is selected
+# Table 56 NRST weak pull-up RPU VIN = VSS: min 30, typ 40, max 50 kohm. Stored as the minimum.
+reset_pull_up_ohms = 30000.0
+# Table 65 ADC characteristics RAIN, external input impedance, max 50 kohm (the
+# sampling-time dependent limit of its Equation 1 is lower at short sampling times).
+max_adc_source_impedance_ohms = 50000.0
+
+[models.pins]
+# Table 8, UFQFPN48 column. Repeated supplies carry distinct numbered roles.
+"1" = "vbat"                # VBAT; backup domain supply (Table 14: 1.65-3.6 V)
+"2" = "pc13_anti_tamp"      # PC13-ANTI_TAMP
+"3" = "pc14_osc32_in"       # PC14-OSC32_IN; LSE crystal in
+"4" = "pc15_osc32_out"      # PC15-OSC32_OUT; LSE crystal out
+"5" = "ph0_osc_in"          # PH0 - OSC_IN; HSE crystal / clock in
+"6" = "ph1_osc_out"         # PH1 - OSC_OUT; HSE crystal out
+"7" = "reset"               # NRST; NRST, active low, embedded weak pull-up (Table 53, Table 56)
+"8" = "vssa"                # VSSA/VREF-
+"9" = "vdda"                # VDDA/VREF+
+"10" = "pa0_wkup"           # PA0-WKUP
+"11" = "pa1"                # PA1
+"12" = "pa2"                # PA2
+"13" = "pa3"                # PA3
+"14" = "pa4"                # PA4
+"15" = "pa5"                # PA5
+"16" = "pa6"                # PA6
+"17" = "pa7"                # PA7
+"18" = "pb0"                # PB0
+"19" = "pb1"                # PB1
+"20" = "pb2_boot1"          # PB2; BOOT1 in the additional-functions column of Table 8
+"21" = "pb10"               # PB10
+"22" = "vcap1"              # VCAP_1; 1.2 V regulator output decoupling pin (Table 14 V12)
+"23" = "vss"                # VSS
+"24" = "vdd"                # VDD
+"25" = "pb12"               # PB12
+"26" = "pb13"               # PB13
+"27" = "pb14"               # PB14
+"28" = "pb15"               # PB15
+"29" = "pa8"                # PA8
+"30" = "pa9"                # PA9
+"31" = "pa10"               # PA10
+"32" = "pa11"               # PA11
+"33" = "pa12"               # PA12
+"34" = "pa13"               # PA13
+"35" = "vss2"               # VSS
+"36" = "vdd2"               # VDD
+"37" = "pa14"               # PA14
+"38" = "pa15"               # PA15
+"39" = "pb3"                # PB3
+"40" = "pb4"                # PB4
+"41" = "pb5"                # PB5
+"42" = "pb6"                # PB6
+"43" = "pb7"                # PB7
+"44" = "boot0"              # BOOT0; BOOT0 dedicated boot pin (Table 8: type I, structure B)
+"45" = "pb8"                # PB8
+"46" = "pb9"                # PB9
+"47" = "vss3"               # VSS
+"48" = "vdd3"               # VDD
+
+[models.pin_capability.adc]
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 8 pin definitions pp.39-47 (UFQFPN48 column): the ADC1_n channel named in each pin's additional-functions column; pads not listed carry none"
+[models.pin_capability.adc.pads]
+"10" = "ADC1_IN0"
+"11" = "ADC1_IN1"
+"12" = "ADC1_IN2"
+"13" = "ADC1_IN3"
+"14" = "ADC1_IN4"
+"15" = "ADC1_IN5"
+"16" = "ADC1_IN6"
+"17" = "ADC1_IN7"
+"18" = "ADC1_IN8"
+"19" = "ADC1_IN9"
+
+[models.ratings]
+max_pin_current_a = 0.025    # Table 12 IIO: output current sunk or sourced by any I/O pin, 25 mA
+max_current_a = 0.16         # Table 12 sum of IVDD over all VDD_x lines, 160 mA
+max_voltage_v = 4.0          # Table 11 VDD-VSS (VDDA, VDD and VBAT) -0.3 to 4.0 V
+max_junction_temp_c = 130.0  # Table 13 TJ maximum 130 C
+theta_ja_c_per_w = 32.0        # Table 86 junction-ambient, UFQFPN48
+
+# Table 14 p.63 VDD 1.7 to 3.6 V. Note (1): the 1.7 V minimum is with an external power supply
+# supervisor. Table 11 p.61 VDD-VSS -0.3 to 4.0 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDD standard operating voltage 1.7 to 3.6 V (note 1: 1.7 V minimum is with an external power supply supervisor)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage VDD-VSS (including VDDA, VDD and VBAT) -0.3 to 4.0 V"
+
+# Table 14: VDDA must be the same potential as VDD; 1.7-2.4 V limits the ADC to 1.2 Msps.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDDA analog operating voltage 1.7 to 3.6 V (ADC limited to 1.2 Msps below 2.4 V; must be the same potential as VDD, note 4 allows 300 mV between them during power-up and power-down)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VDDA) -0.3 to 4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VBAT backup operating voltage 1.65 to 3.6 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VBAT) -0.3 to 4.0 V"
+
+# BOOT0 alone is rated to 9 V (Table 11 VSS to 9.0 V; Table 14 0 to 9 V), whatever VDD is.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["boot0"]
+max_v = 9.0
+abs_max_v = 9.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.64 VIN input voltage on the BOOT0 pin 0 to 9 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 VIN input voltage for BOOT0 VSS to 9.0 V"
+
+# BOOT0 (Table 8 pp.39-47: dedicated BOOT0 pin). The datasheet gives BOOT0's input
+# thresholds (Table 53) but NO boot-mode table: it defers boot selection to the
+# reference manual and AN2606, which were not obtainable for this batch, so the
+# normal-boot polarity and BOOT0's internal pull are ABSENT here (level "defined",
+# internal_pull left unknown) rather than recalled from the F401 card.
+[[models.straps]]
+role = "boot0"
+level = "defined"
+boot_select = true
+vil = [0.1, 0.1]     # Table 53 BOOT0 VIL max 0.1 VDD + 0.1 V
+vih = [0.17, 0.7]    # Table 53 BOOT0 VIH min 0.17 VDD + 0.7 V
+note = "BOOT0 selects the boot memory at reset; DS10314 prints no boot-mode table, so the normal-boot level is not asserted"
+
+# NRST: Table 8 pp.39-47; Table 53 NRST VIL max 0.3 VDD, VIH min 0.7 VDD;
+# Table 56 p.104 weak pull-up RPU 30/40/50 kohm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+note = "NRST is active low with an embedded weak pull-up (Table 56 RPU 30-50 kohm); held low it keeps the part in reset"
+
+[[models.source.characteristic]]
+parameter = "rpu_weak_pull_up_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VSS, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-up equivalent resistor RPU, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "rpd_weak_pull_down_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VDD, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-down equivalent resistor RPD, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "vol_output_low_voltage"
+max = 0.4
+unit = "V"
+conditions = "CMOS port, IIO = +8 mA"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 54 p.101 VOL output low level voltage, max column"
+
+[[models.source.characteristic]]
+parameter = "ilkg_io_input_leakage_current"
+max = 1.0
+unit = "uA"
+conditions = "VSS <= VIN <= VDD, I/O input leakage"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current Ilkg, max column (+/-1)"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
+missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F411CC/CE, WLCSP49 (ordering code F411C[CE]Y).
+#
+# Source: STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024).
+#   Table 8 pin definitions pp.39-47 (WLCSP49 column); Table 11 voltage and
+#   Table 12 current limits pp.61-62; Table 13 TJ p.62; Table 14 operating
+#   conditions pp.63-64; Table 53 I/O static characteristics pp.98-99; Table 54
+#   output levels p.101; Table 56 NRST p.104; Table 65 ADC p.114; Table 86 thetaJA
+#   p.140; Table 87 ordering information p.141 (package letter: H UFBGA,
+#   T LQFP, U UFQFPN, Y WLCSP).
+#
+# ONE CARD PER PACKAGE. The five packages number their pads differently, so the
+# pad map is true only on the package it was read from and the footprint rule
+# gates the card (a bare ordering code names no footprint and keeps the family
+# routing). The datasheet prints NO LQFP48 package for the F411.
+#
+# BACKEND. renode:stm32f4 is the generic STM32F4 platform (an F407 core), not an
+# F411-specific model; the card claims no co-sim fidelity beyond what the
+# existing stm32f401c card claims.
+[[models]]
+id = "stm32f411c_wlcsp49"
+kind = "mcu"
+description = "STM32F411CC/CE, WLCSP49 (ordering code F411C[CE]Y)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/stm32f411ce.pdf"
+title = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024); the sha256 is of the copy read from the third-party mirror mischianti.org/wp-content/uploads/2026/09/stm32f411ce_datasheet.pdf because st.com refuses automated download"
+locator = "Table 8 pin definitions pp.39-47 (WLCSP49 column); Tables 11-14 pp.61-64; Table 53 pp.98-99; Table 54 p.101; Table 56 p.104; Table 65 p.114; Table 86 p.140; Table 87 p.141"
+sha256 = "ec4a7521b0074f4ad5ca2d6a59d00886c946658014a456d364089e75ae008ece"
+[[models.source.pinout]]
+package = "WLCSP49"
+pins = { "B7" = "VBAT", "D5" = "PC13-ANTI_TAMP", "C7" = "PC14-OSC32_IN", "C6" = "PC15-OSC32_OUT", "D7" = "PH0 - OSC_IN", "D6" = "PH1 - OSC_OUT", "E7" = "NRST", "E6" = "VSSA/VREF-", "F7" = "VDDA/VREF+", "F6" = "PA0-WKUP", "G7" = "PA1", "E5" = "PA2", "E4" = "PA3", "G6" = "PA4", "F5" = "PA5", "F4" = "PA6", "F3" = "PA7", "G5" = "PB0", "G4" = "PB1", "G3" = "PB2", "E3" = "PB10", "G2" = "VCAP_1", "D3" = "VSS", "F2" = "VDD", "E2" = "PB12", "G1" = "PB13", "F1" = "PB14", "E1" = "PB15", "D1" = "PA8", "D2" = "PA9", "C2" = "PA10", "C1" = "PA11", "C3" = "PA12", "B3" = "PA13", "B1" = "VSS", "B2" = "VDD", "A1" = "PA14", "A2" = "PA15", "A3" = "PB3", "A4" = "PB4", "B4" = "PB5", "C4" = "PB6", "D4" = "PB7", "A5" = "BOOT0", "B5" = "PB8", "C5" = "PB9", "A6" = "VSS", "B6" = "PDR_ON", "A7" = "VDD" }
+
+[models.match]
+value_re = '(?i)^STM32F411C[CE](Y[0-9x]?(TR)?)?$'
+footprint_re = '(?i)WLCSP[-_]?49([^0-9]|$)'
+
+[models.params]
+backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"   # p.20: on reset the 16 MHz internal RC oscillator is selected
+# Table 56 NRST weak pull-up RPU VIN = VSS: min 30, typ 40, max 50 kohm. Stored as the minimum.
+reset_pull_up_ohms = 30000.0
+# Table 65 ADC characteristics RAIN, external input impedance, max 50 kohm (the
+# sampling-time dependent limit of its Equation 1 is lower at short sampling times).
+max_adc_source_impedance_ohms = 50000.0
+
+[models.pins]
+# Table 8, WLCSP49 column. Repeated supplies carry distinct numbered roles.
+"B7" = "vbat"               # VBAT; backup domain supply (Table 14: 1.65-3.6 V)
+"D5" = "pc13_anti_tamp"     # PC13-ANTI_TAMP
+"C7" = "pc14_osc32_in"      # PC14-OSC32_IN; LSE crystal in
+"C6" = "pc15_osc32_out"     # PC15-OSC32_OUT; LSE crystal out
+"D7" = "ph0_osc_in"         # PH0 - OSC_IN; HSE crystal / clock in
+"D6" = "ph1_osc_out"        # PH1 - OSC_OUT; HSE crystal out
+"E7" = "reset"              # NRST; NRST, active low, embedded weak pull-up (Table 53, Table 56)
+"E6" = "vssa"               # VSSA/VREF-
+"F7" = "vdda"               # VDDA/VREF+
+"F6" = "pa0_wkup"           # PA0-WKUP
+"G7" = "pa1"                # PA1
+"E5" = "pa2"                # PA2
+"E4" = "pa3"                # PA3
+"G6" = "pa4"                # PA4
+"F5" = "pa5"                # PA5
+"F4" = "pa6"                # PA6
+"F3" = "pa7"                # PA7
+"G5" = "pb0"                # PB0
+"G4" = "pb1"                # PB1
+"G3" = "pb2_boot1"          # PB2; BOOT1 in the additional-functions column of Table 8
+"E3" = "pb10"               # PB10
+"G2" = "vcap1"              # VCAP_1; 1.2 V regulator output decoupling pin (Table 14 V12)
+"D3" = "vss"                # VSS
+"F2" = "vdd"                # VDD
+"E2" = "pb12"               # PB12
+"G1" = "pb13"               # PB13
+"F1" = "pb14"               # PB14
+"E1" = "pb15"               # PB15
+"D1" = "pa8"                # PA8
+"D2" = "pa9"                # PA9
+"C2" = "pa10"               # PA10
+"C1" = "pa11"               # PA11
+"C3" = "pa12"               # PA12
+"B3" = "pa13"               # PA13
+"B1" = "vss2"               # VSS
+"B2" = "vdd2"               # VDD
+"A1" = "pa14"               # PA14
+"A2" = "pa15"               # PA15
+"A3" = "pb3"                # PB3
+"A4" = "pb4"                # PB4
+"B4" = "pb5"                # PB5
+"C4" = "pb6"                # PB6
+"D4" = "pb7"                # PB7
+"A5" = "boot0"              # BOOT0; BOOT0 dedicated boot pin (Table 8: type I, structure B)
+"B5" = "pb8"                # PB8
+"C5" = "pb9"                # PB9
+"A6" = "vss3"               # VSS
+"B6" = "pdr_on"             # PDR_ON; PDR_ON: power-down reset enable (Table 8)
+"A7" = "vdd3"               # VDD
+
+[models.pin_capability.adc]
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 8 pin definitions pp.39-47 (WLCSP49 column): the ADC1_n channel named in each pin's additional-functions column; pads not listed carry none"
+[models.pin_capability.adc.pads]
+"F6" = "ADC1_IN0"
+"G7" = "ADC1_IN1"
+"E5" = "ADC1_IN2"
+"E4" = "ADC1_IN3"
+"G6" = "ADC1_IN4"
+"F5" = "ADC1_IN5"
+"F4" = "ADC1_IN6"
+"F3" = "ADC1_IN7"
+"G5" = "ADC1_IN8"
+"G4" = "ADC1_IN9"
+
+[models.ratings]
+max_pin_current_a = 0.025    # Table 12 IIO: output current sunk or sourced by any I/O pin, 25 mA
+max_current_a = 0.16         # Table 12 sum of IVDD over all VDD_x lines, 160 mA
+max_voltage_v = 4.0          # Table 11 VDD-VSS (VDDA, VDD and VBAT) -0.3 to 4.0 V
+max_junction_temp_c = 130.0  # Table 13 TJ maximum 130 C
+theta_ja_c_per_w = 51.0        # Table 86 junction-ambient, WLCSP49
+
+# Table 14 p.63 VDD 1.7 to 3.6 V. Note (1): the 1.7 V minimum is with an external power supply
+# supervisor. Table 11 p.61 VDD-VSS -0.3 to 4.0 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDD standard operating voltage 1.7 to 3.6 V (note 1: 1.7 V minimum is with an external power supply supervisor)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage VDD-VSS (including VDDA, VDD and VBAT) -0.3 to 4.0 V"
+
+# Table 14: VDDA must be the same potential as VDD; 1.7-2.4 V limits the ADC to 1.2 Msps.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDDA analog operating voltage 1.7 to 3.6 V (ADC limited to 1.2 Msps below 2.4 V; must be the same potential as VDD, note 4 allows 300 mV between them during power-up and power-down)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VDDA) -0.3 to 4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VBAT backup operating voltage 1.65 to 3.6 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VBAT) -0.3 to 4.0 V"
+
+# BOOT0 alone is rated to 9 V (Table 11 VSS to 9.0 V; Table 14 0 to 9 V), whatever VDD is.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["boot0"]
+max_v = 9.0
+abs_max_v = 9.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.64 VIN input voltage on the BOOT0 pin 0 to 9 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 VIN input voltage for BOOT0 VSS to 9.0 V"
+
+# BOOT0 (Table 8 pp.39-47: dedicated BOOT0 pin). The datasheet gives BOOT0's input
+# thresholds (Table 53) but NO boot-mode table: it defers boot selection to the
+# reference manual and AN2606, which were not obtainable for this batch, so the
+# normal-boot polarity and BOOT0's internal pull are ABSENT here (level "defined",
+# internal_pull left unknown) rather than recalled from the F401 card.
+[[models.straps]]
+role = "boot0"
+level = "defined"
+boot_select = true
+vil = [0.1, 0.1]     # Table 53 BOOT0 VIL max 0.1 VDD + 0.1 V
+vih = [0.17, 0.7]    # Table 53 BOOT0 VIH min 0.17 VDD + 0.7 V
+note = "BOOT0 selects the boot memory at reset; DS10314 prints no boot-mode table, so the normal-boot level is not asserted"
+
+# NRST: Table 8 pp.39-47; Table 53 NRST VIL max 0.3 VDD, VIH min 0.7 VDD;
+# Table 56 p.104 weak pull-up RPU 30/40/50 kohm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+note = "NRST is active low with an embedded weak pull-up (Table 56 RPU 30-50 kohm); held low it keeps the part in reset"
+
+[[models.source.characteristic]]
+parameter = "rpu_weak_pull_up_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VSS, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-up equivalent resistor RPU, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "rpd_weak_pull_down_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VDD, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-down equivalent resistor RPD, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "vol_output_low_voltage"
+max = 0.4
+unit = "V"
+conditions = "CMOS port, IIO = +8 mA"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 54 p.101 VOL output low level voltage, max column"
+
+[[models.source.characteristic]]
+parameter = "ilkg_io_input_leakage_current"
+max = 1.0
+unit = "uA"
+conditions = "VSS <= VIN <= VDD, I/O input leakage"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current Ilkg, max column (+/-1)"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
+missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F411RC/RE, LQFP64 (10 x 10 mm, ordering code F411R[CE]T).
+#
+# Source: STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024).
+#   Table 8 pin definitions pp.39-47 (LQFP64 column); Table 11 voltage and
+#   Table 12 current limits pp.61-62; Table 13 TJ p.62; Table 14 operating
+#   conditions pp.63-64; Table 53 I/O static characteristics pp.98-99; Table 54
+#   output levels p.101; Table 56 NRST p.104; Table 65 ADC p.114; Table 86 thetaJA
+#   p.140; Table 87 ordering information p.141 (package letter: H UFBGA,
+#   T LQFP, U UFQFPN, Y WLCSP).
+#
+# ONE CARD PER PACKAGE. The five packages number their pads differently, so the
+# pad map is true only on the package it was read from and the footprint rule
+# gates the card (a bare ordering code names no footprint and keeps the family
+# routing). The datasheet prints NO LQFP48 package for the F411.
+#
+# BACKEND. renode:stm32f4 is the generic STM32F4 platform (an F407 core), not an
+# F411-specific model; the card claims no co-sim fidelity beyond what the
+# existing stm32f401c card claims.
+[[models]]
+id = "stm32f411r_lqfp64"
+kind = "mcu"
+description = "STM32F411RC/RE, LQFP64 (10 x 10 mm, ordering code F411R[CE]T)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/stm32f411ce.pdf"
+title = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024); the sha256 is of the copy read from the third-party mirror mischianti.org/wp-content/uploads/2026/09/stm32f411ce_datasheet.pdf because st.com refuses automated download"
+locator = "Table 8 pin definitions pp.39-47 (LQFP64 column); Tables 11-14 pp.61-64; Table 53 pp.98-99; Table 54 p.101; Table 56 p.104; Table 65 p.114; Table 86 p.140; Table 87 p.141"
+sha256 = "ec4a7521b0074f4ad5ca2d6a59d00886c946658014a456d364089e75ae008ece"
+[[models.source.pinout]]
+package = "LQFP64"
+pins = { "1" = "VBAT", "2" = "PC13-ANTI_TAMP", "3" = "PC14-OSC32_IN", "4" = "PC15-OSC32_OUT", "5" = "PH0 - OSC_IN", "6" = "PH1 - OSC_OUT", "7" = "NRST", "8" = "PC0", "9" = "PC1", "10" = "PC2", "11" = "PC3", "12" = "VSSA/VREF-", "13" = "VDDA/VREF+", "14" = "PA0-WKUP", "15" = "PA1", "16" = "PA2", "17" = "PA3", "18" = "VSS", "19" = "VDD", "20" = "PA4", "21" = "PA5", "22" = "PA6", "23" = "PA7", "24" = "PC4", "25" = "PC5", "26" = "PB0", "27" = "PB1", "28" = "PB2", "29" = "PB10", "30" = "VCAP_1", "31" = "VSS", "32" = "VDD", "33" = "PB12", "34" = "PB13", "35" = "PB14", "36" = "PB15", "37" = "PC6", "38" = "PC7", "39" = "PC8", "40" = "PC9", "41" = "PA8", "42" = "PA9", "43" = "PA10", "44" = "PA11", "45" = "PA12", "46" = "PA13", "47" = "VSS", "48" = "VDD", "49" = "PA14", "50" = "PA15", "51" = "PC10", "52" = "PC11", "53" = "PC12", "54" = "PD2", "55" = "PB3", "56" = "PB4", "57" = "PB5", "58" = "PB6", "59" = "PB7", "60" = "BOOT0", "61" = "PB8", "62" = "PB9", "63" = "VSS", "64" = "VDD" }
+
+[models.match]
+value_re = '(?i)^STM32F411R[CE](T[0-9x]?(TR)?)?$'
+footprint_re = '(?i)(^|[:_])LQFP[-_]?64([^0-9]|$)'
+
+[models.params]
+backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"   # p.20: on reset the 16 MHz internal RC oscillator is selected
+# Table 56 NRST weak pull-up RPU VIN = VSS: min 30, typ 40, max 50 kohm. Stored as the minimum.
+reset_pull_up_ohms = 30000.0
+# Table 65 ADC characteristics RAIN, external input impedance, max 50 kohm (the
+# sampling-time dependent limit of its Equation 1 is lower at short sampling times).
+max_adc_source_impedance_ohms = 50000.0
+
+[models.pins]
+# Table 8, LQFP64 column. Repeated supplies carry distinct numbered roles.
+"1" = "vbat"                # VBAT; backup domain supply (Table 14: 1.65-3.6 V)
+"2" = "pc13_anti_tamp"      # PC13-ANTI_TAMP
+"3" = "pc14_osc32_in"       # PC14-OSC32_IN; LSE crystal in
+"4" = "pc15_osc32_out"      # PC15-OSC32_OUT; LSE crystal out
+"5" = "ph0_osc_in"          # PH0 - OSC_IN; HSE crystal / clock in
+"6" = "ph1_osc_out"         # PH1 - OSC_OUT; HSE crystal out
+"7" = "reset"               # NRST; NRST, active low, embedded weak pull-up (Table 53, Table 56)
+"8" = "pc0"                 # PC0
+"9" = "pc1"                 # PC1
+"10" = "pc2"                # PC2
+"11" = "pc3"                # PC3
+"12" = "vssa"               # VSSA/VREF-
+"13" = "vdda"               # VDDA/VREF+
+"14" = "pa0_wkup"           # PA0-WKUP
+"15" = "pa1"                # PA1
+"16" = "pa2"                # PA2
+"17" = "pa3"                # PA3
+"18" = "vss"                # VSS
+"19" = "vdd"                # VDD
+"20" = "pa4"                # PA4
+"21" = "pa5"                # PA5
+"22" = "pa6"                # PA6
+"23" = "pa7"                # PA7
+"24" = "pc4"                # PC4
+"25" = "pc5"                # PC5
+"26" = "pb0"                # PB0
+"27" = "pb1"                # PB1
+"28" = "pb2_boot1"          # PB2; BOOT1 in the additional-functions column of Table 8
+"29" = "pb10"               # PB10
+"30" = "vcap1"              # VCAP_1; 1.2 V regulator output decoupling pin (Table 14 V12)
+"31" = "vss2"               # VSS
+"32" = "vdd2"               # VDD
+"33" = "pb12"               # PB12
+"34" = "pb13"               # PB13
+"35" = "pb14"               # PB14
+"36" = "pb15"               # PB15
+"37" = "pc6"                # PC6
+"38" = "pc7"                # PC7
+"39" = "pc8"                # PC8
+"40" = "pc9"                # PC9
+"41" = "pa8"                # PA8
+"42" = "pa9"                # PA9
+"43" = "pa10"               # PA10
+"44" = "pa11"               # PA11
+"45" = "pa12"               # PA12
+"46" = "pa13"               # PA13
+"47" = "vss3"               # VSS
+"48" = "vdd3"               # VDD
+"49" = "pa14"               # PA14
+"50" = "pa15"               # PA15
+"51" = "pc10"               # PC10
+"52" = "pc11"               # PC11
+"53" = "pc12"               # PC12
+"54" = "pd2"                # PD2
+"55" = "pb3"                # PB3
+"56" = "pb4"                # PB4
+"57" = "pb5"                # PB5
+"58" = "pb6"                # PB6
+"59" = "pb7"                # PB7
+"60" = "boot0"              # BOOT0; BOOT0 dedicated boot pin (Table 8: type I, structure B)
+"61" = "pb8"                # PB8
+"62" = "pb9"                # PB9
+"63" = "vss4"               # VSS
+"64" = "vdd4"               # VDD
+
+[models.pin_capability.adc]
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 8 pin definitions pp.39-47 (LQFP64 column): the ADC1_n channel named in each pin's additional-functions column; pads not listed carry none"
+[models.pin_capability.adc.pads]
+"8" = "ADC1_IN10"
+"9" = "ADC1_IN11"
+"10" = "ADC1_IN12"
+"11" = "ADC1_IN13"
+"14" = "ADC1_IN0"
+"15" = "ADC1_IN1"
+"16" = "ADC1_IN2"
+"17" = "ADC1_IN3"
+"20" = "ADC1_IN4"
+"21" = "ADC1_IN5"
+"22" = "ADC1_IN6"
+"23" = "ADC1_IN7"
+"24" = "ADC1_IN14"
+"25" = "ADC1_IN15"
+"26" = "ADC1_IN8"
+"27" = "ADC1_IN9"
+
+[models.ratings]
+max_pin_current_a = 0.025    # Table 12 IIO: output current sunk or sourced by any I/O pin, 25 mA
+max_current_a = 0.16         # Table 12 sum of IVDD over all VDD_x lines, 160 mA
+max_voltage_v = 4.0          # Table 11 VDD-VSS (VDDA, VDD and VBAT) -0.3 to 4.0 V
+max_junction_temp_c = 130.0  # Table 13 TJ maximum 130 C
+theta_ja_c_per_w = 47.0        # Table 86 junction-ambient, LQFP64
+
+# Table 14 p.63 VDD 1.7 to 3.6 V. Note (1): the 1.7 V minimum is with an external power supply
+# supervisor. Table 11 p.61 VDD-VSS -0.3 to 4.0 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDD standard operating voltage 1.7 to 3.6 V (note 1: 1.7 V minimum is with an external power supply supervisor)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage VDD-VSS (including VDDA, VDD and VBAT) -0.3 to 4.0 V"
+
+# Table 14: VDDA must be the same potential as VDD; 1.7-2.4 V limits the ADC to 1.2 Msps.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDDA analog operating voltage 1.7 to 3.6 V (ADC limited to 1.2 Msps below 2.4 V; must be the same potential as VDD, note 4 allows 300 mV between them during power-up and power-down)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VDDA) -0.3 to 4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VBAT backup operating voltage 1.65 to 3.6 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VBAT) -0.3 to 4.0 V"
+
+# BOOT0 alone is rated to 9 V (Table 11 VSS to 9.0 V; Table 14 0 to 9 V), whatever VDD is.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["boot0"]
+max_v = 9.0
+abs_max_v = 9.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.64 VIN input voltage on the BOOT0 pin 0 to 9 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 VIN input voltage for BOOT0 VSS to 9.0 V"
+
+# BOOT0 (Table 8 pp.39-47: dedicated BOOT0 pin). The datasheet gives BOOT0's input
+# thresholds (Table 53) but NO boot-mode table: it defers boot selection to the
+# reference manual and AN2606, which were not obtainable for this batch, so the
+# normal-boot polarity and BOOT0's internal pull are ABSENT here (level "defined",
+# internal_pull left unknown) rather than recalled from the F401 card.
+[[models.straps]]
+role = "boot0"
+level = "defined"
+boot_select = true
+vil = [0.1, 0.1]     # Table 53 BOOT0 VIL max 0.1 VDD + 0.1 V
+vih = [0.17, 0.7]    # Table 53 BOOT0 VIH min 0.17 VDD + 0.7 V
+note = "BOOT0 selects the boot memory at reset; DS10314 prints no boot-mode table, so the normal-boot level is not asserted"
+
+# NRST: Table 8 pp.39-47; Table 53 NRST VIL max 0.3 VDD, VIH min 0.7 VDD;
+# Table 56 p.104 weak pull-up RPU 30/40/50 kohm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+note = "NRST is active low with an embedded weak pull-up (Table 56 RPU 30-50 kohm); held low it keeps the part in reset"
+
+[[models.source.characteristic]]
+parameter = "rpu_weak_pull_up_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VSS, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-up equivalent resistor RPU, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "rpd_weak_pull_down_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VDD, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-down equivalent resistor RPD, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "vol_output_low_voltage"
+max = 0.4
+unit = "V"
+conditions = "CMOS port, IIO = +8 mA"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 54 p.101 VOL output low level voltage, max column"
+
+[[models.source.characteristic]]
+parameter = "ilkg_io_input_leakage_current"
+max = 1.0
+unit = "uA"
+conditions = "VSS <= VIN <= VDD, I/O input leakage"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current Ilkg, max column (+/-1)"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
+missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F411VC/VE, LQFP100 (14 x 14 mm, ordering code F411V[CE]T).
+#
+# Source: STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024).
+#   Table 8 pin definitions pp.39-47 (LQFP100 column); Table 11 voltage and
+#   Table 12 current limits pp.61-62; Table 13 TJ p.62; Table 14 operating
+#   conditions pp.63-64; Table 53 I/O static characteristics pp.98-99; Table 54
+#   output levels p.101; Table 56 NRST p.104; Table 65 ADC p.114; Table 86 thetaJA
+#   p.140; Table 87 ordering information p.141 (package letter: H UFBGA,
+#   T LQFP, U UFQFPN, Y WLCSP).
+#
+# ONE CARD PER PACKAGE. The five packages number their pads differently, so the
+# pad map is true only on the package it was read from and the footprint rule
+# gates the card (a bare ordering code names no footprint and keeps the family
+# routing). The datasheet prints NO LQFP48 package for the F411.
+#
+# BACKEND. renode:stm32f4 is the generic STM32F4 platform (an F407 core), not an
+# F411-specific model; the card claims no co-sim fidelity beyond what the
+# existing stm32f401c card claims.
+[[models]]
+id = "stm32f411v_lqfp100"
+kind = "mcu"
+description = "STM32F411VC/VE, LQFP100 (14 x 14 mm, ordering code F411V[CE]T)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/stm32f411ce.pdf"
+title = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024); the sha256 is of the copy read from the third-party mirror mischianti.org/wp-content/uploads/2026/09/stm32f411ce_datasheet.pdf because st.com refuses automated download"
+locator = "Table 8 pin definitions pp.39-47 (LQFP100 column); Tables 11-14 pp.61-64; Table 53 pp.98-99; Table 54 p.101; Table 56 p.104; Table 65 p.114; Table 86 p.140; Table 87 p.141"
+sha256 = "ec4a7521b0074f4ad5ca2d6a59d00886c946658014a456d364089e75ae008ece"
+[[models.source.pinout]]
+package = "LQFP100"
+pins = { "1" = "PE2", "2" = "PE3", "3" = "PE4", "4" = "PE5", "5" = "PE6", "6" = "VBAT", "7" = "PC13-ANTI_TAMP", "8" = "PC14-OSC32_IN", "9" = "PC15-OSC32_OUT", "10" = "VSS", "11" = "VDD", "12" = "PH0 - OSC_IN", "13" = "PH1 - OSC_OUT", "14" = "NRST", "15" = "PC0", "16" = "PC1", "17" = "PC2", "18" = "PC3", "19" = "VDD", "20" = "VSSA/VREF-", "21" = "VREF+", "22" = "VDDA", "23" = "PA0-WKUP", "24" = "PA1", "25" = "PA2", "26" = "PA3", "27" = "VSS", "28" = "VDD", "29" = "PA4", "30" = "PA5", "31" = "PA6", "32" = "PA7", "33" = "PC4", "34" = "PC5", "35" = "PB0", "36" = "PB1", "37" = "PB2", "38" = "PE7", "39" = "PE8", "40" = "PE9", "41" = "PE10", "42" = "PE11", "43" = "PE12", "44" = "PE13", "45" = "PE14", "46" = "PE15", "47" = "PB10", "48" = "VCAP_1", "49" = "VSS", "50" = "VDD", "51" = "PB12", "52" = "PB13", "53" = "PB14", "54" = "PB15", "55" = "PD8", "56" = "PD9", "57" = "PD10", "58" = "PD11", "59" = "PD12", "60" = "PD13", "61" = "PD14", "62" = "PD15", "63" = "PC6", "64" = "PC7", "65" = "PC8", "66" = "PC9", "67" = "PA8", "68" = "PA9", "69" = "PA10", "70" = "PA11", "71" = "PA12", "72" = "PA13", "73" = "VCAP_2", "74" = "VSS", "75" = "VDD", "76" = "PA14", "77" = "PA15", "78" = "PC10", "79" = "PC11", "80" = "PC12", "81" = "PD0", "82" = "PD1", "83" = "PD2", "84" = "PD3", "85" = "PD4", "86" = "PD5", "87" = "PD6", "88" = "PD7", "89" = "PB3", "90" = "PB4", "91" = "PB5", "92" = "PB6", "93" = "PB7", "94" = "BOOT0", "95" = "PB8", "96" = "PB9", "97" = "PE0", "98" = "PE1", "99" = "VSS", "100" = "VDD" }
+
+[models.match]
+value_re = '(?i)^STM32F411V[CE](T[0-9x]?(TR)?)?$'
+footprint_re = '(?i)(^|[:_])LQFP[-_]?100([^0-9]|$)'
+
+[models.params]
+backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"   # p.20: on reset the 16 MHz internal RC oscillator is selected
+# Table 56 NRST weak pull-up RPU VIN = VSS: min 30, typ 40, max 50 kohm. Stored as the minimum.
+reset_pull_up_ohms = 30000.0
+# Table 65 ADC characteristics RAIN, external input impedance, max 50 kohm (the
+# sampling-time dependent limit of its Equation 1 is lower at short sampling times).
+max_adc_source_impedance_ohms = 50000.0
+
+[models.pins]
+# Table 8, LQFP100 column. Repeated supplies carry distinct numbered roles.
+"1" = "pe2"                 # PE2
+"2" = "pe3"                 # PE3
+"3" = "pe4"                 # PE4
+"4" = "pe5"                 # PE5
+"5" = "pe6"                 # PE6
+"6" = "vbat"                # VBAT; backup domain supply (Table 14: 1.65-3.6 V)
+"7" = "pc13_anti_tamp"      # PC13-ANTI_TAMP
+"8" = "pc14_osc32_in"       # PC14-OSC32_IN; LSE crystal in
+"9" = "pc15_osc32_out"      # PC15-OSC32_OUT; LSE crystal out
+"10" = "vss"                # VSS
+"11" = "vdd"                # VDD
+"12" = "ph0_osc_in"         # PH0 - OSC_IN; HSE crystal / clock in
+"13" = "ph1_osc_out"        # PH1 - OSC_OUT; HSE crystal out
+"14" = "reset"              # NRST; NRST, active low, embedded weak pull-up (Table 53, Table 56)
+"15" = "pc0"                # PC0
+"16" = "pc1"                # PC1
+"17" = "pc2"                # PC2
+"18" = "pc3"                # PC3
+"19" = "vdd2"               # VDD
+"20" = "vssa"               # VSSA/VREF-
+"21" = "vref"               # VREF+
+"22" = "vdda"               # VDDA
+"23" = "pa0_wkup"           # PA0-WKUP
+"24" = "pa1"                # PA1
+"25" = "pa2"                # PA2
+"26" = "pa3"                # PA3
+"27" = "vss2"               # VSS
+"28" = "vdd3"               # VDD
+"29" = "pa4"                # PA4
+"30" = "pa5"                # PA5
+"31" = "pa6"                # PA6
+"32" = "pa7"                # PA7
+"33" = "pc4"                # PC4
+"34" = "pc5"                # PC5
+"35" = "pb0"                # PB0
+"36" = "pb1"                # PB1
+"37" = "pb2_boot1"          # PB2; BOOT1 in the additional-functions column of Table 8
+"38" = "pe7"                # PE7
+"39" = "pe8"                # PE8
+"40" = "pe9"                # PE9
+"41" = "pe10"               # PE10
+"42" = "pe11"               # PE11
+"43" = "pe12"               # PE12
+"44" = "pe13"               # PE13
+"45" = "pe14"               # PE14
+"46" = "pe15"               # PE15
+"47" = "pb10"               # PB10
+"48" = "vcap1"              # VCAP_1; 1.2 V regulator output decoupling pin (Table 14 V12)
+"49" = "vss3"               # VSS
+"50" = "vdd4"               # VDD
+"51" = "pb12"               # PB12
+"52" = "pb13"               # PB13
+"53" = "pb14"               # PB14
+"54" = "pb15"               # PB15
+"55" = "pd8"                # PD8
+"56" = "pd9"                # PD9
+"57" = "pd10"               # PD10
+"58" = "pd11"               # PD11
+"59" = "pd12"               # PD12
+"60" = "pd13"               # PD13
+"61" = "pd14"               # PD14
+"62" = "pd15"               # PD15
+"63" = "pc6"                # PC6
+"64" = "pc7"                # PC7
+"65" = "pc8"                # PC8
+"66" = "pc9"                # PC9
+"67" = "pa8"                # PA8
+"68" = "pa9"                # PA9
+"69" = "pa10"               # PA10
+"70" = "pa11"               # PA11
+"71" = "pa12"               # PA12
+"72" = "pa13"               # PA13
+"73" = "vcap2"              # VCAP_2; 1.2 V regulator output decoupling pin (Table 14 V12)
+"74" = "vss4"               # VSS
+"75" = "vdd5"               # VDD
+"76" = "pa14"               # PA14
+"77" = "pa15"               # PA15
+"78" = "pc10"               # PC10
+"79" = "pc11"               # PC11
+"80" = "pc12"               # PC12
+"81" = "pd0"                # PD0
+"82" = "pd1"                # PD1
+"83" = "pd2"                # PD2
+"84" = "pd3"                # PD3
+"85" = "pd4"                # PD4
+"86" = "pd5"                # PD5
+"87" = "pd6"                # PD6
+"88" = "pd7"                # PD7
+"89" = "pb3"                # PB3
+"90" = "pb4"                # PB4
+"91" = "pb5"                # PB5
+"92" = "pb6"                # PB6
+"93" = "pb7"                # PB7
+"94" = "boot0"              # BOOT0; BOOT0 dedicated boot pin (Table 8: type I, structure B)
+"95" = "pb8"                # PB8
+"96" = "pb9"                # PB9
+"97" = "pe0"                # PE0
+"98" = "pe1"                # PE1
+"99" = "vss5"               # VSS
+"100" = "vdd6"              # VDD
+
+[models.pin_capability.adc]
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 8 pin definitions pp.39-47 (LQFP100 column): the ADC1_n channel named in each pin's additional-functions column; pads not listed carry none"
+[models.pin_capability.adc.pads]
+"15" = "ADC1_IN10"
+"16" = "ADC1_IN11"
+"17" = "ADC1_IN12"
+"18" = "ADC1_IN13"
+"23" = "ADC1_IN0"
+"24" = "ADC1_IN1"
+"25" = "ADC1_IN2"
+"26" = "ADC1_IN3"
+"29" = "ADC1_IN4"
+"30" = "ADC1_IN5"
+"31" = "ADC1_IN6"
+"32" = "ADC1_IN7"
+"33" = "ADC1_IN14"
+"34" = "ADC1_IN15"
+"35" = "ADC1_IN8"
+"36" = "ADC1_IN9"
+
+[models.ratings]
+max_pin_current_a = 0.025    # Table 12 IIO: output current sunk or sourced by any I/O pin, 25 mA
+max_current_a = 0.16         # Table 12 sum of IVDD over all VDD_x lines, 160 mA
+max_voltage_v = 4.0          # Table 11 VDD-VSS (VDDA, VDD and VBAT) -0.3 to 4.0 V
+max_junction_temp_c = 130.0  # Table 13 TJ maximum 130 C
+theta_ja_c_per_w = 43.0        # Table 86 junction-ambient, LQFP100
+
+# Table 14 p.63 VDD 1.7 to 3.6 V. Note (1): the 1.7 V minimum is with an external power supply
+# supervisor. Table 11 p.61 VDD-VSS -0.3 to 4.0 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDD standard operating voltage 1.7 to 3.6 V (note 1: 1.7 V minimum is with an external power supply supervisor)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage VDD-VSS (including VDDA, VDD and VBAT) -0.3 to 4.0 V"
+
+# Table 14: VDDA must be the same potential as VDD; 1.7-2.4 V limits the ADC to 1.2 Msps.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDDA analog operating voltage 1.7 to 3.6 V (ADC limited to 1.2 Msps below 2.4 V; must be the same potential as VDD, note 4 allows 300 mV between them during power-up and power-down)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VDDA) -0.3 to 4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VBAT backup operating voltage 1.65 to 3.6 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VBAT) -0.3 to 4.0 V"
+
+# BOOT0 alone is rated to 9 V (Table 11 VSS to 9.0 V; Table 14 0 to 9 V), whatever VDD is.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["boot0"]
+max_v = 9.0
+abs_max_v = 9.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.64 VIN input voltage on the BOOT0 pin 0 to 9 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 VIN input voltage for BOOT0 VSS to 9.0 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vref"
+upper = "vdda"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 65 p.114 VREF+ positive reference voltage 1.7 V to VDDA (and Table 14 note 3: VDDA-VREF+ < 1.2 V)"
+
+# BOOT0 (Table 8 pp.39-47: dedicated BOOT0 pin). The datasheet gives BOOT0's input
+# thresholds (Table 53) but NO boot-mode table: it defers boot selection to the
+# reference manual and AN2606, which were not obtainable for this batch, so the
+# normal-boot polarity and BOOT0's internal pull are ABSENT here (level "defined",
+# internal_pull left unknown) rather than recalled from the F401 card.
+[[models.straps]]
+role = "boot0"
+level = "defined"
+boot_select = true
+vil = [0.1, 0.1]     # Table 53 BOOT0 VIL max 0.1 VDD + 0.1 V
+vih = [0.17, 0.7]    # Table 53 BOOT0 VIH min 0.17 VDD + 0.7 V
+note = "BOOT0 selects the boot memory at reset; DS10314 prints no boot-mode table, so the normal-boot level is not asserted"
+
+# NRST: Table 8 pp.39-47; Table 53 NRST VIL max 0.3 VDD, VIH min 0.7 VDD;
+# Table 56 p.104 weak pull-up RPU 30/40/50 kohm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+note = "NRST is active low with an embedded weak pull-up (Table 56 RPU 30-50 kohm); held low it keeps the part in reset"
+
+[[models.source.characteristic]]
+parameter = "rpu_weak_pull_up_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VSS, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-up equivalent resistor RPU, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "rpd_weak_pull_down_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VDD, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-down equivalent resistor RPD, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "vol_output_low_voltage"
+max = 0.4
+unit = "V"
+conditions = "CMOS port, IIO = +8 mA"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 54 p.101 VOL output low level voltage, max column"
+
+[[models.source.characteristic]]
+parameter = "ilkg_io_input_leakage_current"
+max = 1.0
+unit = "uA"
+conditions = "VSS <= VIN <= VDD, I/O input leakage"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current Ilkg, max column (+/-1)"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
+missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F411VC/VE, UFBGA100 (7 x 7 mm, ordering code F411V[CE]H).
+#
+# Source: STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024).
+#   Table 8 pin definitions pp.39-47 (UFBGA100 column); Table 11 voltage and
+#   Table 12 current limits pp.61-62; Table 13 TJ p.62; Table 14 operating
+#   conditions pp.63-64; Table 53 I/O static characteristics pp.98-99; Table 54
+#   output levels p.101; Table 56 NRST p.104; Table 65 ADC p.114; Table 86 thetaJA
+#   p.140; Table 87 ordering information p.141 (package letter: H UFBGA,
+#   T LQFP, U UFQFPN, Y WLCSP).
+#
+# ONE CARD PER PACKAGE. The five packages number their pads differently, so the
+# pad map is true only on the package it was read from and the footprint rule
+# gates the card (a bare ordering code names no footprint and keeps the family
+# routing). The datasheet prints NO LQFP48 package for the F411.
+#
+# BACKEND. renode:stm32f4 is the generic STM32F4 platform (an F407 core), not an
+# F411-specific model; the card claims no co-sim fidelity beyond what the
+# existing stm32f401c card claims.
+[[models]]
+id = "stm32f411v_ufbga100"
+kind = "mcu"
+description = "STM32F411VC/VE, UFBGA100 (7 x 7 mm, ordering code F411V[CE]H)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/stm32f411ce.pdf"
+title = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8 (January 2024); the sha256 is of the copy read from the third-party mirror mischianti.org/wp-content/uploads/2026/09/stm32f411ce_datasheet.pdf because st.com refuses automated download"
+locator = "Table 8 pin definitions pp.39-47 (UFBGA100 column); Tables 11-14 pp.61-64; Table 53 pp.98-99; Table 54 p.101; Table 56 p.104; Table 65 p.114; Table 86 p.140; Table 87 p.141"
+sha256 = "ec4a7521b0074f4ad5ca2d6a59d00886c946658014a456d364089e75ae008ece"
+[[models.source.pinout]]
+package = "UFBGA100"
+pins = { "B2" = "PE2", "A1" = "PE3", "B1" = "PE4", "C2" = "PE5", "D2" = "PE6", "D3" = "VSS", "C4" = "VDD", "E2" = "VBAT", "C1" = "PC13-ANTI_TAMP", "D1" = "PC14-OSC32_IN", "E1" = "PC15-OSC32_OUT", "F2" = "VSS", "G2" = "VDD", "F1" = "PH0 - OSC_IN", "G1" = "PH1 - OSC_OUT", "H2" = "NRST", "H1" = "PC0", "J2" = "PC1", "J3" = "PC2", "K2" = "PC3", "J1" = "VSSA", "K1" = "VREF-", "L1" = "VREF+", "M1" = "VDDA", "L2" = "PA0-WKUP", "M2" = "PA1", "K3" = "PA2", "L3" = "PA3", "E3" = "BYPASS_REG", "M3" = "PA4", "K4" = "PA5", "L4" = "PA6", "M4" = "PA7", "K5" = "PC4", "L5" = "PC5", "M5" = "PB0", "M6" = "PB1", "L6" = "PB2", "M7" = "PE7", "L7" = "PE8", "M8" = "PE9", "L8" = "PE10", "M9" = "PE11", "L9" = "PE12", "M10" = "PE13", "M11" = "PE14", "M12" = "PE15", "L10" = "PB10", "K9" = "PB11", "L11" = "VCAP_1", "F12" = "VSS", "G12" = "VDD", "L12" = "PB12", "K12" = "PB13", "K11" = "PB14", "K10" = "PB15", "K8" = "PD9", "J12" = "PD10", "J11" = "PD11", "J10" = "PD12", "H12" = "PD13", "H11" = "PD14", "H10" = "PD15", "E12" = "PC6", "E11" = "PC7", "E10" = "PC8", "D12" = "PC9", "D11" = "PA8", "D10" = "PA9", "C12" = "PA10", "B12" = "PA11", "A12" = "PA12", "A11" = "PA13", "C11" = "VCAP_2", "F11" = "VSS", "G11" = "VDD", "A10" = "PA14", "A9" = "PA15", "B11" = "PC10", "C10" = "PC11", "B10" = "PC12", "C9" = "PD0", "B9" = "PD1", "C8" = "PD2", "B8" = "PD3", "B7" = "PD4", "A6" = "PD5", "B6" = "PD6", "A5" = "PD7", "A8" = "PB3", "A7" = "PB4", "C5" = "PB5", "B5" = "PB6", "B4" = "PB7", "A4" = "BOOT0", "A3" = "PB8", "B3" = "PB9", "C3" = "PE0", "A2" = "PE1", "H3" = "PDR_ON" }
+
+[models.match]
+value_re = '(?i)^STM32F411V[CE](H[0-9x]?(TR)?)?$'
+footprint_re = '(?i)(^|[:_])(UFBGA|BGA)[-_]?100([^0-9]|$)'
+
+[models.params]
+backend = "renode:stm32f4"
+internal_clock = "internal 16 MHz HSI RC oscillator"   # p.20: on reset the 16 MHz internal RC oscillator is selected
+# Table 56 NRST weak pull-up RPU VIN = VSS: min 30, typ 40, max 50 kohm. Stored as the minimum.
+reset_pull_up_ohms = 30000.0
+# Table 65 ADC characteristics RAIN, external input impedance, max 50 kohm (the
+# sampling-time dependent limit of its Equation 1 is lower at short sampling times).
+max_adc_source_impedance_ohms = 50000.0
+
+[models.pins]
+# Table 8, UFBGA100 column. Repeated supplies carry distinct numbered roles.
+"B2" = "pe2"                # PE2
+"A1" = "pe3"                # PE3
+"B1" = "pe4"                # PE4
+"C2" = "pe5"                # PE5
+"D2" = "pe6"                # PE6
+"D3" = "vss"                # VSS
+"C4" = "vdd"                # VDD
+"E2" = "vbat"               # VBAT; backup domain supply (Table 14: 1.65-3.6 V)
+"C1" = "pc13_anti_tamp"     # PC13-ANTI_TAMP
+"D1" = "pc14_osc32_in"      # PC14-OSC32_IN; LSE crystal in
+"E1" = "pc15_osc32_out"     # PC15-OSC32_OUT; LSE crystal out
+"F2" = "vss2"               # VSS
+"G2" = "vdd2"               # VDD
+"F1" = "ph0_osc_in"         # PH0 - OSC_IN; HSE crystal / clock in
+"G1" = "ph1_osc_out"        # PH1 - OSC_OUT; HSE crystal out
+"H2" = "reset"              # NRST; NRST, active low, embedded weak pull-up (Table 53, Table 56)
+"H1" = "pc0"                # PC0
+"J2" = "pc1"                # PC1
+"J3" = "pc2"                # PC2
+"K2" = "pc3"                # PC3
+"J1" = "vssa"               # VSSA
+"K1" = "vref_neg"           # VREF-
+"L1" = "vref"               # VREF+
+"M1" = "vdda"               # VDDA
+"L2" = "pa0_wkup"           # PA0-WKUP
+"M2" = "pa1"                # PA1
+"K3" = "pa2"                # PA2
+"L3" = "pa3"                # PA3
+"E3" = "bypass_reg"         # BYPASS_REG; BYPASS_REG: regulator bypass input (Table 8)
+"M3" = "pa4"                # PA4
+"K4" = "pa5"                # PA5
+"L4" = "pa6"                # PA6
+"M4" = "pa7"                # PA7
+"K5" = "pc4"                # PC4
+"L5" = "pc5"                # PC5
+"M5" = "pb0"                # PB0
+"M6" = "pb1"                # PB1
+"L6" = "pb2_boot1"          # PB2; BOOT1 in the additional-functions column of Table 8
+"M7" = "pe7"                # PE7
+"L7" = "pe8"                # PE8
+"M8" = "pe9"                # PE9
+"L8" = "pe10"               # PE10
+"M9" = "pe11"               # PE11
+"L9" = "pe12"               # PE12
+"M10" = "pe13"              # PE13
+"M11" = "pe14"              # PE14
+"M12" = "pe15"              # PE15
+"L10" = "pb10"              # PB10
+"K9" = "pb11"               # PB11
+"L11" = "vcap1"             # VCAP_1; 1.2 V regulator output decoupling pin (Table 14 V12)
+"F12" = "vss3"              # VSS
+"G12" = "vdd3"              # VDD
+"L12" = "pb12"              # PB12
+"K12" = "pb13"              # PB13
+"K11" = "pb14"              # PB14
+"K10" = "pb15"              # PB15
+"K8" = "pd9"                # PD9
+"J12" = "pd10"              # PD10
+"J11" = "pd11"              # PD11
+"J10" = "pd12"              # PD12
+"H12" = "pd13"              # PD13
+"H11" = "pd14"              # PD14
+"H10" = "pd15"              # PD15
+"E12" = "pc6"               # PC6
+"E11" = "pc7"               # PC7
+"E10" = "pc8"               # PC8
+"D12" = "pc9"               # PC9
+"D11" = "pa8"               # PA8
+"D10" = "pa9"               # PA9
+"C12" = "pa10"              # PA10
+"B12" = "pa11"              # PA11
+"A12" = "pa12"              # PA12
+"A11" = "pa13"              # PA13
+"C11" = "vcap2"             # VCAP_2; 1.2 V regulator output decoupling pin (Table 14 V12)
+"F11" = "vss4"              # VSS
+"G11" = "vdd4"              # VDD
+"A10" = "pa14"              # PA14
+"A9" = "pa15"               # PA15
+"B11" = "pc10"              # PC10
+"C10" = "pc11"              # PC11
+"B10" = "pc12"              # PC12
+"C9" = "pd0"                # PD0
+"B9" = "pd1"                # PD1
+"C8" = "pd2"                # PD2
+"B8" = "pd3"                # PD3
+"B7" = "pd4"                # PD4
+"A6" = "pd5"                # PD5
+"B6" = "pd6"                # PD6
+"A5" = "pd7"                # PD7
+"A8" = "pb3"                # PB3
+"A7" = "pb4"                # PB4
+"C5" = "pb5"                # PB5
+"B5" = "pb6"                # PB6
+"B4" = "pb7"                # PB7
+"A4" = "boot0"              # BOOT0; BOOT0 dedicated boot pin (Table 8: type I, structure B)
+"A3" = "pb8"                # PB8
+"B3" = "pb9"                # PB9
+"C3" = "pe0"                # PE0
+"A2" = "pe1"                # PE1
+"H3" = "pdr_on"             # PDR_ON; PDR_ON: power-down reset enable (Table 8)
+
+[models.pin_capability.adc]
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 8 pin definitions pp.39-47 (UFBGA100 column): the ADC1_n channel named in each pin's additional-functions column; pads not listed carry none"
+[models.pin_capability.adc.pads]
+"H1" = "ADC1_IN10"
+"J2" = "ADC1_IN11"
+"J3" = "ADC1_IN12"
+"K2" = "ADC1_IN13"
+"L2" = "ADC1_IN0"
+"M2" = "ADC1_IN1"
+"K3" = "ADC1_IN2"
+"L3" = "ADC1_IN3"
+"M3" = "ADC1_IN4"
+"K4" = "ADC1_IN5"
+"L4" = "ADC1_IN6"
+"M4" = "ADC1_IN7"
+"K5" = "ADC1_IN14"
+"L5" = "ADC1_IN15"
+"M5" = "ADC1_IN8"
+"M6" = "ADC1_IN9"
+
+[models.ratings]
+max_pin_current_a = 0.025    # Table 12 IIO: output current sunk or sourced by any I/O pin, 25 mA
+max_current_a = 0.16         # Table 12 sum of IVDD over all VDD_x lines, 160 mA
+max_voltage_v = 4.0          # Table 11 VDD-VSS (VDDA, VDD and VBAT) -0.3 to 4.0 V
+max_junction_temp_c = 130.0  # Table 13 TJ maximum 130 C
+theta_ja_c_per_w = 62.0        # Table 86 junction-ambient, UFBGA100
+
+# Table 14 p.63 VDD 1.7 to 3.6 V. Note (1): the 1.7 V minimum is with an external power supply
+# supervisor. Table 11 p.61 VDD-VSS -0.3 to 4.0 V.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDD standard operating voltage 1.7 to 3.6 V (note 1: 1.7 V minimum is with an external power supply supervisor)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage VDD-VSS (including VDDA, VDD and VBAT) -0.3 to 4.0 V"
+
+# Table 14: VDDA must be the same potential as VDD; 1.7-2.4 V limits the ADC to 1.2 Msps.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VDDA analog operating voltage 1.7 to 3.6 V (ADC limited to 1.2 Msps below 2.4 V; must be the same potential as VDD, note 4 allows 300 mV between them during power-up and power-down)"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VDDA) -0.3 to 4.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 4.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.63 VBAT backup operating voltage 1.65 to 3.6 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 external main supply voltage (including VBAT) -0.3 to 4.0 V"
+
+# BOOT0 alone is rated to 9 V (Table 11 VSS to 9.0 V; Table 14 0 to 9 V), whatever VDD is.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["boot0"]
+max_v = 9.0
+abs_max_v = 9.0
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 14 p.64 VIN input voltage on the BOOT0 pin 0 to 9 V"
+abs_max_basis = "STM32F411xC/xE DS10314 Rev 8, Table 11 p.61 VIN input voltage for BOOT0 VSS to 9.0 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vref"
+upper = "vdda"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 65 p.114 VREF+ positive reference voltage 1.7 V to VDDA (and Table 14 note 3: VDDA-VREF+ < 1.2 V)"
+
+# BOOT0 (Table 8 pp.39-47: dedicated BOOT0 pin). The datasheet gives BOOT0's input
+# thresholds (Table 53) but NO boot-mode table: it defers boot selection to the
+# reference manual and AN2606, which were not obtainable for this batch, so the
+# normal-boot polarity and BOOT0's internal pull are ABSENT here (level "defined",
+# internal_pull left unknown) rather than recalled from the F401 card.
+[[models.straps]]
+role = "boot0"
+level = "defined"
+boot_select = true
+vil = [0.1, 0.1]     # Table 53 BOOT0 VIL max 0.1 VDD + 0.1 V
+vih = [0.17, 0.7]    # Table 53 BOOT0 VIH min 0.17 VDD + 0.7 V
+note = "BOOT0 selects the boot memory at reset; DS10314 prints no boot-mode table, so the normal-boot level is not asserted"
+
+# NRST: Table 8 pp.39-47; Table 53 NRST VIL max 0.3 VDD, VIH min 0.7 VDD;
+# Table 56 p.104 weak pull-up RPU 30/40/50 kohm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+note = "NRST is active low with an embedded weak pull-up (Table 56 RPU 30-50 kohm); held low it keeps the part in reset"
+
+[[models.source.characteristic]]
+parameter = "rpu_weak_pull_up_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VSS, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-up equivalent resistor RPU, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "rpd_weak_pull_down_resistor"
+min = 30000.0
+typ = 40000.0
+max = 50000.0
+unit = "ohm"
+conditions = "VIN = VDD, all pins except PA10 (OTG_FS_ID)"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.99 weak pull-down equivalent resistor RPD, min/typ/max columns (printed in kohm)"
+
+[[models.source.characteristic]]
+parameter = "vol_output_low_voltage"
+max = 0.4
+unit = "V"
+conditions = "CMOS port, IIO = +8 mA"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 54 p.101 VOL output low level voltage, max column"
+
+[[models.source.characteristic]]
+parameter = "ilkg_io_input_leakage_current"
+max = 1.0
+unit = "uA"
+conditions = "VSS <= VIN <= VDD, I/O input leakage"
+basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current Ilkg, max column (+/-1)"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
+missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Nordic nRF52832 (Cortex-M4F) SoC, QFN48 6 x 6 mm (order codes QFAA / QFAB).
+#
+# Source: Nordic Semiconductor nRF52832 Product Specification v1.9. Table 3 QFN48 pin assignments, PDF pp.14-16.
+# Table 8 absolute maximum ratings p.20; Table 9 recommended operating
+# conditions p.21; GPIO electrical characteristics section 20.4.1 pp.157-158;
+# Table 145 order codes p.548 (QFAA/QFAB = QFN48, CIAA = WLCSP).
+#
+# NO STRAP TABLE. The specification has no boot-strap pins: SWDIO and SWDCLK are
+# dedicated pads, and P0.21 is the reset pin only after UICR PSELRESET[0]/[1] is
+# programmed, so no reset strap row is claimed for it.
+#
+# BACKEND. The explicit renode:nrf52840 is what the family router already picks
+# for any NRF52 value; it is the nRF52840 platform, not an nRF52832 model.
+[[models]]
+id = "nrf52832_qfn48"
+kind = "mcu"
+description = "Nordic nRF52832 (Cortex-M4F) SoC, QFN48 6 x 6 mm (order codes QFAA / QFAB)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8881/4823_nRF52832_PS_v1.9.pdf"
+title = "Nordic Semiconductor nRF52832 Product Specification v1.9; the copy read is the Digi-Key mirror 4823_nRF52832_PS_v1.9.pdf because Nordic's own sites refuse automated download"
+locator = "Table 3 QFN48 pin assignments PDF pp.14-16; Table 8 p.20; Table 9 p.21; section 20.4.1 pp.157-158; Table 145 p.548"
+sha256 = "2ea4a573c232d2b2b52056e718d4bc173e2cc019b08394ce03c848b15d577093"
+[[models.source.pinout]]
+package = "QFN48"
+pins = { "1" = "DEC1", "2" = "P0.00/XL1", "3" = "P0.01/XL2", "4" = "P0.02/AIN0", "5" = "P0.03/AIN1", "6" = "P0.04/AIN2", "7" = "P0.05/AIN3", "8" = "P0.06", "9" = "P0.07", "10" = "P0.08", "11" = "NFC1/P0.09", "12" = "NFC2/P0.10", "13" = "VDD", "14" = "P0.11", "15" = "P0.12", "16" = "P0.13", "17" = "P0.14/TRACEDATA[3]", "18" = "P0.15/TRACEDATA[2]", "19" = "P0.16/TRACEDATA[1]", "20" = "P0.17", "21" = "P0.18/TRACEDATA[0]/SWO", "22" = "P0.19", "23" = "P0.20/TRACECLK", "24" = "P0.21/nRESET", "25" = "SWDCLK", "26" = "SWDIO", "27" = "P0.22", "28" = "P0.23", "29" = "P0.24", "30" = "ANT", "31" = "VSS", "32" = "DEC2", "33" = "DEC3", "34" = "XC1", "35" = "XC2", "36" = "VDD", "37" = "P0.25", "38" = "P0.26", "39" = "P0.27", "40" = "P0.28/AIN4", "41" = "P0.29/AIN5", "42" = "P0.30/AIN6", "43" = "P0.31/AIN7", "44" = "NC", "45" = "VSS", "46" = "DEC4", "47" = "DCC", "48" = "VDD", "49" = "VSS" }
+
+[models.match]
+value_re = '(?i)^nRF52832([-_ ]?QFA[AB])?(-G)?([-_ ](R7?|T))?$'
+footprint_re = '(?i)(^|[:_])V?QFN[-_]?48([^0-9]|$)'
+
+[models.params]
+backend = "renode:nrf52840"
+internal_clock = "internal 64 MHz HFINT RC oscillator"
+
+[models.pins]
+# QFN48 pad map. Port pins are p0NN (port 0, bit NN); the AIN channel is in the
+# adc table below, not in the role.
+"1" = "dec1"            # DEC1; decoupling node (1.3 V internal)
+"2" = "p000_xl1"        # P0.00/XL1; 32.768 kHz crystal XL1
+"3" = "p001_xl2"        # P0.01/XL2; 32.768 kHz crystal XL2
+"4" = "p002"            # P0.02/AIN0
+"5" = "p003"            # P0.03/AIN1
+"6" = "p004"            # P0.04/AIN2
+"7" = "p005"            # P0.05/AIN3
+"8" = "p006"            # P0.06
+"9" = "p007"            # P0.07
+"10" = "p008"           # P0.08
+"11" = "p009_nfc1"      # NFC1/P0.09; NFC1 until UICR NFCPINS is set (Table 3 note)
+"12" = "p010_nfc2"      # NFC2/P0.10; NFC2 until UICR NFCPINS is set
+"13" = "vdd"            # VDD
+"14" = "p011"           # P0.11
+"15" = "p012"           # P0.12
+"16" = "p013"           # P0.13
+"17" = "p014"           # P0.14/TRACEDATA[3]
+"18" = "p015"           # P0.15/TRACEDATA[2]
+"19" = "p016"           # P0.16/TRACEDATA[1]
+"20" = "p017"           # P0.17
+"21" = "p018"           # P0.18/TRACEDATA[0]/SWO
+"22" = "p019"           # P0.19
+"23" = "p020"           # P0.20/TRACECLK
+"24" = "p021"           # P0.21/nRESET; nRESET only when UICR PSELRESET is programmed (reset value 0xFFFFFFFF = disconnected); otherwise a GPIO
+"25" = "swdclk"         # SWDCLK
+"26" = "swdio"          # SWDIO
+"27" = "p022"           # P0.22
+"28" = "p023"           # P0.23
+"29" = "p024"           # P0.24
+"30" = "ant"            # ANT; RF antenna
+"31" = "vss"            # VSS
+"32" = "dec2"           # DEC2; decoupling node
+"33" = "dec3"           # DEC3; decoupling node (tied to ground via capacitor)
+"34" = "xc1"            # XC1; 32 MHz crystal
+"35" = "xc2"            # XC2; 32 MHz crystal
+"36" = "vdd2"           # VDD
+"37" = "p025"           # P0.25
+"38" = "p026"           # P0.26
+"39" = "p027"           # P0.27
+"40" = "p028"           # P0.28/AIN4
+"41" = "p029"           # P0.29/AIN5
+"42" = "p030"           # P0.30/AIN6
+"43" = "p031"           # P0.31/AIN7
+"44" = "nc"             # NC; no connect
+"45" = "vss2"           # VSS
+"46" = "dec4"           # DEC4; decoupling node (1.3 V DC/DC mode output)
+"47" = "dcc"            # DCC; DC/DC converter output (inductor)
+"48" = "vdd3"           # VDD
+"49" = "vss3"           # VSS
+
+[models.pin_capability.adc]
+basis = "Nordic nRF52832 Product Specification v1.9, Table 3 QFN48 pin assignments PDF pp.14-16: the analogue inputs are AIN0 P0.02, AIN1 P0.03, AIN2 P0.04, AIN3 P0.05, AIN4 P0.28, AIN5 P0.29, AIN6 P0.30, AIN7 P0.31; no other pad carries one"
+[models.pin_capability.adc.pads]
+"4" = "AIN0"
+"5" = "AIN1"
+"6" = "AIN2"
+"7" = "AIN3"
+"40" = "AIN4"
+"41" = "AIN5"
+"42" = "AIN6"
+"43" = "AIN7"
+
+[models.ratings]
+max_voltage_v = 3.9    # Table 8 p.20 VDD -0.3 to +3.9 V (pin VI/O is limited to VDD + 0.3 V, or 3.9 V when VDD > 3.6 V)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 3.9
+basis = "Nordic nRF52832 Product Specification v1.9, Table 9 p.21 recommended operating conditions: VDD 1.7 V min, 3.0 V nom, 3.6 V max"
+abs_max_basis = "Nordic nRF52832 Product Specification v1.9, Table 8 p.20 absolute maximum ratings: VDD -0.3 to +3.9 V"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "adc_pin_map"]
+missing = ["boot_strap_levels_not_applicable_no_strap_pins", "reset_pin_uicr_configuration", "theta_ja_not_in_specification", "per_pin_current_rating", "gpio_vih_vil_voh_vol_on_pads", "alternate_function_tables", "nfc_pin_ratings", "nrf52832_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Nordic nRF52832 (Cortex-M4F) SoC, WLCSP 50-ball (order code CIAA).
+#
+# Source: Nordic Semiconductor nRF52832 Product Specification v1.9. Table 4 WLCSP ball assignments, PDF pp.16-18.
+# Table 8 absolute maximum ratings p.20; Table 9 recommended operating
+# conditions p.21; GPIO electrical characteristics section 20.4.1 pp.157-158;
+# Table 145 order codes p.548 (QFAA/QFAB = QFN48, CIAA = WLCSP).
+#
+# NO STRAP TABLE. The specification has no boot-strap pins: SWDIO and SWDCLK are
+# dedicated pads, and P0.21 is the reset pin only after UICR PSELRESET[0]/[1] is
+# programmed, so no reset strap row is claimed for it.
+#
+# BACKEND. The explicit renode:nrf52840 is what the family router already picks
+# for any NRF52 value; it is the nRF52840 platform, not an nRF52832 model.
+[[models]]
+id = "nrf52832_wlcsp"
+kind = "mcu"
+description = "Nordic nRF52832 (Cortex-M4F) SoC, WLCSP 50-ball (order code CIAA)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8881/4823_nRF52832_PS_v1.9.pdf"
+title = "Nordic Semiconductor nRF52832 Product Specification v1.9; the copy read is the Digi-Key mirror 4823_nRF52832_PS_v1.9.pdf because Nordic's own sites refuse automated download"
+locator = "Table 4 WLCSP ball assignments PDF pp.16-18; Table 8 p.20; Table 9 p.21; section 20.4.1 pp.157-158; Table 145 p.548"
+sha256 = "2ea4a573c232d2b2b52056e718d4bc173e2cc019b08394ce03c848b15d577093"
+[[models.source.pinout]]
+package = "WLCSP"
+pins = { "A1" = "XC2", "A2" = "DEC2", "A3" = "P0.28/AIN4", "A4" = "P0.29/AIN5", "A5" = "P0.30/AIN6", "A6" = "DEC4", "A7" = "VDD", "B2" = "XC1", "B3" = "P0.25", "B4" = "P0.27", "B5" = "P0.31/AIN7", "B6" = "DCC", "B7" = "DEC1", "C2" = "DEC3", "C3" = "NC", "C4" = "VSS", "C5" = "VSS", "C6" = "P0.02/AIN0", "C7" = "P0.01/XL2", "D1" = "ANT", "D2" = "VSS_PA", "D3" = "P0.26", "D6" = "P0.03/AIN1", "D7" = "P0.00/XL1", "E1" = "P0.24", "E2" = "P0.23", "E3" = "VSS", "E6" = "P0.04/AIN2", "E7" = "P0.05/AIN3", "F1" = "SWDCLK", "F2" = "P0.22", "F3" = "P0.19", "F4" = "P0.11", "F5" = "VSS", "F6" = "P0.07", "F7" = "P0.06", "G1" = "SWDIO", "G2" = "P0.20/TRACECLK", "G3" = "P0.17", "G4" = "P0.13", "G5" = "NFC2/P0.10", "G6" = "NFC1/P0.09", "G7" = "P0.08", "H1" = "P0.21/nRESET", "H2" = "P0.18/TRACEDATA[0]/SWO", "H3" = "P0.16/TRACEDATA[1]", "H4" = "P0.15/TRACEDATA[2]", "H5" = "P0.14/TRACEDATA[3]", "H6" = "P0.12", "H7" = "VDD" }
+
+[models.match]
+value_re = '(?i)^nRF52832([-_ ]?CIAA)?(-G)?([-_ ](R7?|T))?$'
+footprint_re = '(?i)WLCSP'
+
+[models.params]
+backend = "renode:nrf52840"
+internal_clock = "internal 64 MHz HFINT RC oscillator"
+
+[models.pins]
+# WLCSP pad map. Port pins are p0NN (port 0, bit NN); the AIN channel is in the
+# adc table below, not in the role.
+"A1" = "xc2"            # XC2; 32 MHz crystal
+"A2" = "dec2"           # DEC2; decoupling node
+"A3" = "p028"           # P0.28/AIN4
+"A4" = "p029"           # P0.29/AIN5
+"A5" = "p030"           # P0.30/AIN6
+"A6" = "dec4"           # DEC4; decoupling node (1.3 V DC/DC mode output)
+"A7" = "vdd"            # VDD
+"B2" = "xc1"            # XC1; 32 MHz crystal
+"B3" = "p025"           # P0.25
+"B4" = "p027"           # P0.27
+"B5" = "p031"           # P0.31/AIN7
+"B6" = "dcc"            # DCC; DC/DC converter output (inductor)
+"B7" = "dec1"           # DEC1; decoupling node (1.3 V internal)
+"C2" = "dec3"           # DEC3; decoupling node (tied to ground via capacitor)
+"C3" = "nc"             # NC; no connect
+"C4" = "vss"            # VSS
+"C5" = "vss2"           # VSS
+"C6" = "p002"           # P0.02/AIN0
+"C7" = "p001_xl2"       # P0.01/XL2; 32.768 kHz crystal XL2
+"D1" = "ant"            # ANT; RF antenna
+"D2" = "vss_pa"         # VSS_PA; PA ground ball
+"D3" = "p026"           # P0.26
+"D6" = "p003"           # P0.03/AIN1
+"D7" = "p000_xl1"       # P0.00/XL1; 32.768 kHz crystal XL1
+"E1" = "p024"           # P0.24
+"E2" = "p023"           # P0.23
+"E3" = "vss3"           # VSS
+"E6" = "p004"           # P0.04/AIN2
+"E7" = "p005"           # P0.05/AIN3
+"F1" = "swdclk"         # SWDCLK
+"F2" = "p022"           # P0.22
+"F3" = "p019"           # P0.19
+"F4" = "p011"           # P0.11
+"F5" = "vss4"           # VSS
+"F6" = "p007"           # P0.07
+"F7" = "p006"           # P0.06
+"G1" = "swdio"          # SWDIO
+"G2" = "p020"           # P0.20/TRACECLK
+"G3" = "p017"           # P0.17
+"G4" = "p013"           # P0.13
+"G5" = "p010_nfc2"      # NFC2/P0.10; NFC2 until UICR NFCPINS is set
+"G6" = "p009_nfc1"      # NFC1/P0.09; NFC1 until UICR NFCPINS is set (Table 3 note)
+"G7" = "p008"           # P0.08
+"H1" = "p021"           # P0.21/nRESET; nRESET only when UICR PSELRESET is programmed (reset value 0xFFFFFFFF = disconnected); otherwise a GPIO
+"H2" = "p018"           # P0.18/TRACEDATA[0]/SWO
+"H3" = "p016"           # P0.16/TRACEDATA[1]
+"H4" = "p015"           # P0.15/TRACEDATA[2]
+"H5" = "p014"           # P0.14/TRACEDATA[3]
+"H6" = "p012"           # P0.12
+"H7" = "vdd2"           # VDD
+
+[models.pin_capability.adc]
+basis = "Nordic nRF52832 Product Specification v1.9, Table 4 WLCSP ball assignments PDF pp.16-18: the analogue inputs are AIN0 P0.02, AIN1 P0.03, AIN2 P0.04, AIN3 P0.05, AIN4 P0.28, AIN5 P0.29, AIN6 P0.30, AIN7 P0.31; no other pad carries one"
+[models.pin_capability.adc.pads]
+"C6" = "AIN0"
+"D6" = "AIN1"
+"E6" = "AIN2"
+"E7" = "AIN3"
+"A3" = "AIN4"
+"A4" = "AIN5"
+"A5" = "AIN6"
+"B5" = "AIN7"
+
+[models.ratings]
+max_voltage_v = 3.9    # Table 8 p.20 VDD -0.3 to +3.9 V (pin VI/O is limited to VDD + 0.3 V, or 3.9 V when VDD > 3.6 V)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 3.9
+basis = "Nordic nRF52832 Product Specification v1.9, Table 9 p.21 recommended operating conditions: VDD 1.7 V min, 3.0 V nom, 3.6 V max"
+abs_max_basis = "Nordic nRF52832 Product Specification v1.9, Table 8 p.20 absolute maximum ratings: VDD -0.3 to +3.9 V"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "absolute_ratings", "adc_pin_map"]
+missing = ["boot_strap_levels_not_applicable_no_strap_pins", "reset_pin_uicr_configuration", "theta_ja_not_in_specification", "per_pin_current_rating", "gpio_vih_vil_voh_vol_on_pads", "alternate_function_tables", "nfc_pin_ratings", "nrf52832_specific_renode_platform", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Espressif ESP8266EX bare chip, QFN32 5 x 5 mm.
+#
+# Source: Espressif ESP8266EX Datasheet v7.1 (2025.11, NRND), 31-page PDF whose
+# footer counts 1/26 from the third PDF page (doc page N = PDF page N + 5):
+# Figure 2-1 and Table 2-1 Pin Definitions (doc pp.4-5, PDF pp.9-10) and the note
+# on boot mode and U0TXD (doc p.6, PDF p.11); Table 5-1 Electrical Characteristics
+# (doc p.19, PDF p.24). The strap LEVELS are not in this datasheet (it says only
+# that GPIO2, GPIO0 and MTDO select the boot and SDIO mode): they are read from
+# the ESP-WROOM-02 datasheet Table 2-1 (PDF pp.8-9, the same chip on a module).
+#
+# NO ABSOLUTE MAXIMUM TABLE: the datasheet prints none, so no max_voltage_v and
+# no abs_max_v is claimed. Table 5-1 IMAX (12 mA) is the only current limit.
+#
+# BACKEND IS `none:`: there is no ESP8266 co-sim emulator; without it the family
+# router would fall back to an AVR core, so co-sim is refused by name.
+[[models]]
+id = "esp8266ex_qfn32"
+kind = "mcu"
+description = "Espressif ESP8266EX Wi-Fi SoC, QFN32 5 x 5 mm (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/0a-esp8266ex_datasheet_en.pdf"
+title = "Espressif ESP8266EX Datasheet v7.1 (2025.11, NRND)"
+locator = "Figure 2-1 and Table 2-1 Pin Definitions doc pp.4-5 (PDF pp.9-10); note on GPIO2/GPIO0/MTDO/U0TXD doc p.6 (PDF p.11); Table 5-1 Electrical Characteristics doc p.19 (PDF p.24)"
+sha256 = "3a038e2fd3040ad06d95d41b16afc8292090339e9f8e728ce46a83db439cecf1"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/0c-esp-wroom-02_datasheet_en.pdf"
+title = "Espressif ESP-WROOM-02 Datasheet v3.7 (2025.11, NRND)"
+locator = "Table 2-1 Pin Definitions (PDF pp.8-9): IO15 pull down, IO2 floating (internal pull-up) or pull up, IO0 UART download pull down / flash boot floating or pull up, TXD floating or pull up"
+sha256 = "092893b04e97d5a8e5c224f03d02062ca5e9523ff86bdc8b689b0c6ba0668750"
+[[models.source.pinout]]
+package = "QFN32"
+pins = { "1" = "VDDA", "2" = "LNA", "3" = "VDD3P3", "4" = "VDD3P3", "5" = "VDD_RTC", "6" = "TOUT", "7" = "CHIP_EN", "8" = "XPD_DCDC", "9" = "MTMS", "10" = "MTDI", "11" = "VDDPST", "12" = "MTCK", "13" = "MTDO", "14" = "GPIO2", "15" = "GPIO0", "16" = "GPIO4", "17" = "VDDPST", "18" = "SDIO_DATA_2", "19" = "SDIO_DATA_3", "20" = "SDIO_CMD", "21" = "SDIO_CLK", "22" = "SDIO_DATA_0", "23" = "SDIO_DATA_1", "24" = "GPIO5", "25" = "U0RXD", "26" = "U0TXD", "27" = "XTAL_OUT", "28" = "XTAL_IN", "29" = "VDDD", "30" = "VDDA", "31" = "RES12K", "32" = "EXT_RSTB", "33" = "GND" }
+
+[models.match]
+value_re = '(?i)^ESP8266(EX)?$'
+footprint_re = '(?i)(^|[:_])V?QFN[-_]?32([^0-9]|$)'
+
+[models.params]
+backend = "none:esp8266"
+
+[models.pins]
+# Table 2-1. GPIO roles are the flat gpioN names the strap table matches by exact string.
+"1" = "vdda"                # VDDA; analog power 2.5-3.6 V
+"2" = "lna"                 # LNA
+"3" = "vdd3p3"              # VDD3P3; amplifier power 2.5-3.6 V
+"4" = "vdd3p3_2"            # VDD3P3; amplifier power 2.5-3.6 V
+"5" = "vdd_rtc"             # VDD_RTC; NC (1.1 V), leave open
+"6" = "tout"                # TOUT; ADC pin
+"7" = "en"                  # CHIP_EN; CHIP_EN: high = on, low = off
+"8" = "gpio16_xpd_dcdc"     # XPD_DCDC; deep-sleep wake-up, to be connected to EXT_RSTB
+"9" = "gpio14_mtms"         # MTMS
+"10" = "gpio12_mtdi"        # MTDI
+"11" = "vdd"                # VDDPST; VDDPST, digital/IO power 1.8-3.6 V (the strap thresholds scale from it)
+"12" = "gpio13_mtck"        # MTCK
+"13" = "gpio15"             # MTDO; MTDO, boot-mode strap
+"14" = "gpio2"              # GPIO2; boot-mode strap
+"15" = "gpio0"              # GPIO0; boot-mode strap
+"16" = "gpio4"              # GPIO4
+"17" = "vdd2"               # VDDPST; VDDPST, digital/IO power 1.8-3.6 V
+"18" = "gpio9_sd_data2"     # SDIO_DATA_2
+"19" = "gpio10_sd_data3"    # SDIO_DATA_3
+"20" = "gpio11_sd_cmd"      # SDIO_CMD
+"21" = "gpio6_sd_clk"       # SDIO_CLK
+"22" = "gpio7_sd_data0"     # SDIO_DATA_0
+"23" = "gpio8_sd_data1"     # SDIO_DATA_1
+"24" = "gpio5"              # GPIO5
+"25" = "gpio3_u0rxd"        # U0RXD
+"26" = "gpio1_u0txd"        # U0TXD
+"27" = "xtal_out"           # XTAL_OUT
+"28" = "xtal_in"            # XTAL_IN
+"29" = "vddd"               # VDDD; printed 'Analog Power 2.5 V ~ 3.6 V'
+"30" = "vdda2"              # VDDA; analog power 2.5-3.6 V
+"31" = "res12k"             # RES12K; 12 kOhm resistor to ground
+"32" = "reset"              # EXT_RSTB; EXT_RSTB, active low
+"33" = "gnd"                # GND; exposed pad
+
+[models.pin_capability.adc]
+basis = "Espressif ESP8266EX Datasheet v7.1, Table 2-1 Pin Definitions (doc p.5, PDF p.10): pin 6 TOUT is the ADC pin; no other pin carries an ADC input"
+[models.pin_capability.adc.pads]
+"6" = "TOUT"
+
+[models.ratings]
+max_pin_current_a = 0.012    # Table 5-1 IMAX 12 mA (an electrical-characteristics row; the datasheet prints no absolute-maximum table)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 3.6
+basis = "Espressif ESP8266EX Datasheet v7.1, Table 2-1 pins 11 and 17 VDDPST digital/IO power supply 1.8 V ~ 3.6 V (doc p.5, PDF p.10)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdda"
+min_v = 2.5
+max_v = 3.6
+basis = "Espressif ESP8266EX Datasheet v7.1, Table 2-1 pins 1 and 30 VDDA analog power 2.5 V ~ 3.6 V (doc pp.4-5, PDF pp.9-10); Table 5-1 working voltage 2.5 / 3.3 / 3.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddd"
+min_v = 2.5
+max_v = 3.6
+basis = "Espressif ESP8266EX Datasheet v7.1, Table 2-1 pin 29 VDDD, printed 'Analog Power 2.5 V ~ 3.6 V' (doc p.5, PDF p.10)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd3p3"
+min_v = 2.5
+max_v = 3.6
+basis = "Espressif ESP8266EX Datasheet v7.1, Table 2-1 pins 3 and 4 VDD3P3 amplifier power 2.5 V ~ 3.6 V (doc p.4, PDF p.9)"
+
+# CHIP_EN (Table 2-1 pin 7): high = chip on, low = off, small current. The datasheet states no
+# internal pull, so internal_pull stays unknown and a floating pin is not asserted a fault.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "CHIP_EN high = chip on, low = off (small current consumed)"
+
+# Boot-mode straps. Levels: ESP-WROOM-02 Datasheet v3.7 Table 2-1 (PDF pp.8-9): IO0 UART download
+# pull down, flash boot floating or pull up; IO15 pull down; IO2 floating (internal pull-up) or pull
+# up. ESP8266EX Datasheet doc p.6: 'GPIO2, GPIO0, and MTDO are used to select booting mode and the
+# SDIO mode'. Table 5-1: VIL max 0.25 VIO, VIH min 0.75 VIO (VIO = the VDDPST supply).
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = flash boot (normal); low = UART download"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO2 floating (internal pull-up) or pulled up at boot"
+
+[[models.straps]]
+role = "gpio15"
+level = "low"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO / GPIO15 pulled down at boot"
+
+# Doc p.6: 'U0TXD should not be pulled externally to a low logic level during the powering-up.'
+[[models.straps]]
+role = "gpio1_u0txd"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "U0TXD must not be pulled low externally while powering up"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map", "per_pin_output_current_limit"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "strap_table_in_chip_datasheet", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ai-Thinker ESP-12F Wi-Fi module (ESP8266EX), 22 pads (structure only, no co-sim core).
+#
+# Source: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3 (2018.3.10):
+#   Table 2.2 pin definitions, ESP-12F 22-pad numbering (PDF p.10); Table 2.3
+#   boot modes (PDF p.11); Tables 3.1-3.3 electrical characteristics (PDF p.12).
+#   Corroborated by the Ai-Thinker ESP-12F datasheet V0 (Chinese): 3.0-3.6 V
+#   supply (p.6), GPIO15 and boot modes (p.8), VIL/VIH 0.25/0.75 VIO (p.9).
+#
+# PAD NUMBERING. The Chinese datasheet numbers only 16 pins and leaves the six
+# bottom pads (CS0, MISO, GPIO9, GPIO10, MOSI, SCLK) unnumbered; the manual (and
+# the KiCad RF_Module symbol) number all 22. This card follows the manual's 22-pad
+# table. ESP-12E has the same 22-pad map but is a different module and is not
+# matched here.
+#
+# NO ABSOLUTE MAXIMUM TABLE for the module is printed in the source, so no
+# max_voltage_v / abs_max_v is claimed. BACKEND IS `none:` (no ESP8266 co-sim
+# emulator; the family router would otherwise fall back to an AVR core).
+[[models]]
+id = "esp_12f"
+kind = "mcu"
+description = "Ai-Thinker ESP-12F Wi-Fi module (ESP8266EX), 22 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://home-assistant-guide.com/wp-content/uploads/2021/04/ESP-01_ESP-07_ESP-12_Series_User_Manual_V1.3.pdf"
+title = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3 (2018.3.10); the sha256 is of the copy read from the third-party mirror home-assistant-guide.com"
+locator = "Table 2.2 pin definitions, ESP-12F 22 pads (PDF p.10); Table 2.3 boot modes (PDF p.11); Tables 3.1-3.3 electrical characteristics (PDF p.12)"
+sha256 = "c1c4497c79d9c6a0ac609969c93ec5cb122eb7cf6e46f75a811f5c8e66e7ab5e"
+[[models.source.references]]
+url = "https://atta.szlcsc.com/upload/public/pdf/source/20200407/C503584_BAFCE9C0764F8A7E92AC8BA7C54FCF76.pdf"
+title = "Ai-Thinker ESP-12F module datasheet V0 (Chinese-language, 2018); the sha256 is of the copy read from the third-party mirror atta.szlcsc.com (LCSC C503584)"
+locator = "supply 3.0-3.6 V p.6; GPIO15 and boot modes p.8; electrical characteristics p.9; bottom pads p.10"
+sha256 = "9300067db5bf3c559d57217f3133b1e0f8b75ace80bd0d47e1b2fc17d081dcf8"
+[[models.source.pinout]]
+package = "ESP-12F (22 pads)"
+pins = { "1" = "RST", "2" = "ADC", "3" = "EN", "4" = "IO16", "5" = "IO14", "6" = "IO12", "7" = "IO13", "8" = "VCC", "9" = "CS0", "10" = "MISO", "11" = "IO9", "12" = "IO10", "13" = "MOSI", "14" = "SCLK", "15" = "GND", "16" = "IO15", "17" = "IO2", "18" = "IO0", "19" = "IO4", "20" = "IO5", "21" = "RXD", "22" = "TXD" }
+
+[models.match]
+value_re = '(?i)^ESP[-_ ]?12[-_ ]?F$'
+
+[models.params]
+backend = "none:esp8266"
+
+[models.pins]
+"1" = "reset"               # RST; reset, active low
+"2" = "tout"                # ADC; ADC input
+"3" = "en"                  # EN; chip enable, active high
+"4" = "gpio16"              # IO16; deep-sleep wake-up, connected to RST
+"5" = "gpio14"              # IO14
+"6" = "gpio12"              # IO12
+"7" = "gpio13"              # IO13
+"8" = "vdd"                 # VCC; module supply
+"9" = "spi_cs0"             # CS0; SPI flash pad
+"10" = "spi_miso"           # MISO; SPI flash pad
+"11" = "gpio9"              # IO9
+"12" = "gpio10"             # IO10
+"13" = "spi_mosi"           # MOSI; SPI flash pad
+"14" = "spi_sclk"           # SCLK; SPI flash pad
+"15" = "gnd"                # GND
+"16" = "gpio15"             # IO15; boot strap (pull down)
+"17" = "gpio2"              # IO2; boot strap
+"18" = "gpio0"              # IO0; boot strap (download mode when low)
+"19" = "gpio4"              # IO4
+"20" = "gpio5"              # IO5
+"21" = "gpio3_rxd"          # RXD; RXD, GPIO3
+"22" = "gpio1_txd"          # TXD; TXD, GPIO1; must not be pulled low at power-up
+
+[models.pin_capability.adc]
+basis = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 (PDF p.10): the ADC pad is pad 2; no other pad carries an ADC input"
+[models.pin_capability.adc.pads]
+"2" = "TOUT"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+basis = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 3.1 (PDF p.12) supply voltage 3.0 V to 3.6 V; ESP-12F datasheet V0 p.6 supply 3.0-3.6 V"
+
+# Boot-mode and enable straps (Ai-Thinker manual V1.3 Table 2.3 (PDF p.11): download = GPIO15 low, GPIO0 low, GPIO2 high, TXD0 high; running = GPIO15 low, GPIO0 high, GPIO2 high, TXD0 high). VIL max 0.25 VDD, VIH min 0.75 VDD.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "EN (chip enable) is active high"
+
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high (floating or pulled up) = flash boot (normal); low = UART download"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO2 high at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio15"
+level = "low"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO15 (MTDO) low at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio1_txd"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "TXD high (floating or pulled up) at power-up; low selects the chip-test mode"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ai-Thinker ESP-07 / ESP-07S / ESP-12S Wi-Fi modules (ESP8266EX), 16 pads (structure only, no co-sim core).
+#
+# Source: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3 (2018.3.10),
+#   Table 2.2 pin definitions, the ESP-07 / ESP-07S / ESP-12S column (PDF p.10);
+#   Table 2.3 boot modes (PDF p.11); Tables 3.1-3.3 electrical characteristics
+#   (PDF p.12).
+#
+# SINGLE-SOURCE CARD. The ESP-07 vendor datasheet itself could not be obtained,
+# so this card rests on the user's manual alone; the manual lists the three
+# modules in one pin column, and that is the only evidence for ESP-07S and
+# ESP-12S sharing the ESP-07 map.
+#
+# NO ABSOLUTE MAXIMUM TABLE for the module is printed in the source, so no
+# max_voltage_v / abs_max_v is claimed. BACKEND IS `none:` (no ESP8266 co-sim
+# emulator; the family router would otherwise fall back to an AVR core).
+[[models]]
+id = "esp_07_16pad"
+kind = "mcu"
+description = "Ai-Thinker ESP-07 / ESP-07S / ESP-12S Wi-Fi modules (ESP8266EX), 16 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://home-assistant-guide.com/wp-content/uploads/2021/04/ESP-01_ESP-07_ESP-12_Series_User_Manual_V1.3.pdf"
+title = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3 (2018.3.10); the sha256 is of the copy read from the third-party mirror home-assistant-guide.com"
+locator = "Table 2.2 pin definitions, ESP-07/07S/12S column (PDF p.10); Table 2.3 boot modes (PDF p.11); Tables 3.1-3.3 electrical characteristics (PDF p.12)"
+sha256 = "c1c4497c79d9c6a0ac609969c93ec5cb122eb7cf6e46f75a811f5c8e66e7ab5e"
+[[models.source.pinout]]
+package = "ESP-07/07S/12S (16 pads)"
+pins = { "1" = "RST", "2" = "ADC", "3" = "EN", "4" = "IO16", "5" = "IO14", "6" = "IO12", "7" = "IO13", "8" = "VCC", "9" = "GND", "10" = "IO15", "11" = "IO2", "12" = "IO0", "13" = "IO4", "14" = "IO5", "15" = "RXD", "16" = "TXD" }
+
+[models.match]
+value_re = '(?i)^ESP[-_ ]?(07S?|12S)$'
+
+[models.params]
+backend = "none:esp8266"
+
+[models.pins]
+"1" = "reset"               # RST; reset, active low
+"2" = "tout"                # ADC; ADC input
+"3" = "en"                  # EN; chip enable, active high
+"4" = "gpio16"              # IO16; deep-sleep wake-up, connected to RST
+"5" = "gpio14"              # IO14
+"6" = "gpio12"              # IO12
+"7" = "gpio13"              # IO13
+"8" = "vdd"                 # VCC; module supply
+"9" = "gnd"                 # GND
+"10" = "gpio15"             # IO15; boot strap (pull down)
+"11" = "gpio2"              # IO2; boot strap
+"12" = "gpio0"              # IO0; boot strap (download mode when low)
+"13" = "gpio4"              # IO4
+"14" = "gpio5"              # IO5
+"15" = "gpio3_rxd"          # RXD; RXD, GPIO3
+"16" = "gpio1_txd"          # TXD; TXD, GPIO1; must not be pulled low at power-up
+
+[models.pin_capability.adc]
+basis = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 (PDF p.10): the ADC pad is pad 2; no other pad carries an ADC input"
+[models.pin_capability.adc.pads]
+"2" = "TOUT"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+basis = "Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 3.1 (PDF p.12) supply voltage 3.0 V to 3.6 V"
+
+# Boot-mode and enable straps (Ai-Thinker manual V1.3 Table 2.3 (PDF p.11): download = GPIO15 low, GPIO0 low, GPIO2 high, TXD0 high; running = GPIO15 low, GPIO0 high, GPIO2 high, TXD0 high). VIL max 0.25 VDD, VIH min 0.75 VDD.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "EN (chip enable) is active high"
+
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high (floating or pulled up) = flash boot (normal); low = UART download"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO2 high at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio15"
+level = "low"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO15 (MTDO) low at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio1_txd"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "TXD high (floating or pulled up) at power-up; low selects the chip-test mode"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Espressif ESP-WROOM-02 Wi-Fi module (ESP8266EX), 18 pins plus centre ground pad (structure only, no co-sim core).
+#
+# Source: Espressif ESP-WROOM-02 Datasheet v3.7 (2025.11, NRND), 23-page PDF
+#   whose footer counts 1/18 from the fifth PDF page (doc page N = PDF page N + 5):
+#   Figure 2-1 and Table 2-1 Pin Definitions (PDF pp.8-9); Table 4-1 Electrical
+#   Characteristics (PDF p.13). Pad 19 is the centre GND pad drawn in Figure 2-1.
+#
+# NO ABSOLUTE MAXIMUM TABLE for the module is printed in the source, so no
+# max_voltage_v / abs_max_v is claimed. BACKEND IS `none:` (no ESP8266 co-sim
+# emulator; the family router would otherwise fall back to an AVR core).
+[[models]]
+id = "esp_wroom_02"
+kind = "mcu"
+description = "Espressif ESP-WROOM-02 Wi-Fi module (ESP8266EX), 18 pins plus centre ground pad (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/0c-esp-wroom-02_datasheet_en.pdf"
+title = "Espressif ESP-WROOM-02 Datasheet v3.7 (2025.11, NRND)"
+locator = "Figure 2-1 and Table 2-1 Pin Definitions (PDF pp.8-9); Table 4-1 Electrical Characteristics (PDF p.13)"
+sha256 = "092893b04e97d5a8e5c224f03d02062ca5e9523ff86bdc8b689b0c6ba0668750"
+[[models.source.pinout]]
+package = "ESP-WROOM-02 (19 pads)"
+pins = { "1" = "3V3", "2" = "EN", "3" = "IO14", "4" = "IO12", "5" = "IO13", "6" = "IO15", "7" = "IO2", "8" = "IO0", "9" = "GND", "10" = "IO4", "11" = "RXD", "12" = "TXD", "13" = "GND", "14" = "IO5", "15" = "RST", "16" = "TOUT", "17" = "IO16", "18" = "GND", "19" = "GND" }
+
+[models.match]
+value_re = '(?i)^ESP[-_ ]?WROOM[-_ ]?02$'
+
+[models.params]
+backend = "none:esp8266"
+
+[models.pins]
+"1" = "vdd"                 # 3V3; module supply
+"2" = "en"                  # EN; chip enable, active high
+"3" = "gpio14"              # IO14
+"4" = "gpio12"              # IO12
+"5" = "gpio13"              # IO13
+"6" = "gpio15"              # IO15; boot strap (pull down)
+"7" = "gpio2"               # IO2; boot strap
+"8" = "gpio0"               # IO0; boot strap (download mode when low)
+"9" = "gnd"                 # GND
+"10" = "gpio4"              # IO4
+"11" = "gpio3_rxd"          # RXD; RXD, GPIO3
+"12" = "gpio1_txd"          # TXD; TXD, GPIO1; must not be pulled low at power-up
+"13" = "gnd2"               # GND
+"14" = "gpio5"              # IO5
+"15" = "reset"              # RST; reset, active low
+"16" = "tout"               # TOUT; ADC input
+"17" = "gpio16"             # IO16; deep-sleep wake-up, connected to RST
+"18" = "gnd3"               # GND
+"19" = "gnd4"               # GND; pad 19, the module's centre ground pad
+
+[models.pin_capability.adc]
+basis = "Espressif ESP-WROOM-02 Datasheet v3.7, Table 2-1 (PDF p.9): pad 16 TOUT is the ADC pin; no other pad carries an ADC input"
+[models.pin_capability.adc.pads]
+"16" = "TOUT"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 3.6
+basis = "Espressif ESP-WROOM-02 Datasheet v3.7, Table 4-1 Electrical Characteristics (PDF p.13) supply voltage VDD 2.7 V min, 3.3 V typ, 3.6 V max"
+
+# Boot-mode and enable straps (Espressif ESP-WROOM-02 Datasheet v3.7 Table 2-1 (PDF pp.8-9): IO15 pull down; IO2 floating (internal pull-up) or pull up; IO0 UART download pull down, flash boot floating or pull up; TXD floating or pull up). VIL max 0.25 VDD, VIH min 0.75 VDD.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "EN (chip enable) is active high"
+
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high (floating or pulled up) = flash boot (normal); low = UART download"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO2 high at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio15"
+level = "low"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO15 (MTDO) low at boot in both download and flash-boot modes"
+
+[[models.straps]]
+role = "gpio1_txd"
+level = "high"
+boot_select = false
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "TXD high (floating or pulled up) at power-up; low selects the chip-test mode"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
