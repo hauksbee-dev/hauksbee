@@ -433,6 +433,39 @@ fn add_unsolved_led_findings(
     }
 }
 
+/// The open-drain pull-up and FET-orientation checks, appended to `report`. The
+/// I2C and SD checks name their own buses by net, so a net they reported is not
+/// reported again for an open-drain output; a backwards power FET the extract
+/// layer's direct-neighbour rule already named is not named twice.
+fn extend_with_wiring_direction(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) {
+    for finding in open_drain_pullup::open_drain_pullup_lint(board, lib).findings {
+        let covered = report.findings.iter().any(|r| {
+            matches!(
+                r.check,
+                LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
+            ) && r.nets.iter().any(|n| finding.nets.contains(n))
+        });
+        if !covered {
+            report.findings.push(finding);
+        }
+    }
+    for finding in fet_orientation::fet_orientation_lint(board, lib).findings {
+        let seen = report.findings.iter().any(|r| {
+            r.check == finding.check
+                && r.refs == finding.refs
+                && r.message.contains("body diode")
+                && r.message.contains("always-on FET") == finding.message.contains("always-on FET")
+        });
+        if !seen {
+            report.findings.push(finding);
+        }
+    }
+}
+
 /// The pull-up and digital-audio checks, appended to `report`. A pull-up is
 /// judged against the receivers on its line and the rails the rail model says
 /// come up. `back_power` already reports a pull-up that is above its
@@ -568,32 +601,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(node_drive::node_drive_lint(board, lib).findings);
-    // An open-drain output with no pull-up. The I2C and SD checks name their own
-    // buses by net, so a net they reported is not reported again.
-    for finding in open_drain_pullup::open_drain_pullup_lint(board, lib).findings {
-        let covered = report.findings.iter().any(|r| {
-            matches!(
-                r.check,
-                LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
-            ) && r.nets.iter().any(|n| finding.nets.contains(n))
-        });
-        if !covered {
-            report.findings.push(finding);
-        }
-    }
-    // A backwards power FET the extract layer's direct-neighbour rule already
-    // named is not named twice.
-    for finding in fet_orientation::fet_orientation_lint(board, lib).findings {
-        let seen = report.findings.iter().any(|r| {
-            r.check == finding.check
-                && r.refs == finding.refs
-                && r.message.contains("body diode")
-                && r.message.contains("always-on FET") == finding.message.contains("always-on FET")
-        });
-        if !seen {
-            report.findings.push(finding);
-        }
-    }
+    extend_with_wiring_direction(&mut report, board, lib);
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);

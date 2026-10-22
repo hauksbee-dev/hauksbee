@@ -278,6 +278,65 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// The enable-pin fields of a digital part (a gate or motor driver's ENABLE): at
+/// most one internal pull, a positive resistance, an `en_open` word, and the
+/// datasheet's quote for the stated state, only on a card that names an enable
+/// pin. The floating-enable board check stays quiet on such a card.
+fn validate_digital_enable_params(entry: &ModelEntry, p: &mut Problems) {
+    const KEYS: [&str; 4] = [
+        "en_pull_down_ohms",
+        "en_pull_up_ohms",
+        "en_open",
+        "en_open_basis",
+    ];
+    if entry.kind != ComponentKind::Digital {
+        return;
+    }
+    let stated = stated_params(entry, KEYS.iter());
+    if stated.is_empty() {
+        return;
+    }
+    let params = &entry.params;
+    p.require(
+        ["en", "en_n", "enable", "enable_n", "shdn", "shdn_n", "on_off"]
+            .iter()
+            .any(|r| has_role(entry, r)),
+        || format!("enable params ({stated}) need an enable role (en, enable, shdn, on_off) in [models.pins]"),
+    );
+    let pulls = KEYS[..2]
+        .iter()
+        .filter(|k| params.0.contains_key(**k))
+        .count();
+    p.require(pulls <= 1, || {
+        "a digital enable pin has at most one internal pull ('en_pull_*')".into()
+    });
+    for key in &KEYS[..2] {
+        if params.0.contains_key(*key) {
+            p.require(params.get_f64(key).is_some_and(positive_finite), || {
+                format!("param '{key}' must be a positive finite number")
+            });
+        }
+    }
+    if params.0.contains_key("en_open") {
+        p.require(
+            matches!(params.get_str("en_open"), Some("off" | "on")),
+            || "param 'en_open' must be \"off\" or \"on\"".into(),
+        );
+    }
+    // A stated state needs the datasheet's words (with the page) behind it.
+    p.require(
+        params
+            .get_str("en_open_basis")
+            .is_some_and(|q| !q.trim().is_empty()),
+        || {
+            format!(
+                "a digital card's enable params ({stated}) need 'en_open_basis', the datasheet's \
+                 words and page, a non-empty string"
+            )
+        },
+    );
+}
+
 /// The datasheet's stated open-pin state (`en_open`) and its quote
 /// (`en_open_basis`), checked against the internal pull the card states.
 fn validate_en_open(params: &Params, level: Option<&str>, pulls: usize, p: &mut Problems) {
@@ -682,6 +741,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // A pin map is a stated fact even on an identity-only card.
     p.0.extend(merged_unit_roles(entry));
     check_pinout(entry, &mut p);
+    // Its enable-pin pull is a datasheet fact too, whatever the card simulates.
+    validate_digital_enable_params(entry, &mut p);
 
     // An identity-only card is useful provenance, but it is deliberately not a
     // simulation model. Keep that state explicit and machine-checkable instead
@@ -2755,6 +2816,61 @@ mod tests {
         );
     }
 
+    /// A digital part's enable pull: one pull at most, a positive value, a word
+    /// for the open state, the datasheet's quote, and an enable pad to describe.
+    #[test]
+    fn digital_enable_params_need_the_pin_a_quote_and_one_pull() {
+        let digital = |role: &str, params: &[(&str, f64)], state: Option<&str>, quote: &str| {
+            let mut e = entry(ComponentKind::Digital, params);
+            e.params.set_bool("identity_only", true);
+            e.params.set_str("warning", "identity only");
+            e.params
+                .set_str("unlocked_by", "a validated executable model");
+            e.pins.insert("1".into(), role.into());
+            if let Some(state) = state {
+                e.params.set_str("en_open", state);
+            }
+            if !quote.is_empty() {
+                e.params.set_str("en_open_basis", quote);
+            }
+            e
+        };
+        let q = "p.12: RPD 100 kOhm to GND";
+        accepts(&digital(
+            "enable",
+            &[("en_pull_down_ohms", 1e5)],
+            Some("off"),
+            q,
+        ));
+        accepts(&digital("en_n", &[("en_pull_up_ohms", 1e5)], None, q));
+        accepts(&digital("enable", &[], None, ""));
+        rejects(
+            &digital("nc", &[("en_pull_down_ohms", 1e5)], Some("off"), q),
+            "need an enable role",
+        );
+        rejects(
+            &digital(
+                "enable",
+                &[("en_pull_down_ohms", 1e5), ("en_pull_up_ohms", 1e5)],
+                None,
+                q,
+            ),
+            "at most one internal pull",
+        );
+        rejects(
+            &digital("enable", &[("en_pull_down_ohms", 0.0)], None, q),
+            "positive finite",
+        );
+        rejects(
+            &digital("enable", &[], Some("floating"), q),
+            "\"off\" or \"on\"",
+        );
+        rejects(
+            &digital("enable", &[("en_pull_down_ohms", 1e5)], Some("off"), ""),
+            "'en_open_basis'",
+        );
+    }
+
     /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.
     #[test]
     fn merged_units_swapped_levels_and_supply_rails_are_refused() {
@@ -3807,14 +3923,19 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
     }
 
     /// A card with pad 1 `cs`, pad 2 `do`, pad 3 `gnd` for the partial-table
-    /// rules; the diode fixture stands in for any non-MCU kind.
+    /// rules; the diode fixture (with its two required pads) stands in for any
+    /// non-MCU kind.
     fn listed(kind: ComponentKind) -> ModelEntry {
         let mut e = if kind == ComponentKind::Mcu {
             entry(kind, &[])
         } else {
             diode()
         };
-        pins(&mut e, &[("1", "cs"), ("2", "do"), ("3", "gnd")]);
+        let mut roles = vec![("1", "cs"), ("2", "do"), ("3", "gnd")];
+        if kind != ComponentKind::Mcu {
+            roles.extend([("4", "anode"), ("5", "cathode")]);
+        }
+        pins(&mut e, &roles);
         e
     }
 

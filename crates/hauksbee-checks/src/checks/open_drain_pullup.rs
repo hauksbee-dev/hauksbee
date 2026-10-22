@@ -70,6 +70,11 @@ fn is_positive_rail(idx: &Index<'_>, net: i64) -> bool {
     })
 }
 
+/// A pin the board's own symbol marks as an input.
+fn is_input_pin(p: &Pin) -> bool {
+    p.kind.trim().eq_ignore_ascii_case("input")
+}
+
 /// What the nets reachable from an open-drain net through series parts hold.
 struct Reach {
     pulled: bool,
@@ -99,6 +104,12 @@ fn reach(idx: &Index<'_>, start: i64, od: &HashSet<(String, String)>) -> Reach {
                 }) {
                     out.pulled = true;
                     out.receivers = true;
+                } else if idx.model(c).is_some_and(|m| {
+                    m.kind == ComponentKind::Mcu && m.pin_capability.pull_up.is_none()
+                }) {
+                    // An MCU whose card states no pull-up pads: firmware may
+                    // well enable one, and the card cannot say, so abstain.
+                    out.external = true;
                 } else if is_series_part(idx, c) {
                     for q in &c.pins {
                         let Some(far) = q.net.filter(|&n| n != 0 && n != net) else {
@@ -113,7 +124,10 @@ fn reach(idx: &Index<'_>, start: i64, od: &HashSet<(String, String)>) -> Reach {
                             next.push(far);
                         }
                     }
-                } else if !is_capacitor(c) {
+                } else if !is_capacitor(c) && (idx.model(c).is_some() || is_input_pin(p)) {
+                    // A part with a card, or a pin the board calls an input.
+                    // A part nothing describes (a module, an unmodelled chip
+                    // with bidirectional pins) may carry its own pull-up.
                     out.receivers = true;
                 }
             }
@@ -224,14 +238,24 @@ mod tests {
         open_drain_pullup_lint(&board(&nets, parts), &ModelLibrary::builtin()).findings
     }
 
-    /// An ATmega whose pin 2 reads `net`.
+    /// An `ATmega` whose pin 2 reads `net`.
     fn mcu(net: i64) -> Component {
         part("U2", "ATmega328P", &[("2", net), ("7", V33), ("8", GND)])
     }
 
-    /// A receiver the library knows nothing about: an input with no stated pull.
+    /// A receiver the library knows nothing about, on a pin the board calls an
+    /// input: no stated pull.
     fn receiver(net: i64) -> Component {
-        part("U3", "XYZ-LOGIC-9", &[("1", net)])
+        let mut c = part("U3", "XYZ-LOGIC-9", &[("1", net)]);
+        c.pins[0].kind = "input".into();
+        c
+    }
+
+    /// A module nothing describes, on a bidirectional pin: it may carry its own pull-up.
+    fn module(net: i64) -> Component {
+        let mut c = part("U3", "XYZ-MODULE-9", &[("1", net)]);
+        c.pins[0].kind = "bidirectional".into();
+        c
     }
 
     #[test]
@@ -247,6 +271,12 @@ mod tests {
         assert_eq!(found[0].check, LintCheck::MissingOpenDrainPullup);
         assert_eq!(found[0].refs, ["U1"]);
         assert_eq!(found[0].nets, ["ALERT_N"]);
+    }
+
+    #[test]
+    fn an_undescribed_module_on_the_net_is_not_judged() {
+        let found = run(vec![sensor(ALERT), module(ALERT)]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     #[test]

@@ -1214,7 +1214,7 @@ backend = "none:atmega16u2"
 "32" = "avcc"
 "33" = "gnd2"     # QFN centre pad, soldered to ground (Figure 1-1 note)
 [models.pin_capability.pull_up]
-basis = "Atmel ATmega8U2/16U2/32U2 datasheet 7799E-AVR-09/2012, sections 2.2.4-2.2.6 (pp.4-5: Port B, C, D 'internal pull-up resistors (selected for each bit)'), section 12.1 (p.67) 'All port pins have individually selectable pull-up resistors', 12.2.1 (p.68) and Table 12-1 (p.69): PORTxn=1, DDxn=0, PUD=0 enables the pull-up; section 26.2 DC Characteristics (p.264) RPU I/O Pin Pull-up Resistor 20-50 kOhm; Tables 12-7/12-8 (p.78) and 12-10/12-11 (p.81) PUOE=0 on the listed pins (PD6/PD7 only override while RTS/CTS are enabled). Not listed: PC1/RESET (reset pull-up RRST 30-60 kOhm, p.264), XTAL1 and D+/D- (no port bit)"
+basis = "Atmel ATmega8U2/16U2/32U2 datasheet 7799E-AVR-09/2012, sections 2.2.4-2.2.6 (pp.4-5: Port B, C, D 'internal pull-up resistors (selected for each bit)'), section 12.1 (p.67) 'All port pins have individually selectable pull-up resistors', 12.2.1 (p.68) and Table 12-1 (p.69): PORTxn=1, DDxn=0, PUD=0 enables the pull-up; section 26.2 DC Characteristics (p.264) RPU I/O Pin Pull-up Resistor 20-50 kOhm; The alternate-function pull-up override (PUOE) applies only while the peripheral is enabled: Table 12-5 (p.76) PUOE = SPE*MSTR on PB0-PB3, Table 12-11 (p.81) PUOE = RXEN1 / TXEN1 on PD2 / PD3, and PD6/PD7 only override while RTS/CTS are enabled (Tables 12-7/12-8 p.78); with the peripheral off the pull-up is the plain PORTxn one. Not listed: PC1/RESET (reset pull-up RRST 30-60 kOhm, p.264), XTAL1 and D+/D- (no port bit)"
 [models.pin_capability.pull_up.pads]
 "2" = "PORTC.PC0 pull-up (PORTC0=1, DDRC0=0, PUD=0)"
 "5" = "PORTC.PC2 pull-up (PORTC2=1, DDRC2=0, PUD=0)"
@@ -3806,12 +3806,15 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
                    # demo board routes firmware PA8 here to its "FLAG" net (package-faithful).
 "30" = "pa9"       # USART1 TX
 "31" = "pa10"      # USART1 RX
-"35" = "vss3"
-"36" = "vdd3"
-"37" = "pb6_i2c1_scl"
-"38" = "pb7_i2c1_sda"
+"35" = "vss3"      # LQFP-48 pads 35/36 = VSS_2/VDD_2 (DS5319 Rev 19 Table 5); the card's role names are numbered
+"36" = "vdd3"      # one higher than the datasheet's (pads 23/24 = VSS_1/VDD_1), only the pad number matters
+"37" = "pa14"      # LQFP-48 pad 37 = PA14 (JTCK/SWCLK), DS5319 Rev 19 Table 5 (p.30), Figure 8 (p.26)
+"38" = "pa15"      # LQFP-48 pad 38 = PA15 (JTDI)
+"42" = "pb6_i2c1_scl"  # LQFP-48 pad 42 = PB6 (I2C1_SCL), DS5319 Rev 19 Table 5
+"43" = "pb7_i2c1_sda"  # LQFP-48 pad 43 = PB7 (I2C1_SDA)
 "44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
-"48" = "vdd4"      # VDDA
+"47" = "vss4"      # LQFP-48 pad 47 = VSS_3 (DS5319 Rev 19 Table 5)
+"48" = "vdd4"      # LQFP-48 pad 48 = VDD_3 (DS5319 Rev 19 Table 5)
 
 # RM0008 Rev 20 chapter 27 (USART) and STM32F103x8/xB datasheet DS5319 Rev 19. Printed page numbers.
 [models.peripherals.uart]
@@ -4034,7 +4037,7 @@ basis = "STMicroelectronics STM32F103x8/xB datasheet (medium-density), Table 5 p
 "17" = "ADC12_IN7"
 "18" = "ADC12_IN8"
 [models.pin_capability.pull_up]
-basis = "STMicroelectronics STM32F103x8/xB datasheet DS5319 Rev 19 (sha256 daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f), section 2.3.21 GPIOs (p.20) 'input (with or without pull-up or pull-down)'; Table 36 I/O static characteristics (p.61) RPU weak pull-up 30-50 kOhm. RM0008 Rev 20 (sha256 097bc47ab8aa0c5d4a68f836dbab95c5b9acb2b0c8116a2959307743204b5097) section 9.1.1 (p.161) 'All GPIO pins have an internal weak pull-up and weak pull-down that can be activated or not when configured as input' and Table 20 (p.161): CNF=10, PxODR=1 selects input pull-up. Not listed: VBAT, BOOT0, and the OSC_IN/OSC_OUT pads (card names carry no port; PD0/PD1 only via remap)"
+basis = "STMicroelectronics STM32F103x8/xB datasheet DS5319 Rev 19 (sha256 daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f), section 2.3.21 GPIOs (p.20) 'input (with or without pull-up or pull-down)'; Table 36 I/O static characteristics (p.61) RPU weak pull-up 30-50 kOhm. RM0008 Rev 20 (sha256 097bc47ab8aa0c5d4a68f836dbab95c5b9acb2b0c8116a2959307743204b5097) section 9.1.1 (p.161) 'All GPIO pins have an internal weak pull-up and weak pull-down that can be activated or not when configured as input' and Table 20 (p.161): CNF=10, PxODR=1 selects input pull-up. LQFP48 pad numbers per DS5319 Rev 19 Table 5 (p.30) and Figure 8 (p.26): PB6 = 42, PB7 = 43 (pads 37/38 are PA14/PA15, the JTAG pins, not listed). Not listed: VBAT, BOOT0, and the OSC_IN/OSC_OUT pads (card names carry no port; PD0/PD1 only via remap)"
 [models.pin_capability.pull_up.pads]
 "2" = "GPIOC13: input pull-up (CNF=10, GPIOC_ODR[13]=1)"
 "3" = "GPIOC14: input pull-up (CNF=10, GPIOC_ODR[14]=1)"
@@ -4050,8 +4053,8 @@ basis = "STMicroelectronics STM32F103x8/xB datasheet DS5319 Rev 19 (sha256 daf9e
 "29" = "GPIOA8: input pull-up (CNF=10, GPIOA_ODR[8]=1)"
 "30" = "GPIOA9: input pull-up (CNF=10, GPIOA_ODR[9]=1)"
 "31" = "GPIOA10: input pull-up (CNF=10, GPIOA_ODR[10]=1)"
-"37" = "GPIOB6: input pull-up (CNF=10, GPIOB_ODR[6]=1)"
-"38" = "GPIOB7: input pull-up (CNF=10, GPIOB_ODR[7]=1)"
+"42" = "GPIOB6: input pull-up (CNF=10, GPIOB_ODR[6]=1)"
+"43" = "GPIOB7: input pull-up (CNF=10, GPIOB_ODR[7]=1)"
 
 [models.ratings]
 max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
@@ -4171,10 +4174,10 @@ internal_pull = "none"
 note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STM32G474 (UFQFPN48 / LQFP48). Co-simulates on the COMPOSED Renode platform
+# STM32G474 (UFQFPN48; LQFP48 is the next card). Co-simulates on the COMPOSED Renode platform
 # in hauksbee-mcu db/mcu/stm32g4.soc.toml, which states what is exact and what
 # is approximated (RCC, ADC, DMA without transfers, FDCAN without frames).
-# Pad map: ST DS12288 LQFP48/UFQFPN48 column, cross-checked pad-by-pad against
+# Pad map: ST DS12288 UFQFPN48 column (Table 12), cross-checked pad-by-pad against
 # the moteus c1 board (U3, STM32G474CEU6): pad 7 NRST, 20/21 VREF+/VDDA,
 # 22 PB10 family strap, 24 PB11 unconnected, 36/37 SWDIO/SWCLK, 43/44 CAN
 # RX/TX (FDCAN2 on PB5/PB6), 49 exposed pad to GND.
@@ -4184,11 +4187,11 @@ note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 [[models]]
 id = "stm32g474c"
 kind = "mcu"
-description = "STM32G474C Cortex-M4F MCU, UFQFPN48 or LQFP48"
+description = "STM32G474C Cortex-M4F MCU, UFQFPN48 (the LQFP48 package is the stm32g474c_lqfp48 card)"
 
 [models.match]
-value_re = "(?i)^STM32G47[34]C[BCE](U|T)[36]?$"
-mpn_re   = "(?i)^STM32G47[34]C[BCE]"
+value_re = "(?i)^STM32G47[34]C[BCE]U[36]?$"
+mpn_re   = "(?i)^STM32G47[34]C[BCE]U"
 
 [models.params]
 backend = "renode:stm32g4"
@@ -4329,6 +4332,169 @@ basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6 (sha256 b0
 "45" = "GPIOB7: GPIOB_PUPDR[15:14] = 01 (input pull-up)"
 "46" = "GPIOB8: GPIOB_PUPDR[17:16] = 01 (input pull-up)"
 "47" = "GPIOB9: GPIOB_PUPDR[19:18] = 01 (input pull-up)"
+
+[models.ratings]
+max_pin_current_a = 0.02
+max_current_a = 0.15
+max_voltage_v = 4.0   # DS12288: VDD-VSS -0.3 to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.0
+basis = "ST STM32G474xB/xC/xE DS12288, general operating conditions VDD 1.71 V to 3.6 V; voltage characteristics VDD-VSS -0.3 V to 4.0 V"
+
+# BOOT0 is shared with PB8 and is only sampled when the nSWBOOT0 option bit
+# selects the pin, so no strap row is claimed here: whether a floating PB8
+# changes the boot source depends on option bytes this card cannot see.
+
+[models.coverage]
+implements = ["cortex_m4_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick", "adc_injection"]
+missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# STM32G474 LQFP48. Same die as the UFQFPN48 card above, but DS12288 Rev 6 Table 12 (pp.57-72) gives LQFP48
+# its own column: pads 1-15, 20-22 and 30-34 agree with UFQFPN48, from pad 16 on the two differ (LQFP48 has
+# no PC4, PC6, PC10 or PC11 pad, and pads 19, 23, 35 and 47 are VSSA/VSS). Pad map read from that column
+# (UFQFPN48 pads 17-19, 24-28, 36-38 and 41-47 sit one pad lower or higher in LQFP48). No exposed pad.
+[[models]]
+id = "stm32g474c_lqfp48"
+kind = "mcu"
+description = "STM32G474C Cortex-M4F MCU, LQFP48"
+
+[models.match]
+value_re = "(?i)^STM32G47[34]C[BCE]T[36]?$"
+mpn_re   = "(?i)^STM32G47[34]C[BCE]T"
+
+[models.params]
+backend = "renode:stm32g4"
+internal_clock = "internal 16 MHz HSI RC oscillator"
+
+[models.pins]
+"1" = "vbat"
+"2" = "pc13"
+"3" = "pc14_osc32_in"
+"4" = "pc15_osc32_out"
+"5" = "pf0_osc_in_adc10"  # PF0-OSC_IN, ADC1_IN10
+"6" = "pf1_osc_out_adc42"  # PF1-OSC_OUT, ADC2_IN10 (engine channel 32+10)
+"7" = "reset"  # PG10-NRST
+"8" = "pa0_adc1"  # ADC12_IN1
+"9" = "pa1_adc2"  # ADC12_IN2
+"10" = "pa2_adc3"  # ADC1_IN3
+"11" = "pa3_adc4"  # ADC1_IN4
+"12" = "pa4_adc49"  # ADC2_IN17 (engine channel 32+17)
+"13" = "pa5_adc45"  # ADC2_IN13
+"14" = "pa6_adc35"  # ADC2_IN3
+"15" = "pa7_adc36"  # ADC2_IN4
+"16" = "pb0_adc15"  # ADC1_IN15
+"17" = "pb1_adc12"  # ADC1_IN12
+"18" = "pb2_adc44"  # ADC2_IN12
+"19" = "vssa"
+"20" = "vref"
+"21" = "vdda"
+"22" = "pb10"
+"23" = "vss"
+"24" = "vdd"
+"25" = "pb11_adc14"  # ADC12_IN14
+"26" = "pb12_adc11"  # ADC1_IN11
+"27" = "pb13"
+"28" = "pb14_adc5"  # ADC1_IN5
+"29" = "pb15_adc47"  # ADC2_IN15
+"30" = "pa8"
+"31" = "pa9"
+"32" = "pa10"
+"33" = "pa11"
+"34" = "pa12"
+"35" = "vss2"
+"36" = "vdd2"
+"37" = "pa13_swdio"
+"38" = "pa14_swclk"
+"39" = "pa15"
+"40" = "pb3"
+"41" = "pb4"
+"42" = "pb5"
+"43" = "pb6"
+"44" = "pb7"
+"45" = "pb8_boot0"  # PB8-BOOT0; see the strap note below
+"46" = "pb9"
+"47" = "vss3"
+"48" = "vdd3"
+
+# STM32G474xB/xC/xE datasheet DS12288 Rev 6 (Nov 2021): Table 11 Legend/abbreviations p.56, NRST "Bidirectional
+# reset pin with embedded weak pull-up resistor"; sec. 5.3.15 NRST pin characteristics p.133: "connected to a
+# permanent pull-up resistor, RPU". Pad 7 = PG10-NRST (pinout, LQFP48/UFQFPN48).
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "NRST is active low with an embedded weak pull-up; held low it keeps the part in reset"
+
+# ADC pads, LQFP48 numbering: the same channels as the UFQFPN48 card (an ADC channel belongs to the pin, not
+# the pad), moved to the LQFP48 pad of each pin in DS12288 Rev 6 Table 12 (datasheet pp.57-72).
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition (datasheet pp.57-72), LQFP48 column: pads 5 and 6 (PF0, PF1), 8-18 (PA0-PA7, PB0-PB2), 25-29 (PB11-PB15) and 30-31 (PA8, PA9) carry ADC channels, named as the datasheet prints them (ADC1/ADC2/ADC3/ADC4/ADC5 inputs); every other pad of the map has none. Numbering is the LQFP48 column, not UFQFPN48 (PC4 is not bonded out on LQFP48)"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_IN10"
+"6" = "ADC2_IN10"
+"8" = "ADC1_IN1/ADC2_IN1"
+"9" = "ADC1_IN2/ADC2_IN2"
+"10" = "ADC1_IN3"
+"11" = "ADC1_IN4"
+"12" = "ADC2_IN17"
+"13" = "ADC2_IN13"
+"14" = "ADC2_IN3"
+"15" = "ADC2_IN4"
+"16" = "ADC1_IN15/ADC3_IN12"
+"17" = "ADC1_IN12/ADC3_IN1"
+"18" = "ADC2_IN12"
+"25" = "ADC1_IN14/ADC2_IN14"
+"26" = "ADC1_IN11/ADC4_IN3"
+"27" = "ADC3_IN5"
+"28" = "ADC1_IN5/ADC4_IN4"
+"29" = "ADC2_IN15/ADC4_IN5"
+"30" = "ADC5_IN1"
+"31" = "ADC5_IN2"
+[models.pin_capability.pull_up]
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6 (sha256 b018e20dbe34b63a43e49365518b186ef0e0e8e899deeabc1c9f53a3a10c1add), section 3.14 GPIOs (p.30) 'input (with or without pull-up or pull-down)'; Table 54 I/O static characteristics (p.128) RPU weak pull-up 25-55 kOhm; Table 12 note 5 (p.72) PA13/PA15/PB4 pull-up and PA14 pull-down after reset. RM0440 Rev 9 (sha256 7f8c15bc667c46614e2c5ad0341b9eaa20e8d417f21b819b9f2dde7dfe1ae564) section 9.3.1 (p.348) 'All GPIO pins have weak internal pull-up and pull-down resistors ... GPIOx_PUPDR'. Numbering is the LQFP48 column of Table 12 (PC4, PC6, PC10 and PC11 are not bonded out on LQFP48). Not listed: VBAT, VSSA, VREF+, VDDA, NRST (fixed pull-up), and PA11/PA12 (USB_DM/USB_DP pins)"
+[models.pin_capability.pull_up.pads]
+"2" = "GPIOC13: GPIOC_PUPDR[27:26] = 01 (input pull-up)"
+"3" = "GPIOC14: GPIOC_PUPDR[29:28] = 01 (input pull-up)"
+"4" = "GPIOC15: GPIOC_PUPDR[31:30] = 01 (input pull-up)"
+"5" = "GPIOF0: GPIOF_PUPDR[1:0] = 01 (input pull-up)"
+"6" = "GPIOF1: GPIOF_PUPDR[3:2] = 01 (input pull-up)"
+"8" = "GPIOA0: GPIOA_PUPDR[1:0] = 01 (input pull-up)"
+"9" = "GPIOA1: GPIOA_PUPDR[3:2] = 01 (input pull-up)"
+"10" = "GPIOA2: GPIOA_PUPDR[5:4] = 01 (input pull-up)"
+"11" = "GPIOA3: GPIOA_PUPDR[7:6] = 01 (input pull-up)"
+"12" = "GPIOA4: GPIOA_PUPDR[9:8] = 01 (input pull-up)"
+"13" = "GPIOA5: GPIOA_PUPDR[11:10] = 01 (input pull-up)"
+"14" = "GPIOA6: GPIOA_PUPDR[13:12] = 01 (input pull-up)"
+"15" = "GPIOA7: GPIOA_PUPDR[15:14] = 01 (input pull-up)"
+"16" = "GPIOB0: GPIOB_PUPDR[1:0] = 01 (input pull-up)"
+"17" = "GPIOB1: GPIOB_PUPDR[3:2] = 01 (input pull-up)"
+"18" = "GPIOB2: GPIOB_PUPDR[5:4] = 01 (input pull-up)"
+"22" = "GPIOB10: GPIOB_PUPDR[21:20] = 01 (input pull-up)"
+"25" = "GPIOB11: GPIOB_PUPDR[23:22] = 01 (input pull-up)"
+"26" = "GPIOB12: GPIOB_PUPDR[25:24] = 01 (input pull-up)"
+"27" = "GPIOB13: GPIOB_PUPDR[27:26] = 01 (input pull-up)"
+"28" = "GPIOB14: GPIOB_PUPDR[29:28] = 01 (input pull-up)"
+"29" = "GPIOB15: GPIOB_PUPDR[31:30] = 01 (input pull-up)"
+"30" = "GPIOA8: GPIOA_PUPDR[17:16] = 01 (input pull-up)"
+"31" = "GPIOA9: GPIOA_PUPDR[19:18] = 01 (input pull-up)"
+"32" = "GPIOA10: GPIOA_PUPDR[21:20] = 01 (input pull-up)"
+"37" = "GPIOA13: GPIOA_PUPDR[27:26] = 01 (input pull-up)"
+"38" = "GPIOA14: GPIOA_PUPDR[29:28] = 01 (input pull-up)"
+"39" = "GPIOA15: GPIOA_PUPDR[31:30] = 01 (input pull-up)"
+"40" = "GPIOB3: GPIOB_PUPDR[7:6] = 01 (input pull-up)"
+"41" = "GPIOB4: GPIOB_PUPDR[9:8] = 01 (input pull-up)"
+"42" = "GPIOB5: GPIOB_PUPDR[11:10] = 01 (input pull-up)"
+"43" = "GPIOB6: GPIOB_PUPDR[13:12] = 01 (input pull-up)"
+"44" = "GPIOB7: GPIOB_PUPDR[15:14] = 01 (input pull-up)"
+"45" = "GPIOB8: GPIOB_PUPDR[17:16] = 01 (input pull-up)"
+"46" = "GPIOB9: GPIOB_PUPDR[19:18] = 01 (input pull-up)"
 
 [models.ratings]
 max_pin_current_a = 0.02
@@ -4513,7 +4679,7 @@ basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8, T
 "34" = "ADC1_IN8/ADC2_IN8"
 "35" = "ADC1_IN9/ADC2_IN9"
 [models.pin_capability.pull_up]
-basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (cards-datasheets/stm32f777-ds11532.pdf, sha256 0c88752db156852678892b8e9d27beff6c910ce7abcbe5b3a0d207bdfe585bd6), section 3.41 GPIOs (p.50) 'input (floating, with or without pull-up or pull-down)'; Table 66 I/O static characteristics (pp.156-157) RPU weak pull-up 30-50 kOhm (all pins except PA10/PB12). Not listed: OSC_IN/OSC_OUT pads, BOOT0, NRST, VCAP/VDD pads, and the USB data pins PA11/PA12 (OTG_FS_DM/DP) and PB14/PB15 (OTG_HS_DM/DP)"
+basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (cards-datasheets/stm32f777-ds11532.pdf, sha256 0c88752db156852678892b8e9d27beff6c910ce7abcbe5b3a0d207bdfe585bd6), section 3.41 GPIOs (p.50) 'input (floating, with or without pull-up or pull-down)'; Table 66 I/O static characteristics (pp.156-157) RPU weak pull-up 30-50 kOhm (all pins except PA10/PB12, whose weak pull-up is 7-14 kOhm, Table 66 p.157, so their entries below are the lower-resistance pull-up). Not listed: OSC_IN/OSC_OUT pads, BOOT0, NRST, VCAP/VDD pads, and the USB data pins PA11/PA12 (OTG_FS_DM/DP) and PB14/PB15 (OTG_HS_DM/DP)"
 [models.pin_capability.pull_up.pads]
 "1" = "GPIOE2: GPIOE_PUPDR[5:4] = 01 (input pull-up)"
 "2" = "GPIOE3: GPIOE_PUPDR[7:6] = 01 (input pull-up)"
@@ -4551,7 +4717,7 @@ basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (c
 "45" = "GPIOE15: GPIOE_PUPDR[31:30] = 01 (input pull-up)"
 "46" = "GPIOB10: GPIOB_PUPDR[21:20] = 01 (input pull-up)"
 "47" = "GPIOB11: GPIOB_PUPDR[23:22] = 01 (input pull-up)"
-"51" = "GPIOB12: GPIOB_PUPDR[25:24] = 01 (input pull-up)"
+"51" = "GPIOB12: GPIOB_PUPDR[25:24] = 01 (input pull-up, 7-14 kOhm, Table 66 p.157)"
 "52" = "GPIOB13: GPIOB_PUPDR[27:26] = 01 (input pull-up)"
 "55" = "GPIOD8: GPIOD_PUPDR[17:16] = 01 (input pull-up)"
 "56" = "GPIOD9: GPIOD_PUPDR[19:18] = 01 (input pull-up)"
@@ -4567,7 +4733,7 @@ basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (c
 "66" = "GPIOC9: GPIOC_PUPDR[19:18] = 01 (input pull-up)"
 "67" = "GPIOA8: GPIOA_PUPDR[17:16] = 01 (input pull-up)"
 "68" = "GPIOA9: GPIOA_PUPDR[19:18] = 01 (input pull-up)"
-"69" = "GPIOA10: GPIOA_PUPDR[21:20] = 01 (input pull-up)"
+"69" = "GPIOA10: GPIOA_PUPDR[21:20] = 01 (input pull-up, 7-14 kOhm, Table 66 p.157)"
 "72" = "GPIOA13: GPIOA_PUPDR[27:26] = 01 (input pull-up)"
 "76" = "GPIOA14: GPIOA_PUPDR[29:28] = 01 (input pull-up)"
 "77" = "GPIOA15: GPIOA_PUPDR[31:30] = 01 (input pull-up)"
@@ -5052,11 +5218,12 @@ basis = "Espressif ESP32-PICO Series Datasheet v1.4, Table 2 Pin Description of 
 "22" = "ADC2_CH2"
 "23" = "ADC2_CH1"
 [models.pin_capability.pull_up]
-basis = "ESP32-PICO-D4 SiP: pad-to-GPIO mapping from ESP32-PICO Series Datasheet v1.4 (sha256 652834c31a0ac4930aec4ac23754d2737e8bdecb76410edf3c48be519a6c40af) the Pin Description table (pp.19-20). Espressif ESP32 Series Datasheet v5.3 (sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf) section 4.8.1 GPIO (p.36) 'Most of the digital GPIOs can be configured as internal pull-up or pull-down'; Appendix A p.62 'The drive strength of the internal pull-up (wpu) and pull-down (wpd) is ~75 uA'; section 2.3.1 (p.17) that the input-only GPIO34-39 lack pull-up/pull-down resistors. ESP32 Technical Reference Manual v5.8 (sha256 4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0) section 6.1 Figure 6.1-2 pad WPU (p.116); section 6.2.2 step 3 (p.118) 'Set or clear the FUN_WPU and FUN_WPD bits ... to enable/disable internal pull-up/pull-down resistors'; Table 6.10-1 (p.133) lists the pad registers; Register 6.34 IO_MUX_x_REG (x: 0-19, 21-23, 25-27, 32-39) FUN_WPU (p.149) 'GPIO pins 34-39 ... do not feature ... internal pull-up/pull-down circuitry'. Not listed: pad 28 (GPIO9), which the card keeps but which the PICO datasheet Table 7 (p.22) says is free on PICO-D4 yet used for in-package PSRAM on PICO-V3-02, so the variant cannot decide it; CHIP_PU and the supply pads"
+basis = "ESP32-PICO-D4 SiP: pad-to-GPIO mapping from ESP32-PICO Series Datasheet v1.4 (sha256 652834c31a0ac4930aec4ac23754d2737e8bdecb76410edf3c48be519a6c40af) Table 2 Pin Description of ESP32-PICO-D4 (pp.13-15; IO2 = 22 and IO0 = 23 on p.14, IO5 = 34, U0RXD = 40 and U0TXD = 41 on p.15). Espressif ESP32 Series Datasheet v5.3 (sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf) section 4.8.1 GPIO (p.36) 'Most of the digital GPIOs can be configured as internal pull-up or pull-down'; Appendix A p.62 'The drive strength of the internal pull-up (wpu) and pull-down (wpd) is ~75 uA'; section 2.3.1 (p.17) that the input-only GPIO34-39 lack pull-up/pull-down resistors. ESP32 Technical Reference Manual v5.8 (sha256 4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0) section 6.1 Figure 6.1-2 pad WPU (p.116); section 6.2.2 step 3 (p.118) 'Set or clear the FUN_WPU and FUN_WPD bits ... to enable/disable internal pull-up/pull-down resistors'; Table 6.10-1 (p.133) lists the pad registers; Register 6.34 IO_MUX_x_REG (x: 0-19, 21-23, 25-27, 32-39) FUN_WPU (p.149) 'GPIO pins 34-39 ... do not feature ... internal pull-up/pull-down circuitry'. Pad 28 (GPIO9) is listed because this card matches ESP32-PICO-D4 only, where Table 7 (p.22) says GPIO9 'can be used freely' (it is used for in-package PSRAM only on PICO-V3-02, which the card does not match) and GPIO9 has an IO_MUX_x_REG (x: 0-19) with FUN_WPU (TRM Register 6.34, p.149). Not listed: CHIP_PU and the supply pads"
 [models.pin_capability.pull_up.pads]
 "23" = "GPIO0: IO_MUX_GPIO0_REG FUN_WPU = 1 (internal pull-up)"
 "22" = "GPIO2: IO_MUX_GPIO2_REG FUN_WPU = 1 (internal pull-up)"
 "34" = "GPIO5: IO_MUX_GPIO5_REG FUN_WPU = 1 (internal pull-up)"
+"28" = "GPIO9: IO_MUX_GPIO9_REG FUN_WPU = 1 (internal pull-up)"
 "41" = "GPIO1: IO_MUX_GPIO1_REG FUN_WPU = 1 (internal pull-up)"
 "40" = "GPIO3: IO_MUX_GPIO3_REG FUN_WPU = 1 (internal pull-up)"
 
@@ -6783,7 +6950,7 @@ backend = "none:efm32pg22"
 # and why the key is 41.
 "41" = "vss4"
 [models.pin_capability.pull_up]
-basis = "Silicon Labs EFM32PG22 Gecko MCU Family Data Sheet Rev. 1.4 (sha256 846352b27f8e04e3b8cf6d9f1685f1072cc115fd84aeb4c7708191a57c1d3d0a), Table 4.17 GPIO Pins (3V GPIO pins), row 'Pull up/down resistance' RPULL 35/44/55 kOhm: 'Any GPIO pin. Pull-up to IOVDD: MODEn = DISABLE DOUT=1' and note 2 'GPIO pull-ups connect to IOVDD supply' (p.38); pad-to-port map from Table 6.2 QFN40 Device Pinout (pp.60-61). Not listed: pad 11 (RESETn, fixed pull-up to DVDD per Table 6.2 and Table 4.17), the HFXTAL_I/HFXTAL_O pads, pad 14 (NC) and the supply pads"
+basis = "Silicon Labs EFM32PG22 Gecko MCU Family Data Sheet Rev. 1.4 (sha256 846352b27f8e04e3b8cf6d9f1685f1072cc115fd84aeb4c7708191a57c1d3d0a), Table 4.17 GPIO Pins (3V GPIO pins), row 'Pull up/down resistance' RPULL 35/44/55 kOhm: 'Any GPIO pin. Pull-up to IOVDD: MODEn = DISABLE DOUT=1' and note 2 'GPIO pull-ups connect to IOVDD supply' (footnote 2 on p.39, the RPULL row on p.38); pad-to-port map from Table 6.2 QFN40 Device Pinout (pp.60-61). Not listed: pad 11 (RESETn, fixed pull-up to DVDD per Table 6.2 and Table 4.17), the HFXTAL_I/HFXTAL_O pads, pad 14 (NC) and the supply pads"
 [models.pin_capability.pull_up.pads]
 "1" = "PC00: GPIO_PC_MODEL MODE0 = DISABLE with DOUT[0] = 1 (pull-up to IOVDD)"
 "2" = "PC01: GPIO_PC_MODEL MODE1 = DISABLE with DOUT[1] = 1 (pull-up to IOVDD)"
@@ -6806,7 +6973,7 @@ basis = "Silicon Labs EFM32PG22 Gecko MCU Family Data Sheet Rev. 1.4 (sha256 846
 "26" = "PA05: GPIO_PA_MODEL MODE5 = DISABLE with DOUT[5] = 1 (pull-up to IOVDD)"
 "27" = "PA06: GPIO_PA_MODEL MODE6 = DISABLE with DOUT[6] = 1 (pull-up to IOVDD)"
 "28" = "PA07: GPIO_PA_MODEL MODE7 = DISABLE with DOUT[7] = 1 (pull-up to IOVDD)"
-"29" = "PA08: GPIO_PA_MODEL MODE8 = DISABLE with DOUT[8] = 1 (pull-up to IOVDD)"
+"29" = "PA08: GPIO_PA_MODEH MODE0 = DISABLE with DOUT[8] = 1 (pull-up to IOVDD)"
 "37" = "PD03: GPIO_PD_MODEL MODE3 = DISABLE with DOUT[3] = 1 (pull-up to IOVDD)"
 "38" = "PD02: GPIO_PD_MODEL MODE2 = DISABLE with DOUT[2] = 1 (pull-up to IOVDD)"
 "39" = "PD01: GPIO_PD_MODEL MODE1 = DISABLE with DOUT[1] = 1 (pull-up to IOVDD)"

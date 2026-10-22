@@ -672,13 +672,15 @@ fn sink_of(model: &ModelEntry, role: &str) -> Option<Sink> {
     }
 }
 
+/// What a node feeds, keyed by (net, input kind): the driver pins, the
+/// input-bearing parts, and whether a part is not a regulator.
+type NodeInputs = (BTreeSet<String>, BTreeSet<String>, bool);
+
 /// MOSFET gates, analog-switch selects and enable inputs held only by MCU or
 /// connector pins, one finding per node: the inputs a node feeds share one
 /// cause and one fix.
 fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
-    // (net, input kind) -> (driver pins, input-bearing parts, a part is not a regulator)
-    let mut nodes: BTreeMap<(i64, Sink), (BTreeSet<String>, BTreeSet<String>, bool)> =
-        BTreeMap::new();
+    let mut nodes: BTreeMap<(i64, Sink), NodeInputs> = BTreeMap::new();
     for c in &idx.board.components {
         let Some(model) = idx.model(c) else { continue };
         for p in &c.pins {
@@ -1111,7 +1113,8 @@ mod tests {
         );
         let found = run(vec![xcvr, mcu(10)], &[(10, "XCVR_EN")]);
         assert!(of(&found, LintCheck::FloatingGate).is_empty(), "{found:#?}");
-        // A gate driver whose card states no pull is a Low note.
+        // A DRV8353S states its 100 kOhm ENABLE pull-down (SLVSDY6A p.12): an
+        // open ENABLE reads low and the part sleeps, a defined state.
         let drv = part(
             "U4",
             "DRV8353SRTAR",
@@ -1119,6 +1122,15 @@ mod tests {
             &[("31", 10), ("39", GND), ("3", V5)],
         );
         let found = run(vec![drv, mcu(10)], &[(10, "DRV_EN")]);
+        assert!(of(&found, LintCheck::FloatingGate).is_empty(), "{found:#?}");
+        // A driver whose card states no pull is a Low note.
+        let haptic = part(
+            "U4",
+            "DRV2603RUNT",
+            "Driver_Haptic:DRV2603RUNT",
+            &[("1", 10), ("5", GND), ("7", V5)],
+        );
+        let found = run(vec![haptic, mcu(10)], &[(10, "HAPTIC_EN")]);
         let hits = of(&found, LintCheck::FloatingGate);
         assert_eq!(hits.len(), 1, "{found:#?}");
         assert_eq!(hits[0].severity, Severity::Low);

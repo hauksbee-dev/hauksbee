@@ -2668,6 +2668,9 @@ fn check_series_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
     }
 }
 
+/// A driving pin and the part it belongs to.
+type Driver<'a> = (&'a Component, &'a Pin);
+
 /// A pin that drives its net push-pull: a typed output, or a dedicated UART
 /// transmit pad (an MCU pad is usually typed `bidirectional`).
 fn drives_pushpull(c: &Component, p: &Pin) -> bool {
@@ -2682,7 +2685,7 @@ fn series_side<'a>(
     id: i64,
     chain: &[String],
     present: &dyn Fn(&Component) -> bool,
-) -> Option<Vec<(&'a Component, &'a Pin)>> {
+) -> Option<Vec<Driver<'a>>> {
     let mem: Vec<_> = members(board, id)
         .into_iter()
         .filter(|(c, _)| present(c) && !chain.contains(&c.reference))
@@ -2709,7 +2712,7 @@ fn series_contention_finding(
     chain: &[String],
     ohms: f64,
     (a, b): (i64, i64),
-    (da, db): (&[(&Component, &Pin)], &[(&Component, &Pin)]),
+    (da, db): (&[Driver<'_>], &[Driver<'_>]),
 ) -> Option<LintFinding> {
     let name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
     let refs_a: std::collections::BTreeSet<&str> =

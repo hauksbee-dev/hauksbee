@@ -3427,7 +3427,7 @@ missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "s
 # GigaDevice GD25Q16 16-Mbit SPI NOR, 8-pin SOP/VSOP/DIP/USON/WSON (executable
 # standard-SPI subset).
 #
-# Source: GigaDevice GD25Q16C datasheet, revision 1.9 (2016-04-19). Section 2 pin
+# Source: GigaDevice GD25Q16C datasheet, revision 3.2 (2021-05-10). Section 2 pin
 # description (one map for the 8-lead SOP/DIP and WSON/USON), Section 3 memory
 # organization (2 MB, 256-byte pages, 4 KB sectors), 7.22 Read Identification
 # (9Fh returns C8h 40h 15h), 8.1, 8.3 and 8.5 (T = -40 to 85 C, VCC = 2.7 to
@@ -3444,7 +3444,7 @@ tier = "curated-library"
 validation = "datasheet-curves"
 [[models.source.references]]
 url = "https://cdn.components.ru/media/PDF/8048136.pdf"
-title = "GigaDevice GD25Q16C 3.3V Uniform Sector Dual and Quad Serial Flash datasheet, revision 1.9, 2016-04-19"
+title = "GigaDevice GD25Q16C 3.3V Uniform Sector Dual and Quad Serial Flash datasheet, revision 3.2, 2021-05-10"
 locator = "Section 2 pin description; Section 3 memory organization; 7.22; 8.1 Table 6; 8.3; 8.5 DC characteristics (-40 to 85 C)"
 sha256 = "de373b35fad70775b52699ec67a99d1bd292b1865a08ea688c7832e0b4018205"
 [[models.source.uncertainty]]
@@ -3499,7 +3499,7 @@ float_tolerated_basis = "/WP only acts when the status-register protect bits are
 "8" = "vcc"
 
 [models.pin_capability.tri_state]
-basis = "GigaDevice GD25Q16C revision 1.9 (2016-04-19) Section 8.6 AC Characteristics, tSHQZ Output Disable Time (CS# high to SO output disabled, 6 ns max), p.47; SO (IO1) is pad 2 (Pin Description, p.5)"
+basis = "GigaDevice GD25Q16C revision 3.2 (2021-05-10) Section 8.6 AC Characteristics, tSHQZ Output Disable Time (CS# high to SO output disabled, 6 ns max), p.47; SO (IO1) is pad 2 (Pin Description, p.5)"
 [models.pin_capability.tri_state.pads]
 "2" = "cs"
 
@@ -4566,6 +4566,9 @@ gnd_pin    = "2"
                   # hold this net low. The timer is not modelled (see above), so
                   # there is nothing to drive it with and a named pad is the truth.
 "6" = "rst_n"     # open-drain active-low reset output. No `y` prefix and no `voh`
+                  # claim applies to it either: an open-drain pin has no high-side
+                  # drive, and the board's pull-up decides its high level. Same
+                  # reasoning as the SR2 entry in db/power_ics.toml.
 
 [models.pin_capability.open_drain]
 basis = "Texas Instruments TPL5010 SNAS651A (January 2015, revised September 2018): Pin Functions table (p.4) lists pin 6 RSTn as Reset Output (open drain output)"
@@ -4579,9 +4582,6 @@ url = "https://www.ti.com/lit/ds/symlink/tpl5010.pdf"
 title = "Texas Instruments TPL5010 Nano-Power System Timer With Watchdog Function, SNAS651A, January 2015, revised September 2018"
 locator = "Pin Functions table p.4"
 sha256 = "a62ae27e1c3dd0cef4549fe4e7d10c637359804a09c74791e4814f6aa26a0f39"
-                  # claim applies to it either: an open-drain pin has no high-side
-                  # drive, and the board's pull-up decides its high level. Same
-                  # reasoning as the SR2 entry in db/power_ics.toml.
 
 [models.ratings]
 # Section 7.1 Absolute Maximum Ratings.
@@ -9622,7 +9622,7 @@ i2c_max_hz = { max = 2940000.0, unit = "Hz", conditions = "I2C high-speed mode; 
 "10" = "in_p"    # IN+, supply side of the external shunt (high-side use)
 
 [models.pin_capability.open_drain]
-basis = "Texas Instruments INA228 SLYS021A (January 2021, revised May 2022): Table 5-1 Pin Functions (p.3) lists ALERT as an open-drain alert output, and the ALERT pin description (p.16) says the open-drain output must be pulled up by a resistor"
+basis = "Texas Instruments INA228 SLYS021A (January 2021, revised May 2022): Table 5-1 Pin Functions (p.3) lists ALERT as an open-drain alert output, and the ALERT pin description (Section 7.3.7, the sentence is on p.17) says the open-drain output must be pulled up by a resistor"
 [models.pin_capability.open_drain.pads]
 "3" = "ALERT"
 
@@ -13629,6 +13629,9 @@ vm_current_a = 0.0085
 vdrain_current_a = 0.0019
 vm_on_v = 9.0
 vdrain_on_v = 7.0
+en_pull_down_ohms = 100000.0
+en_open = "off"
+en_open_basis = "TI DRV835x SLVSDY6A (August 2018, revised June 2019) 7.5 Electrical Characteristics (p.12), LOGIC-LEVEL INPUTS (ENABLE, INHx, INLx, nSCS, SCLK, SDI): RPD pulldown resistance, to GND, 100 kOhm typ; 8.3.3 Pin Diagrams, Figure 37 (p.39) shows the 100 kOhm pulldown on the ENABLE input. ENABLE low puts the device in sleep, so an open ENABLE reads low and the part sleeps"
 warning = "source-bound supply-draw model: the awake VM current (8.5 mA typ, 13 mA max at VM = VDRAIN = 48 V, ENABLE high, inputs low) and VDRAIN current (1.9 mA typ) with the 9 V to 75 V VM and 7 V to 100 V VDRAIN ranges are executable; the gate drivers, charge pump, DVDD and VGLS regulators, shunt amplifiers, SPI registers, ENABLE sleep mode (20 uA) and fault logic are not represented, so the half-bridge gates carry no drive"
 
 [models.pins]

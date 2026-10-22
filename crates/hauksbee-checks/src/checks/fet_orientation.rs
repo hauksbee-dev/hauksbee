@@ -68,9 +68,15 @@ fn is_series_element(c: &Component) -> bool {
 /// elements, never crossing the FET `q`.
 fn cluster(idx: &Index<'_>, net: i64, q: &Component) -> Vec<i64> {
     let mut seen = vec![net];
-    let mut frontier = vec![net];
+    // Ground is the reference every sense resistor and bead returns to, not a
+    // source: walking out of it would lend it another rail's evidence.
+    let mut frontier = if is_ground(idx.name(net)) {
+        Vec::new()
+    } else {
+        vec![net]
+    };
     for _ in 0..HOPS {
-        let mut next = Vec::new();
+        let mut reached = Vec::new();
         for n in frontier {
             for (o, _) in idx.members(n) {
                 if same(o, q) || !is_series_element(o) {
@@ -79,12 +85,12 @@ fn cluster(idx: &Index<'_>, net: i64, q: &Component) -> Vec<i64> {
                 for far in o.pins.iter().filter_map(|p| p.net).filter(|id| *id != 0) {
                     if !seen.contains(&far) {
                         seen.push(far);
-                        next.push(far);
+                        reached.push(far);
                     }
                 }
             }
         }
-        frontier = next;
+        frontier = reached;
     }
     seen
 }
@@ -126,19 +132,33 @@ fn cluster_level(idx: &Index<'_>, nets: &[i64]) -> Option<f64> {
         .max_by(f64::total_cmp)
 }
 
-/// Which of the FET's two channel nets `a` and `b` is the supply side, when
-/// the evidence is not a tie.
-fn supply_side(idx: &Index<'_>, q: &Component, (a, b): (i64, i64)) -> Option<i64> {
-    let (ca, cb) = (cluster(idx, a, q), cluster(idx, b, q));
-    let (ta, tb) = (source_tier(idx, &ca, q), source_tier(idx, &cb, q));
-    if ta != tb {
-        return Some(if ta > tb { a } else { b });
+/// Which of the FET's two channel nets `first` and `second` is the supply side,
+/// when the evidence is not a tie.
+fn supply_side(idx: &Index<'_>, q: &Component, (first, second): (i64, i64)) -> Option<i64> {
+    let (near_first, near_second) = (cluster(idx, first, q), cluster(idx, second, q));
+    let tier_first = source_tier(idx, &near_first, q);
+    let tier_second = source_tier(idx, &near_second, q);
+    if tier_first != tier_second {
+        return Some(if tier_first > tier_second {
+            first
+        } else {
+            second
+        });
     }
-    let (la, lb) = (cluster_level(idx, &ca), cluster_level(idx, &cb));
-    match (la, lb) {
-        (Some(x), Some(y)) if (x - y).abs() > 0.5 => Some(if x > y { a } else { b }),
-        (Some(_), None) if ta == 0 => Some(a),
-        (None, Some(_)) if ta == 0 => Some(b),
+    let levels = (
+        cluster_level(idx, &near_first),
+        cluster_level(idx, &near_second),
+    );
+    match levels {
+        (Some(volts_first), Some(volts_second)) if (volts_first - volts_second).abs() > 0.5 => {
+            Some(if volts_first > volts_second {
+                first
+            } else {
+                second
+            })
+        }
+        (Some(_), None) if tier_first == 0 => Some(first),
+        (None, Some(_)) if tier_first == 0 => Some(second),
         _ => None,
     }
 }
@@ -147,6 +167,9 @@ fn supply_side(idx: &Index<'_>, q: &Component, (a, b): (i64, i64)) -> Option<i64
 /// or the collector of a driver transistor.
 fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
     if is_connector_like(o) {
+        return false;
+    }
+    if p.kind.to_ascii_lowercase().contains("power") {
         return false;
     }
     if pin_drives(p) || p.kind.trim().eq_ignore_ascii_case("bidirectional") {
@@ -172,6 +195,10 @@ fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
 
 /// The first pin that drives the gate net, or one series gate resistor away.
 fn gate_driver(idx: &Index<'_>, q: &Component, gate: i64) -> Option<String> {
+    // A gate tied to a rail or ground is not switched by anything.
+    if idx.level(gate).is_some() {
+        return None;
+    }
     let mut nets = vec![gate];
     for (o, _) in idx.members(gate) {
         if !same(o, q) && o.pins.len() == 2 && RefClass::of(&o.reference) == RefClass::Resistor {
@@ -179,7 +206,7 @@ fn gate_driver(idx: &Index<'_>, q: &Component, gate: i64) -> Option<String> {
                 o.pins
                     .iter()
                     .filter_map(|p| p.net)
-                    .filter(|n| *n != 0 && *n != gate),
+                    .filter(|n| *n != 0 && *n != gate && idx.level(*n).is_none()),
             );
         }
     }
@@ -244,7 +271,46 @@ fn reaches_connector(idx: &Index<'_>, net: i64, q: &Component) -> bool {
     })
 }
 
-fn diode_note(pmos: bool) -> &'static str {
+/// A switching-converter power stage: an inductor sits on a channel net, so
+/// the half-bridge's body diodes are part of the topology and the supply side
+/// cannot be read from where the sources are.
+fn on_inductor(idx: &Index<'_>, net: i64, q: &Component) -> bool {
+    idx.members(net)
+        .iter()
+        .any(|(o, _)| !same(o, q) && RefClass::of(&o.reference) == RefClass::Inductor)
+}
+
+/// A second source feeds `net` through a diode (power-path OR-ing, an ideal
+/// diode): the body diode conducting from the other side is the design.
+fn diode_or_fed(idx: &Index<'_>, net: i64, q: &Component) -> bool {
+    idx.members(net).iter().any(|(o, p)| {
+        !same(o, q)
+            && o.pins.len() == 2
+            && RefClass::of(&o.reference) == RefClass::Diode
+            && o.pins
+                .iter()
+                .filter(|x| !std::ptr::eq(*x, *p))
+                .filter_map(|x| x.net)
+                .filter(|&far| far != 0 && far != net && !is_ground(idx.name(far)))
+                .any(|far| {
+                    let near = cluster(idx, far, q);
+                    source_tier(idx, &near, q) > 0 || cluster_level(idx, &near).is_some()
+                })
+    })
+}
+
+/// A resistor straight across the FET's channel (a pre-charge or soft-start
+/// path): the part is not a bare protection element.
+fn bypassed(idx: &Index<'_>, q: &Component, (s, d): (i64, i64)) -> bool {
+    idx.members(s).iter().any(|(o, _)| {
+        !same(o, q)
+            && o.pins.len() == 2
+            && RefClass::of(&o.reference) == RefClass::Resistor
+            && o.pins.iter().any(|x| x.net == Some(d))
+    })
+}
+
+const fn diode_note(pmos: bool) -> &'static str {
     if pmos {
         "drain to source"
     } else {
@@ -284,8 +350,14 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         let channel = if pmos { "P" } else { "N" };
         if let Some(driver) = gate_driver(&idx, q, g) {
             // Driven switch: the supply must not sit on the diode's anode.
-            if let Some(supply) = supply_side(&idx, q, (s, d)).filter(|n| *n == anode) {
+            let supply = supply_side(&idx, q, (s, d))
+                .filter(|n| *n == anode && !is_ground(idx.name(*n)))
+                .filter(|_| !on_inductor(&idx, s, q) && !on_inductor(&idx, d, q));
+            if let Some(supply) = supply {
                 let load = if supply == s { d } else { s };
+                if diode_or_fed(&idx, load, q) {
+                    continue;
+                }
                 report.findings.push(LintFinding {
                     check: LintCheck::PinFunction,
                     severity: Severity::High,
@@ -320,6 +392,7 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         if gate_is_passive(&idx, q, g, [s, d])
             && reaches_connector(&idx, s, q)
             && !reaches_connector(&idx, d, q)
+            && !bypassed(&idx, q, (s, d))
         {
             report.findings.push(LintFinding {
                 check: LintCheck::PinFunction,
@@ -529,6 +602,55 @@ mod tests {
     #[test]
     fn a_correct_reverse_polarity_pfet_behind_a_fuse_is_silent() {
         let found = lint(rpp(VPROT, VFUSED), RAILS);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    const OTHER: i64 = 30;
+    const SWNODE: i64 = 31;
+
+    /// The shapes that read as reversed but are not: each stays silent, and
+    /// the same wiring without the extra part is still flagged.
+    #[test]
+    fn converter_stages_or_ing_level_shifters_and_sense_returns_are_silent() {
+        let extra: &[(i64, &str)] = &[(OTHER, "VBUS_B"), (SWNODE, "SWNODE")];
+        let reversed = vec![header(V5), pfet(SW, V5, GATE), mcu(GATE), load(SW)];
+        assert_eq!(lint(reversed.clone(), extra).len(), 1);
+        // An inductor on a channel net: a converter half-bridge.
+        let mut stage = reversed.clone();
+        stage.push(part("L1", "10u", "Device:L", &[("1", SW), ("2", SWNODE)]));
+        let found = lint(stage, extra);
+        assert!(found.is_empty(), "inductor: {found:#?}");
+        // A second source feeds the load net through a diode: power-path OR-ing.
+        let mut or_ing = reversed;
+        or_ing.push(part(
+            "J2",
+            "Conn",
+            "Connector:Conn_01x02",
+            &[("1", OTHER), ("2", GND)],
+        ));
+        or_ing.push(part("D1", "SS14", "Device:D", &[("1", OTHER), ("2", SW)]));
+        let found = lint(or_ing, extra);
+        assert!(found.is_empty(), "diode OR: {found:#?}");
+        // A gate held by a regulator's power output is tied, not switched.
+        let mut tied = vec![header(V5), pfet(SW, V5, GATE), load(SW)];
+        let mut reg = part("U4", "LDO", "Regulator:LDO", &[("1", GATE)]);
+        reg.pins[0].kind = "power_output".into();
+        tied.push(reg);
+        let found = lint(tied, extra);
+        assert!(found.is_empty(), "tied gate: {found:#?}");
+        // A sense resistor from ground to a supply does not make ground the
+        // supply side of a low-side N-FET.
+        let mut low = vec![header(V5), nfet(GND, SW, GATE), mcu(GATE), load(SW)];
+        low.push(part("R9", "0.01", "Device:R", &[("1", GND), ("2", V5)]));
+        let found = lint(low, extra);
+        assert!(found.is_empty(), "sense return: {found:#?}");
+    }
+
+    #[test]
+    fn a_resistor_across_the_channel_makes_it_a_soft_start_not_protection() {
+        let mut parts = rpp(VFUSED, VPROT);
+        parts.push(part("R9", "62", "Device:R", &[("1", VFUSED), ("2", VPROT)]));
+        let found = lint(parts, RAILS);
         assert!(found.is_empty(), "{found:#?}");
     }
 }
