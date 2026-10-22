@@ -39,8 +39,8 @@ use std::fmt::Write as _;
 use hauksbee_bind::binder::is_ground;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, ABSTENTION_MARKER,
-    REMEDY_MARKER,
+    pin_is_no_connect, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+    ABSTENTION_MARKER, REMEDY_MARKER,
 };
 use hauksbee_models::refdes::RefClass;
 use hauksbee_models::{CapGrade, ModelEntry, ModelLibrary, SupplyCap};
@@ -167,13 +167,14 @@ pub fn supply_cap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 .iter()
                 .filter(|(_, role)| role.eq_ignore_ascii_case(&row.role))
             {
-                let Some(net_id) = comp
-                    .pins
-                    .iter()
-                    .find(|p| p.number == *pad)
-                    .and_then(|p| p.net)
-                    .filter(|id| *id != 0)
-                else {
+                let Some(pin) = comp.pins.iter().find(|p| p.number == *pad) else {
+                    continue;
+                };
+                // A pin marked no-connect has nothing to decouple.
+                if pin_is_no_connect(pin) {
+                    continue;
+                }
+                let Some(net_id) = pin.net.filter(|id| *id != 0) else {
                     continue;
                 };
                 // Pads of one role on one net (two VIN pads tied) are one pin.
@@ -184,6 +185,14 @@ pub fn supply_cap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                     continue;
                 };
                 if is_ground(&net.name) || super::is_unconnected_net(&net.name) {
+                    continue;
+                }
+                // A pin alone on an auto-named net (`Net-(U1-IN2)`: a stub wire
+                // or label that goes nowhere) is unused, not unbypassed. A rail
+                // the board names itself stays judged.
+                if net.name.trim_start_matches('/').starts_with("Net-(")
+                    && board.net_members(net_id).len() <= 1
+                {
                     continue;
                 }
                 let across = rail_caps(board, net_id, gnd);
@@ -489,6 +498,61 @@ basis = "fixture datasheet section 8.3, p.13: 10 uF bulk recommended"
             parts,
         );
         let f = supply_cap_lint(&b, &library()).findings;
+        assert_eq!(on(&f, "+5V").len(), 1, "{f:?}");
+    }
+
+    /// The load switch with its input pad (1) on `net` and of pin type `kind`;
+    /// an output capacitor and the bulk capacitor are fitted, so only the input
+    /// could fire.
+    fn input_on(net: Option<i64>, kind: &str) -> Vec<LintFinding> {
+        let mut u1 = part(
+            "U1",
+            "CAPTEST",
+            &[("1", 2), ("2", 1), ("3", 3), ("4", 4), ("5", 5)],
+        );
+        u1.pins[0].net = net;
+        u1.pins[0].kind = kind.into();
+        let parts = vec![
+            u1,
+            part("J1", "CONN", &[("1", 2), ("2", 8)]),
+            part("C2", "100n", &[("1", 3), ("2", 1)]),
+            part("C3", "10u", &[("1", 5), ("2", 1)]),
+        ];
+        let b = board(
+            &[
+                (1, "GND"),
+                (2, "+5V"),
+                (3, "+3V3"),
+                (4, "EN"),
+                (5, "+12V"),
+                (6, "unconnected-(U1-VIN)"),
+                (7, "Net-(U1-VIN)"),
+                (8, "SENSE"),
+            ],
+            parts,
+        );
+        supply_cap_lint(&b, &library()).findings
+    }
+
+    #[test]
+    fn an_unused_supply_pin_is_not_asked_for_a_capacitor() {
+        // No net at all (an unrouted pin).
+        let f = input_on(None, "power_in");
+        assert!(f.is_empty(), "{f:?}");
+        // A KiCad no-connect net.
+        let f = input_on(Some(6), "power_in");
+        assert!(f.is_empty(), "{f:?}");
+        // An auto-named stub net holding only the pin.
+        let f = input_on(Some(7), "power_in");
+        assert!(f.is_empty(), "{f:?}");
+        // A pin the symbol marks no-connect, even on a rail another part feeds.
+        let f = input_on(Some(2), "no_connect");
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_used_supply_pin_without_a_capacitor_still_fires() {
+        let f = input_on(Some(2), "power_in");
         assert_eq!(on(&f, "+5V").len(), 1, "{f:?}");
     }
 

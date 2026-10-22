@@ -2982,11 +2982,22 @@ fn run_web_cosim_with_bound(
             WebFinding::unplaced(
                 "note",
                 "Firmware was not exercised",
-                format!(
-                    "{} (the MCU may have stalled at boot, run no I/O, or the firmware \
-                     may not match this board).",
-                    crate::execution::NO_EXECUTION_MESSAGE
-                ),
+                {
+                    let stalls = crate::execution::stall_notes(sched.execution_evidence());
+                    if stalls.is_empty() {
+                        format!(
+                            "{} (the MCU may have stalled at boot, run no I/O, or the firmware \
+                             may not match this board).",
+                            crate::execution::NO_EXECUTION_MESSAGE
+                        )
+                    } else {
+                        format!(
+                            "{} Where it stalled: {}.",
+                            crate::execution::NO_EXECUTION_MESSAGE,
+                            stalls.join("; ")
+                        )
+                    }
+                },
                 "Confirm the firmware matches this MCU and actually drives I/O.",
             ),
         );
@@ -4183,6 +4194,7 @@ mod tests {
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
+            clearance_unjudged: hauksbee_extract::UnjudgedClearance::default(),
         });
         let (total, serious) = (
             findings.len(),

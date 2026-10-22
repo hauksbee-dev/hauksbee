@@ -7,7 +7,8 @@
 //!   every serial byte, every reset-line pulse and every watchdog bite;
 //! * [`TxnRecorder`] lives inside each I2C/SPI bus bridge and records each
 //!   transaction the firmware drove (address, bytes, ACK) as it is dispatched;
-//! * [`mod@bench`] turns those recordings into the [`BenchReport`] every surface
+//! * [`mod@bench`] turns those recordings into the
+//!   [`BenchReport`](hauksbee_ir::observations::BenchReport) every surface
 //!   shows (CLI block, JSON, app strip), [`timeline`] into the VCD and the
 //!   bus log, and [`symbols`] names the function a parked core sits in.
 //!

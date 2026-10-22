@@ -568,6 +568,53 @@
       ],
       "type": "object"
     },
+    "BootDecision": {
+      "description": "The boot mode the chip reached and why. Carried in the run JSON as\n`cosim.execution[].boot` and printed by the CLI.",
+      "properties": {
+        "caveats": {
+          "description": "Things the reader should weigh: a strap that moved between the solved\nstart-up point and reset release, a level taken from an internal pull.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cite": {
+          "description": "The vendor document and table the decision comes from.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "The vendor's name for the mode (`System memory`, `SPI Boot`).",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/BootOutcome"
+        },
+        "straps": {
+          "description": "Each strap pin the table reads, as the chip saw it.",
+          "items": {
+            "$ref": "#/definitions/StrapReading"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The whole finding in one sentence (see [`BootDecision::sentence`]).",
+          "type": "string"
+        },
+        "user_firmware_runs": {
+          "description": "Whether the application firmware ran, or was allowed to.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "outcome",
+        "mode",
+        "straps",
+        "user_firmware_runs",
+        "summary",
+        "cite"
+      ],
+      "type": "object"
+    },
     "BootGateJson": {
       "description": "One row of the boot-state panel.\n\nA transistor gate and what the firmware does to it at power-up\n(`driven_high` / `driven_low` / `floating`). Informational (reported, not\njudged), so a consumer can read it without it being a verdict.",
       "properties": {
@@ -587,6 +634,36 @@
         "state"
       ],
       "type": "object"
+    },
+    "BootOutcome": {
+      "description": "Where the chip's reset sequence sends it.",
+      "oneOf": [
+        {
+          "const": "user_flash",
+          "description": "The application in the normal flash runs.",
+          "type": "string"
+        },
+        {
+          "const": "rom_bootloader",
+          "description": "The vendor's ROM bootloader (or download mode) runs; the user firmware\ndoes not.",
+          "type": "string"
+        },
+        {
+          "const": "sram",
+          "description": "The chip jumps into SRAM; user firmware runs only if something loaded\nit there.",
+          "type": "string"
+        },
+        {
+          "const": "held_in_reset",
+          "description": "The reset line is asserted, so the chip never starts.",
+          "type": "string"
+        },
+        {
+          "const": "undefined",
+          "description": "The strap levels fall in a combination the vendor marks reserved, or the\ncard has no row for them.",
+          "type": "string"
+        }
+      ]
     },
     "BusKind": {
       "description": "Which bus a transaction crossed.",
@@ -1113,6 +1190,16 @@
             "$ref": "#/definitions/CosimWatchdogResets"
           },
           "type": "array"
+        },
+        "uart_output": {
+          "description": "The text the firmware sent over UART, lossily decoded as UTF-8 and\ncapped at [`COSIM_UART_OUTPUT_MAX_BYTES`]. Omitted when the firmware sent\nnothing; `uart_seen` says whether it did.",
+          "type": "string"
+        },
+        "uart_output_dropped_bytes": {
+          "description": "How many bytes of UART text `uart_output` leaves out because it was cut\nat the cap; `0` (and omitted) when it is complete. The full text prints\nin the default (non-JSON) run.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
@@ -1877,6 +1964,17 @@
           },
           "type": "array"
         },
+        "boot": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BootDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The boot mode the board's straps selected and why, for a chip whose\ncard carries a boot table (hauksbee-ir's vocabulary)."
+        },
         "clock_source": {
           "description": "Where the core's clock comes from, in words.",
           "type": "string"
@@ -1901,7 +1999,7 @@
           ]
         },
         "executed": {
-          "description": "Any positive evidence the firmware ran: entry reached, UART bytes, or a\nGPIO toggle.",
+          "description": "Any positive evidence the firmware ran: entry reached, UART bytes, or a\nGPIO toggle. False for an early stall with no output of its own.",
           "type": "boolean"
         },
         "faults": {
@@ -1987,6 +2085,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "stall": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Stall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set when the core stalled early (stuck before `main`, or in a clock\nwait): such a run is not \"executed\" unless the firmware also produced\nUART or GPIO output."
         }
       },
       "required": [
@@ -3313,6 +3422,110 @@
             "value"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Stall": {
+      "description": "An early stall: the core sat in a tight loop at start-up, so it never ran\nthe firmware's own behaviour, whatever else the run recorded.",
+      "properties": {
+        "detail": {
+          "description": "One sentence saying where the core stuck and what to look at.",
+          "type": "string"
+        },
+        "pc": {
+          "description": "Program counter the core was parked at.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/definitions/StallPhase"
+        },
+        "symbol": {
+          "description": "Function containing `pc`, when the firmware ELF has symbols.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "pc",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "StallPhase": {
+      "description": "Where in start-up a core stalled.",
+      "oneOf": [
+        {
+          "const": "before_main",
+          "description": "Parked in a tight loop and `main` was never reached.",
+          "type": "string"
+        },
+        {
+          "const": "clock_wait",
+          "description": "Parked in a function that waits for a clock or oscillator.",
+          "type": "string"
+        }
+      ]
+    },
+    "StrapReading": {
+      "description": "One strap pin as the chip saw it at reset release.",
+      "properties": {
+        "basis": {
+          "description": "Why the pin reads that level when the voltage alone does not say: an\ninternal pull on an undriven pad, or the net left unconnected.",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/definitions/StrapReadingLevel"
+        },
+        "net": {
+          "description": "The board net on the pin, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pin": {
+          "description": "The pin's name for a reader (`BOOT0`, `GPIO0`).",
+          "type": "string"
+        },
+        "role": {
+          "description": "The pin role in the model card (`boot0`, `gpio0`).",
+          "type": "string"
+        },
+        "volts": {
+          "description": "The solved voltage on the pin, when the board defines one.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "pin",
+        "level"
+      ],
+      "type": "object"
+    },
+    "StrapReadingLevel": {
+      "description": "The level a strap pin was read at.",
+      "oneOf": [
+        {
+          "enum": [
+            "low",
+            "high"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "indeterminate",
+          "description": "Between the chip's low and high thresholds, or no voltage was solved.",
+          "type": "string"
         }
       ]
     },

@@ -1,6 +1,8 @@
 //! Layout wiring checks on hand-authored boards: each fault next to its legal
 //! twin, so a check that stops firing (or fires on the legal form) fails here.
 
+use std::fmt::Write as _;
+
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, Severity, CHECK_BEFORE_ORDERING};
 
 fn board(items: &str) -> String {
@@ -309,6 +311,70 @@ fn a_renamed_net_with_the_same_pins_is_not_a_mismatch() {
     let pcb = ExtractedBoard::from_kicad_pcb(&renamed).unwrap();
     let sch = ExtractedBoard::from_kicad_pcb(&board(&three(GND, ""))).unwrap();
     assert!(pcb.layout_lint("", Some(&sch)).findings.is_empty());
+}
+
+/// An IC `U1` with the given pads, each `(number, net clause)`, beside R1 and
+/// R2 so the nets carry other pins; pads sit 1.5 mm apart.
+fn ic_with(pads: &[(&str, &str)]) -> String {
+    let mut x = 0.0;
+    let mut pad_text = String::new();
+    for (number, net) in pads {
+        writeln!(
+            pad_text,
+            "    (pad \"{number}\" smd rect (at {x} 0) (size 1 1) (layers \"F.Cu\") {net})"
+        )
+        .unwrap();
+        x += 1.5;
+    }
+    format!(
+        "{}{}  (net 3 \"unconnected-(U1-Pad3)\")\n  (footprint \"lib:IC\" (layer \"F.Cu\") (at 30 0)\n    (property \"Reference\" \"U1\")\n{pad_text}  )\n",
+        part("R1", 0.0, A, GND, ""),
+        part("R2", 10.0, A, GND, "")
+    )
+}
+
+const UNCONNECTED: &str = r#"(net 3 "unconnected-(U1-Pad3)")"#;
+
+#[test]
+fn exposed_pad_numbering_artefacts_are_not_a_mismatch() {
+    // The symbol has pins 1, 2 and EP (on ground). The footprint numbers its
+    // thermal pad "EP", splits it into a second "EP" pad with no net (a paste
+    // aperture), and adds a mounting pad "0" the symbol does not have.
+    let schematic = ic_with(&[("1", A), ("2", GND), ("EP", GND)]);
+    let layout = ic_with(&[
+        ("1", A),
+        ("2", GND),
+        ("EP", GND),
+        ("EP", r#"(net 0 "")"#),
+        ("0", r#"(net 0 "")"#),
+    ]);
+    let found = parity(&layout, &schematic);
+    assert!(found.is_empty(), "{found:?}");
+    // The same artefacts do not hide a real move: the thermal pad on the
+    // wrong net is still reported.
+    let moved = ic_with(&[("1", A), ("2", GND), ("EP", A), ("EP", r#"(net 0 "")"#)]);
+    let found = parity(&moved, &schematic);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].message.contains("U1.EP"), "{}", found[0].message);
+}
+
+#[test]
+fn no_connect_pad_artefacts_are_not_a_mismatch() {
+    // Pin 3 is a no-connect on the schematic; the layout gives it KiCad's own
+    // single-pad "unconnected" net, and carries a pad 4 the symbol lacks.
+    let schematic = ic_with(&[("1", A), ("2", GND), ("3", r#"(net 0 "")"#)]);
+    let layout = ic_with(&[("1", A), ("2", GND), ("3", UNCONNECTED), ("4", UNCONNECTED)]);
+    let found = parity(&layout, &schematic);
+    assert!(found.is_empty(), "{found:?}");
+    // A no-connect pin that the layout ties into a live net is a real fault.
+    let tied = ic_with(&[("1", A), ("2", GND), ("3", A)]);
+    let found = parity(&tied, &schematic);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].message.starts_with("U1.3 "),
+        "{}",
+        found[0].message
+    );
 }
 
 #[test]

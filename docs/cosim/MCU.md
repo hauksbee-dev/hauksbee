@@ -34,9 +34,22 @@ accessors. `reset` mutates the loaded core: `supports_reset` defaults to false,
 with AVR opting in; unsupported Renode/QEMU sessions require a relaunch.
 The scheduler preflights every core and clears the old run only after all
 resets succeed. A possibly partial reset stops execution and preserves the
-old evidence. Reset is not invoked for rail events: a board that browns out
-has its analog collapse caught by a `rail` assertion while its firmware keeps
-executing as though the supply held.
+old evidence. A rail event does not call `reset` either; the scheduler's reset
+gate (`scheduler/electrics.rs`) acts on it instead. When the card has a
+`[models.reset]` table, a reset pin held below its VIL, or the watched supply
+below the card's brown-out threshold, holds the core in reset (its pins float
+and no chunk runs) until the pin or supply has been back above the release
+threshold for the card's release delay; the core then restarts from reset and a
+reset episode is reported with its cause. A card without the table keeps the
+old behaviour: the analog collapse is caught by a `rail` assertion while the
+firmware keeps executing as though the supply held.
+
+Pin output strength is per setting, not a fixed resistance: a card's
+`[[models.output_drive]]` rows give the datasheet VOH/VOL bounds per drive
+setting, the binder fits a high and a low output resistance from them, and
+`[models.drive_select]` says where the firmware's drive field lives so the
+scheduler can read it back (`Mcu::read_register`) and re-stamp the pin. Open-drain
+modes drive only the low level.
 
 ### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 
@@ -323,10 +336,16 @@ full watchdog fidelity and therefore emits neither disclosure when healthy.
 | Backend | armed and never fed | how it is known |
 |---------|---------------------|-----------------|
 | `simavr:atmega328p` | **reboots, at the right virtual time, repeatedly** | `tests/avr_watchdog.rs`, two-sided against the same firmware with the arming line removed |
-| `renode:stm32f103` | **resets once, then the core does not resume** | watchdog limitation is reported after the reset |
-| `renode:nrf52840` | **never fires** | watchdog limitation is reported; no reset is inferred |
+| `renode:stm32f103` | **reboots repeatedly** (starved IWDG; the fed control boots once) | `tests/renode_watchdog.rs`; the descriptor's reset macro restores VTOR, SP and PC, which is what the earlier "fires once then quiet" result was missing |
+| `renode:nrf52840` | **reboots repeatedly** (starved WDT; the fed control boots once) | `tests/renode_watchdog.rs`; the earlier "never fires" claim was wrong, the part's flash at 0 only hid the missing reset state |
 | `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
 | `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:stm32g4`, `renode:stm32f7`, `renode:stm32l0`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | no starvation fixture establishes reset behavior for these parts |
+
+Reboots are counted by a persistent hook on the reset entry point; boots minus
+the first, minus host-requested resets, is the count `Mcu::watchdog_resets`
+returns. Known limit: a firmware's own software reset (`NVIC_SystemReset`) is
+counted with the watchdog bites, because a Renode watchpoint on `AIRCR` never
+fires for core accesses (measured on the F103), so the two cannot be told apart.
 
 ESP32 watchdogs are disabled during co-simulation because chunk boundaries pause
 the guest while the analog side solves. The backend reports this limitation on

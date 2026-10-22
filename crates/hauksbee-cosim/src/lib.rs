@@ -21,6 +21,7 @@
 //! The `avr`, `renode` and `qemu` features forward to `hauksbee-mcu` exactly
 //! as `hauksbee-engine` does; nothing in this crate links an emulator itself.
 
+pub mod boot;
 pub mod engine;
 pub mod error_budget;
 pub mod execution;

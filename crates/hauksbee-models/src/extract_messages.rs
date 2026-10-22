@@ -533,7 +533,9 @@ pub fn batch_summary(
         bits.push(format!("{hand_supply} for hand supply"));
     }
     if skipped > 0 {
-        bits.push(format!("{skipped} skipped (failed before)"));
+        bits.push(format!(
+            "{skipped} skipped (failed before; --retry-failed tries them again)"
+        ));
     }
     if !failed.is_empty() {
         bits.push(format!("{} failed ({})", failed.len(), failed.join(", ")));
@@ -566,13 +568,27 @@ pub fn skipped_search(part: &str, ago: &str) -> String {
 /// never prints the part's name (a test keeps the two in step).
 pub const NOT_NAMED: &str = "never prints";
 
+/// Whether the part's own name is a well-known module's.
+///
+/// The Espressif WROOM/WROVER/MINI-1 modules, the ESP-12 series, u-blox NINA,
+/// Seeed XIAO, Adafruit Feather, Teensy and RAK4631 boards. Bare chips and
+/// system-in-package parts (ESP32-PICO) are not.
+#[must_use]
+pub fn named_like_module(part: &str) -> bool {
+    const NAMES: [&str; 8] = [
+        "WROOM", "WROVER", "MINI-1", "ESP-12", "NINA-", "XIAO", "FEATHER", "TEENSY",
+    ];
+    let name = part.to_ascii_uppercase().replace(['_', ' '], "-");
+    NAMES.iter().any(|n| name.contains(n)) || name.starts_with("RAK4631")
+}
+
 /// Whether the board's own words say the part is a module, not a bare chip.
 ///
-/// Footprints and description are read for a ready-made module, carrier or
-/// breakout board, whose datasheet is then usually the module's own or its main
-/// chip's.
+/// The part's name, its footprints and its description are read for a
+/// ready-made module, carrier or breakout board, whose datasheet is then the
+/// module's own: the bare chip's sheet numbers the chip's pads, not the module's.
 #[must_use]
-pub fn looks_like_module(footprints: &[String], description: Option<&str>) -> bool {
+pub fn looks_like_module(part: &str, footprints: &[String], description: Option<&str>) -> bool {
     const WORDS: [&str; 9] = [
         "module",
         "breakout",
@@ -584,6 +600,9 @@ pub fn looks_like_module(footprints: &[String], description: Option<&str>) -> bo
         "development board",
         "evaluation board",
     ];
+    if named_like_module(part) {
+        return true;
+    }
     footprints
         .iter()
         .map(String::as_str)
@@ -597,8 +616,9 @@ pub fn looks_like_module(footprints: &[String], description: Option<&str>) -> bo
 fn module_hint(part: &str, missing: &Missing, module_like: bool) -> Option<String> {
     let not_named =
         missing.why.contains(NOT_NAMED) || missing.tried.iter().any(|t| t.why.contains(NOT_NAMED));
-    let ask = "supply the module's own datasheet, or the datasheet of the main chip on it, \
-               under the name below";
+    let ask = "supply the module's own datasheet (the vendor's module datasheet, not the bare \
+               chip's: the chip's sheet numbers the chip's pads, not the module's) under the \
+               name below";
     if not_named {
         Some(format!(
             "the PDF that was found does not name {part}. If {part} is a module or carrier \
@@ -612,6 +632,34 @@ fn module_hint(part: &str, missing: &Missing, module_like: bool) -> Option<Strin
             )
         })
     }
+}
+
+/// What each exit status of `models extract --unmodelled` means. The `--help`
+/// text, the closing note of a batch and the docs all read this one table.
+pub const EXIT_STATUS_HELP: &str = "Exit status of --unmodelled:\n  \
+0  every part attempted was saved or listed for hand supply (parts that already had a card, or were skipped as failed before, do not count against it)\n  \
+1  parts failed and none was saved, or a hard error (unreadable board, bad settings, no consent)\n  \
+4  PARTIAL SUCCESS, not a total failure: some cards were saved and kept, some parts failed; --retry-failed tries the failed ones again";
+
+/// The closing note of a batch that ended with failures: what the exit status
+/// is and what it means, said where the person is looking at the tally.
+#[must_use]
+pub fn exit_status_note(saved: usize, failed: &[&str]) -> String {
+    if saved == 0 {
+        return format!(
+            "Exit status 1: {} part(s) failed and none was saved ({}). --retry-failed tries \
+             them again; `hauksbee models extract --help` lists every exit status.",
+            failed.len(),
+            failed.join(", ")
+        );
+    }
+    format!(
+        "Exit status 4 = partial success, not a total failure: {saved} card(s) were saved and \
+         kept, {} part(s) failed ({}). Re-run with --retry-failed to try only the failed ones \
+         again; `hauksbee models extract --help` lists every exit status.",
+        failed.len(),
+        failed.join(", ")
+    )
 }
 
 /// The error a batch with failures ends in.
@@ -1026,11 +1074,26 @@ mod tests {
     fn a_batch_summary_separates_drafts_kept_cards_skips_and_failures() {
         assert_eq!(
             batch_summary(2, 1, 3, 4, &["A", "B"]),
-            "Batch: 2 saved, 1 already had a card, 3 for hand supply, 4 skipped (failed before), \
-             2 failed (A, B)"
+            "Batch: 2 saved, 1 already had a card, 3 for hand supply, 4 skipped (failed before; \
+             --retry-failed tries them again), 2 failed (A, B)"
         );
         assert_eq!(batch_summary(4, 0, 0, 0, &[]), "Batch: 4 saved");
         assert!(batch_failed(2, &["A"]).contains("2 others were saved and kept"));
+        let partial = exit_status_note(2, &["A"]);
+        assert!(
+            partial.starts_with("Exit status 4 = partial success, not a total failure")
+                && partial.contains("2 card(s) were saved and kept")
+                && partial.contains("--retry-failed"),
+            "{partial}"
+        );
+        let none = exit_status_note(0, &["A", "B"]);
+        assert!(
+            none.starts_with("Exit status 1:") && none.contains("none was saved"),
+            "{none}"
+        );
+        for code in ["0  ", "1  ", "4  PARTIAL SUCCESS"] {
+            assert!(EXIT_STATUS_HELP.contains(code), "{code}");
+        }
         assert!(!batch_failed(0, &["A"]).contains("others"));
     }
 
@@ -1065,7 +1128,8 @@ mod tests {
         );
         assert!(
             text.contains("the PDF that was found does not name ACME-MOD9")
-                && text.contains("module's own datasheet, or the datasheet of the main chip"),
+                && text.contains("module's own datasheet (the vendor's module datasheet")
+                && !text.contains("datasheet of the main chip"),
             "{text}"
         );
         assert_eq!(
@@ -1098,17 +1162,63 @@ mod tests {
     #[test]
     fn modules_are_told_by_the_boards_own_words() {
         let fp = |s: &str| vec![s.to_string()];
-        assert!(looks_like_module(&fp("Module:Some_Dev_Board"), None));
+        assert!(looks_like_module("X1", &fp("Module:Some_Dev_Board"), None));
         assert!(looks_like_module(
+            "X1",
             &fp("Package_SO:SOIC-8"),
             Some("Wi-Fi breakout board")
         ));
-        assert!(looks_like_module(&[], Some("Sensor carrier")));
+        assert!(looks_like_module("X1", &[], Some("Sensor carrier")));
         assert!(!looks_like_module(
+            "LM358",
             &fp("Package_SO:SOIC-8_3.9x4.9mm"),
             Some("Dual op-amp")
         ));
-        assert!(!looks_like_module(&[], None));
+        assert!(!looks_like_module("LM358", &[], None));
+    }
+
+    /// A module is told by its name when the board gives it a plain footprint
+    /// and no description, and a module's hand-supply message points at the
+    /// module's datasheet, never the bare chip's.
+    #[test]
+    fn well_known_modules_are_told_by_name() {
+        for name in [
+            "ESP32-WROOM-32E",
+            "ESP32-S3-MINI-1U",
+            "esp32_wrover_e",
+            "ESP-12E",
+            "NINA-B112",
+            "Seeed XIAO RP2040",
+            "Feather_M0",
+            "Teensy 4.0",
+            "RAK4631",
+        ] {
+            assert!(looks_like_module(name, &[], None), "{name}");
+        }
+        for name in [
+            "ESP32-PICO-D4",
+            "ESP32-S3",
+            "STM32F411CEU6",
+            "LM358",
+            "NE555",
+        ] {
+            assert!(!looks_like_module(name, &[], None), "{name}");
+        }
+        let miss = [("ESP32-S3-MINI-1U".to_string(), missing("no link", &[]))];
+        let text = supply_report(
+            &miss,
+            &["ESP32-S3-MINI-1U".to_string()],
+            &[],
+            Path::new("/d"),
+            Path::new("/o"),
+            "r",
+        );
+        assert!(
+            text.contains("looks like a module or carrier board")
+                && text.contains("module's own datasheet")
+                && !text.contains("main chip"),
+            "{text}"
+        );
     }
 
     #[test]

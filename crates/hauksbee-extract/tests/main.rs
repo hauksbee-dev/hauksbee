@@ -14,6 +14,8 @@ mod bom;
 mod drc;
 #[path = "drc_corpus.rs"]
 mod drc_corpus;
+#[path = "drc_custom_rules.rs"]
+mod drc_custom_rules;
 #[path = "eagle_drc.rs"]
 mod eagle_drc;
 #[path = "eagle_drc_corpus.rs"]

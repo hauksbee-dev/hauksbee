@@ -960,6 +960,35 @@ pub enum JsonNoteKind {
     BootControlNet,
 }
 
+/// Most UART text `cosim.uart_output` carries; a long, chatty run would
+/// otherwise swell the report.
+pub const COSIM_UART_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+
+// serde's `skip_serializing_if` hands the field by reference, so the signature is fixed.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
+impl CosimJson {
+    /// Store the firmware's UART bytes as `uart_output`, cut at
+    /// [`COSIM_UART_OUTPUT_MAX_BYTES`] on a character boundary.
+    pub fn set_uart_output(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        if text.len() <= COSIM_UART_OUTPUT_MAX_BYTES {
+            self.uart_output = text.into_owned();
+            self.uart_output_dropped_bytes = 0;
+            return;
+        }
+        let mut end = COSIM_UART_OUTPUT_MAX_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.uart_output = text[..end].to_string();
+        self.uart_output_dropped_bytes = (text.len() - end) as u64;
+    }
+}
+
 /// Machine-readable co-sim summary (today only emitted as CLI text).
 ///
 /// Populated from the headless run + the MCU binding. `substituted` is true when
@@ -985,6 +1014,16 @@ pub struct CosimJson {
     /// Total net toggles seen during the run. `0` => stalled/quiet.
     pub total_toggles: u64,
     pub uart_seen: bool,
+    /// The text the firmware sent over UART, lossily decoded as UTF-8 and
+    /// capped at [`COSIM_UART_OUTPUT_MAX_BYTES`]. Omitted when the firmware sent
+    /// nothing; `uart_seen` says whether it did.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uart_output: String,
+    /// How many bytes of UART text `uart_output` leaves out because it was cut
+    /// at the cap; `0` (and omitted) when it is complete. The full text prints
+    /// in the default (non-JSON) run.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub uart_output_dropped_bytes: u64,
     /// Numerical qualification for this exact run. Solver tolerances and
     /// methods are inputs, the residual is measured when available, and failed
     /// windows are explicitly invalid rather than assigned invented precision.
@@ -3865,12 +3904,6 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::GroundIsland => {
             "Join the net to the board ground (same ground symbol, a net tie, or a 0 ohm link), or name it as a deliberately separate domain."
         }
-        LintCheck::UnwiredConnector => {
-            "Wire the connector to the circuit it serves (check for a mismatched net label), or remove it."
-        }
-        LintCheck::LedReversed => {
-            "Turn the LED round so its anode faces the positive rail and its cathode ground."
-        }
         LintCheck::FloatingInput => {
             "Tie each unused CMOS input high or low (directly or through a resistor), or drive it; a no-connect flag does not define its level."
         }
@@ -3879,9 +3912,6 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         }
         LintCheck::UnlimitedBaseDrive => {
             "Add a series resistor (a few kilohms) between the driver and the transistor base."
-        }
-        LintCheck::CapNoDcPath => {
-            "Add a bias or bleed resistor from the node to a rail or ground, or remove the capacitor."
         }
         LintCheck::FloatingGate => {
             "Add a pull-up or pull-down resistor (about 100 kilohms) on the gate or select, to the level that is safe at power-up."
@@ -3904,7 +3934,49 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::RequiredPinBias
         | LintCheck::SupplyCapacitance
         | LintCheck::HoldUpDroop => supply_fix_hint(check),
+        LintCheck::SignalDirection
+        | LintCheck::DebugHeaderPinout
+        | LintCheck::SwitchShort
+        | LintCheck::PinMuxCapability
+        | LintCheck::SymbolCardPinMismatch
+        | LintCheck::LedReversed
+        | LintCheck::UnwiredConnector
+        | LintCheck::CapNoDcPath => wiring_fix_hint(check),
     })
+}
+
+/// Fix hints for the wiring checks: a net against its pins' directions, a debug
+/// header out of order, a switch across a supply, a bus on a pad that cannot carry
+/// it, a symbol that disagrees with its card, a reversed LED, an unwired
+/// connector and a capacitor with no DC path.
+const fn wiring_fix_hint(check: LintCheck) -> &'static str {
+    match check {
+        LintCheck::SignalDirection => {
+            "Rewire so each net has one driver and a listener (TX to RX, an output to the other part's input), or add the missing driver."
+        }
+        LintCheck::DebugHeaderPinout => {
+            "Reorder the header to the standard pinout the finding names, or label it as a crossover that needs a matching cable."
+        }
+        LintCheck::SwitchShort => {
+            "Put a resistor in series with the switch, or switch a signal pin that has a pull resistor, not a supply."
+        }
+        LintCheck::PinMuxCapability => {
+            "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it."
+        }
+        LintCheck::LedReversed => {
+            "Turn the LED round so its anode faces the positive rail and its cathode ground."
+        }
+        LintCheck::UnwiredConnector => {
+            "Wire the connector to the circuit it serves (check for a mismatched net label), or remove it."
+        }
+        LintCheck::CapNoDcPath => {
+            "Add a bias or bleed resistor from the node to a rail or ground, or remove the capacitor."
+        }
+        // Only the wiring checks are routed here.
+        _ => {
+            "Compare the symbol and the card against the datasheet pin table for this package and correct whichever is wrong."
+        }
+    }
 }
 
 /// Fix hints for the supply-side checks: a held-off regulator, a miswired IC
@@ -4706,6 +4778,7 @@ mod tests {
             version_warning: None,
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
+            clearance_unjudged: hauksbee_extract::UnjudgedClearance::default(),
         }
     }
 

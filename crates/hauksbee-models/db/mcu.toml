@@ -280,6 +280,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "26" = "ADC3"
 "27" = "ADC4"
 "28" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["6"]
+[models.pin_capability.spi_sck.pads]
+"6" = "XCK0 (USART0 MSPIM clock)"
+"19" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["3"]
+[models.pin_capability.spi_mosi.pads]
+"3" = "TXD0 (USART0 MSPIM data out)"
+"17" = "MOSI"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_miso.pads]
+"2" = "RXD0 (USART0 MSPIM data in)"
+"18" = "MISO"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"27" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"28" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"3" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"2" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"5" = "OC2B"
+"11" = "OC0B"
+"12" = "OC0A"
+"15" = "OC1A"
+"16" = "OC1B"
+"17" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -597,6 +640,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "26" = "ADC3"
 "27" = "ADC4"
 "28" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_sck.pads]
+"2" = "XCK0 (USART0 MSPIM clock)"
+"17" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["31"]
+[models.pin_capability.spi_mosi.pads]
+"15" = "MOSI"
+"31" = "TXD0 (USART0 MSPIM data out)"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["30"]
+[models.pin_capability.spi_miso.pads]
+"16" = "MISO"
+"30" = "RXD0 (USART0 MSPIM data in)"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"27" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"28" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"31" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"30" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"1" = "OC2B"
+"9" = "OC0B"
+"10" = "OC0A"
+"13" = "OC1A"
+"14" = "OC1B"
+"15" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -901,6 +987,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "22" = "ADC3"
 "23" = "ADC4"
 "24" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_sck.pads]
+"2" = "XCK0 (USART0 MSPIM clock)"
+"15" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["27"]
+[models.pin_capability.spi_mosi.pads]
+"13" = "MOSI"
+"27" = "TXD0 (USART0 MSPIM data out)"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["26"]
+[models.pin_capability.spi_miso.pads]
+"14" = "MISO"
+"26" = "RXD0 (USART0 MSPIM data in)"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"23" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"24" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"27" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"26" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"1" = "OC2B"
+"7" = "OC0B"
+"8" = "OC0A"
+"11" = "OC1A"
+"12" = "OC1B"
+"13" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -3414,6 +3543,54 @@ note = "BOOT0 low boots main flash; high selects system memory depending on nBOO
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Boot source = BOOT0 pin plus option bits nBOOT1 (user byte bit 20) and BOOT_SEL (bit 23). On F07x BOOT_SEL is
+# "considered as 1" (not implemented), so the BOOT0 pin always controls and nBOOT0 (bit 19) is ignored.
+# FACTORY DEFAULT modelled: ST production USER byte 0xFF (option word 0x00FF 55AA) => nBOOT1 = 1.
+[models.strap_latch]
+event = "reset_release"
+note  = "BOOT0 pin and the nBOOT1 option bit are latched on the 4th rising edge of SYSCLK after reset, and re-sampled when exiting Standby; BOOT_SEL is considered 1 on F07x so the pin always selects; model state is the ST factory default nBOOT1 = 1"
+cite  = "RM0091 Rev 10, section 2.5 'Boot configuration', Table 3 and text, PDF p.54; option bytes section 4.1.1, PDF p.77-78"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.3, 0.07]
+vih  = [0.445, 0.398]
+cite = "DocID025004 Rev 5 (STM32F072x8/xB), Table 56 'NRST pin characteristics', PDF p.83: VIL(NRST) max 0.3 VDD+0.07 V, VIH(NRST) min 0.445 VDD+0.398 V; NRST pad 7 on LQFP48/UFQFPN48, Table 13 PDF p.34"
+
+[[models.boot_inputs]]
+role = "boot0"
+internal_pull = "unknown"
+vil = [0.3, -0.3]
+vih = [0.2, 0.95]
+cite = "DocID025004 Rev 5, Table 53 'I/O static characteristics', PDF p.78: BOOT0 VIL max 0.3 VDDIOx-0.3 V, VIH min 0.2 VDDIOx+0.95 V (footnote 1: data based on design simulation only, not tested in production); BOOT0 pad 44, Table 13 PDF p.40"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { boot0 = "low" }
+outcome = "user_flash"
+detail = "BOOT0 pin = 0 with BOOT_SEL treated as 1 (F07x): main flash memory is selected as boot area (nBOOT1 is a don't-care); user firmware runs"
+cite = "RM0091 Rev 10, Table 3 row 1, PDF p.54"
+
+[[models.boot_modes]]
+name = "system memory (factory nBOOT1 = 1)"
+when = { boot0 = "high" }
+outcome = "rom_bootloader"
+detail = "BOOT0 pin = 1 with the factory default nBOOT1 = 1: system memory (ST bootloader, 0x1FFFC800 on F07x) is the boot area; user firmware does not run"
+cite = "RM0091 Rev 10, Table 3 row 2, PDF p.54; ST production USER byte, PDF p.77-78; bootloader address 0x1FFF C800 on STM32F07x, PDF p.54"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x31
+product_id = 0x0448
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
+port = "USART1 PA9 (TX) / PA10 (RX), or USART2 PA14 (TX) / PA15 (RX), 8E1"
+cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 41 PDF p.110-111 (pins), Table 226 (PID 0x448). The Get command list and version byte are derived, not printed per device."
+
+# UNLISTED ON PURPOSE (F0): (a) "nBOOT1 = 0, BOOT0 = 1 -> Embedded SRAM" is reachable only after the user clears the nBOOT1
+# option bit; that is not the factory state, so no row. (b) The BOOT_SEL = 0 / nBOOT0 rows are marked "available on STM32F04x
+# and STM32F09x devices only" and do not exist on F07x. (c) The empty-check row (footnote 2) is F04x/F09x only.
 [[models]]
 id = "stm32f103c8"
 kind = "mcu"
@@ -3440,6 +3617,7 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "4"  = "pc15"
 "5"  = "osc_in"    # HSE crystal / external-clock input
 "6"  = "osc_out"   # HSE crystal oscillator output
+"7"  = "reset"     # NRST, LQFP-48 pin 7 (DS5319 Rev 20 Table 5 PDF p.28)
 "8"  = "vss"
 "9"  = "vdd"
 "10" = "pa0_adc0"  # LQFP-48 pin 10 = PA0 (PA0-WKUP / ADC1_IN0) per ST DS5319; matches the
@@ -3452,6 +3630,7 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "17" = "pa7"       # LQFP-48 pin 17 = PA7 (ADC1_IN7 / SPI1_MOSI) per ST DS5319; matches the
                    # plain pa5/pa6 convention. Package-faithful.
 "18" = "pb0"       # LQFP-48 pin 18 = PB0 (ST DS5319). Package-faithful; not wired by the demos.
+"20" = "pb2_boot1" # PB2/BOOT1 (DS5319 Rev 19 Table 5, LQFP48 pad 20): the second boot strap
 "23" = "vss2"
 "24" = "vdd2"
 "29" = "pa8"       # PA8: firmware threshold/FLAG output. LQFP-48 pin 29 = PA8 (ST DS5319). The SPI ADC
@@ -3713,9 +3892,37 @@ boot_select = true   # latches the boot memory; firmware cannot undo it
 internal_pull = "none"   # STM32 BOOT0 has NO on-die pull: a floating net is undefined
 note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 
+# Output stage. STM32F103x8/xB DS5319 Rev 20 Table 37 'Output voltage characteristics' section
+# 5.3.13 PDF p.64: VOL max 0.4 V and VOH min VDD-0.4 V at IIO = 8 mA (2.7 V < VDD < 3.6 V), the
+# figure tested in production. The relaxed 20 mA row (VOL 1.3 V, VOH VDD-1.3 V) is
+# characterised only and not fitted. PC13-PC15 are limited to 3 mA (PDF p.64) and the
+# datasheet gives them no VOL/VOH, so they take this fit only because the card has no
+# per-pin exception. Pin speed (MODE bits) changes slew, not these DC limits.
+[[models.output_drive]]
+setting = "8 mA"
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.9 },
+  { level = "low", current_a = 0.008, volts = 0.4 },
+]
+basis = "STM32F103x8/xB DS5319 Rev 20 Table 37 section 5.3.13 PDF p.64: CMOS port, IIO = 8 mA, 2.7 V < VDD < 3.6 V, VOL max 0.4 V, VOH min VDD-0.4 V (VDD 3.3 V gives 2.9 V)"
+
+# Reset. Power-on/power-down reset: DS5319 Table 11 section 5.3.3 PDF p.39, falling edge typ
+# 1.88 V, rising edge typ 1.92 V. NRST pin: Table 39 section 5.3.14 PDF p.66, VIL max 0.8 V,
+# VIH min 2.0 V (pin 7 on LQFP48, Table 5 PDF p.28). NRST filters pulses under 100 ns and
+# passes those over 300 ns; pulses shorter than that are not modelled.
+[models.reset]
+supply_pin = "vdd"
+assert_below_v = 1.88
+release_above_v = 1.92
+release_delay_s = 0.0025   # TRSTTEMPO typ 2.5 ms (min 1.0, max 4.5), Table 11 PDF p.39, specified by design
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "STM32F103x8/xB DS5319 Rev 20: VPOR/PDR and TRSTTEMPO Table 11 section 5.3.3 PDF p.39 (typ 1.88 V falling, 1.92 V rising, 2.5 ms temporization); NRST VIL/VIH Table 39 section 5.3.14 PDF p.66"
+
 [models.coverage]
 implements = ["cortex_m3_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "uart_tx", "virtual_clock_and_systick", "i2c1_controller_bridge", "spi1_controller_bridge"]
-missing = ["adc_injection", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+missing = ["adc_injection", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
@@ -3725,6 +3932,64 @@ missing = ["adc_injection", "watchdog_reboot_continuation", "instruction_exact_t
 # this DB entry does not change the co-sim path. The pin map is intentionally
 # limited to the strap pin (BOOT0 = UFQFPN48 pad 44, verified against the
 # STM32F401CCU6 footprint); the renode platform owns the rest for co-sim.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Both boot pads are physical pads; there are no boot option bits on F1.
+[models.strap_latch]
+event = "reset_release"
+note  = "BOOT1/BOOT0 pin values are latched on the 4th rising edge of SYSCLK after a reset, and re-sampled when exiting Standby; no option bits select the boot source on F1"
+cite  = "RM0008 Rev 20, section 3.4 'Boot configuration', Table 9 and text, PDF p.60-61"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.0, 0.8]
+vih  = [0.0, 2.0]
+cite = "DS5319 Rev 19 (STM32F103x8/xB), Table 39 'NRST pin characteristics', PDF p.66: VIL(NRST) max 0.8 V, VIH(NRST) min 2 V; pad 7 on LQFP48 per Table 5 PDF p.28"
+
+[[models.boot_inputs]]
+role = "boot0"
+internal_pull = "unknown"
+vil = [0.28, 0.24]
+vih = [0.41, 0.48]
+cite = "DS5319 Rev 19, Table 36 'I/O static characteristics', PDF p.61, Standard IO rows (VIL max 0.28*(VDD-2 V)+0.8 V, VIH min 0.41*(VDD-2 V)+1.3 V). INFERRED: the CMOS rows are labelled 'All I/Os except BOOT0', so BOOT0 is read as a Standard IO TTL pad; the table does not name BOOT0 on the TTL rows. Pad 44 per Table 5 PDF p.32"
+
+[[models.boot_inputs]]
+role = "pb2_boot1"
+internal_pull = "none"
+vil = [0.32, 0.11]
+vih = [0.42, 0.16]
+cite = "DS5319 Rev 19, Table 36, PDF p.61, 'IO FT' rows (VIL max 0.32*(VDD-2 V)+0.75 V, VIH min 0.42*(VDD-2 V)+1 V); PB2 is type 'I/O FT' with main function PB2/BOOT1 (Table 5 PDF p.30, pad 20). Pull: GPIO reset state is floating input, RM0008 Rev 20 GPIOx_CRL reset value 0x4444 4444, PDF p.171 (the reset state, not a datasheet statement about the strap)"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { boot0 = "low" }
+outcome = "user_flash"
+detail = "BOOT0 = 0 (BOOT1 is a don't-care): main Flash memory is selected as boot space; user firmware runs"
+cite = "RM0008 Rev 20, Table 9, PDF p.60"
+
+[[models.boot_modes]]
+name = "system memory"
+when = { boot0 = "high", pb2_boot1 = "low" }
+outcome = "rom_bootloader"
+detail = "BOOT1 = 0, BOOT0 = 1: system memory (ST USART1 bootloader, 0x1FFFF000) is the boot space; user firmware does not run"
+cite = "RM0008 Rev 20, Table 9, PDF p.60; bootloader on USART1 PA9/PA10 only for this density, AN2606 Rev 70 Table 45 PDF p.116"
+
+[[models.boot_modes]]
+name = "embedded SRAM"
+when = { boot0 = "high", pb2_boot1 = "high" }
+outcome = "sram"
+detail = "BOOT1 = 1, BOOT0 = 1: embedded SRAM is the boot space"
+cite = "RM0008 Rev 20, Table 9, PDF p.60"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x22
+product_id = 0x0410
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92]
+port = "USART1 on PA9 (TX) / PA10 (RX), 8E1"
+cite = "AN3155 Rev 18 (framing, ACK 0x79, NACK 0x1F, command set Table 2); AN2606 Rev 70 Table 3 (USART V2.2), Table 45 PDF p.116 (USART1 pins), Table 226 (PID 0x410). The Get command list and version byte are derived from AN3155 Table 3/Table 2 rules, not printed per device."
+
 [[models]]
 id = "stm32f401c"
 kind = "mcu"
@@ -3739,6 +4004,7 @@ backend = "renode:stm32f4"
 internal_clock = "internal 16 MHz HSI RC oscillator"
 
 [models.pins]
+"7"  = "reset"   # NRST (DS9716 Rev 11 Table 8, UQFN48 pad 7)
 "10" = "pa0"
 "11" = "pa1"
 "12" = "pa2"
@@ -3752,6 +4018,7 @@ internal_clock = "internal 16 MHz HSI RC oscillator"
 # Pads 10-19 are the ADC1 inputs (PA0-PA7, PB0, PB1) named here so the ADC capability table below can
 # state them; STM32F401xB/xC datasheet DocID024738 Rev 10 (DS9716), Table 8, UQFN48 column. The rest of the
 # package's pads are deliberately not mapped.
+"20" = "pb2_boot1" # PB2, BOOT1 additional function (DS9716 Rev 11 Table 8, pad 20)
 "44" = "boot0"   # BOOT0 strapping pin, UFQFPN48 pad 44 (verified vs the footprint)
 
 # ADC pads. STMicroelectronics STM32F401xB/xC datasheet DocID024738 Rev 10 (December 2017, DS9716), Table 8
@@ -3801,6 +4068,64 @@ note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 #
 # ADC roles. `_adcN` is the descriptor's engine channel: the ADC1 input number
 # for a pin ADC1 reads, 32 + the ADC2 input number for a pin only ADC2 reads.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Both boot pads are physical pads; BOOT1 is shared with PB2.
+[models.strap_latch]
+event = "reset_release"
+note  = "BOOT1/BOOT0 pin values are latched on the 4th rising edge of SYSCLK after a reset, and re-sampled when exiting Standby; no option bits select the boot source on F401"
+cite  = "RM0368 Rev 5, section 2.4 'Boot configuration', Table 2 and text, PDF p.41"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.3, 0.0]
+vih  = [0.7, 0.0]
+cite = "DS9716 Rev 11 (STM32F401xB/xC), Table 57 NRST pin characteristics PDF p.94 refers to Table 54 for VIH/VIL; Table 54 PDF p.90 row 'FT, and NRST I/O input low level voltage' 0.3VDD and 'FT and NRST I/O input high level voltage' 0.7VDD; NRST pad 7 (UQFN48), Table 8 PDF p.38"
+
+[[models.boot_inputs]]
+role = "boot0"
+internal_pull = "unknown"
+vil = [0.1, 0.1]
+vih = [0.17, 0.7]
+cite = "DS9716 Rev 11, Table 54 'I/O static characteristics', PDF p.90: BOOT0 I/O input low level voltage max 0.1VDD+0.1 V, high level min 0.17VDD+0.7 V (1.75 V<=VDD<=3.6 V, -40 to 125 C; the 0 to 125 C row gives the same cells in the text layer, checked on the rendered page); BOOT0 pad 44 (UQFN48), Table 8 PDF p.42"
+
+[[models.boot_inputs]]
+role = "pb2_boot1"
+internal_pull = "none"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+cite = "DS9716 Rev 11, Table 54 PDF p.90 (FT I/O rows); PB2 is I/O FT, additional function BOOT1, Table 8 PDF p.39, pad 20 (UQFN48). Pull: GPIOB_PUPDR reset value 0x0000 0100 (only PB4 pulled), RM0368 Rev 5 PDF p.159 (reset state, not a datasheet statement about the strap)"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { boot0 = "low" }
+outcome = "user_flash"
+detail = "BOOT0 = 0 (BOOT1 don't-care): main Flash memory is selected as the boot space; user firmware runs"
+cite = "RM0368 Rev 5, Table 2, PDF p.41"
+
+[[models.boot_modes]]
+name = "system memory"
+when = { boot0 = "high", pb2_boot1 = "low" }
+outcome = "rom_bootloader"
+detail = "BOOT1 = 0, BOOT0 = 1: system memory (ST bootloader; USART1 PA9/PA10, USART2 PD5/PD6 which do not exist on a 48-pin package) is the boot space; user firmware does not run"
+cite = "RM0368 Rev 5, Table 2, PDF p.41 and bootloader interfaces PDF p.42; AN2606 Rev 70 Table 77 PDF p.170-172"
+
+[[models.boot_modes]]
+name = "embedded SRAM"
+when = { boot0 = "high", pb2_boot1 = "high" }
+outcome = "sram"
+detail = "BOOT1 = 1, BOOT0 = 1: embedded SRAM is the boot space"
+cite = "RM0368 Rev 5, Table 2, PDF p.41"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x31
+product_id = 0x0423
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
+port = "USART1 on PA9 (TX) / PA10 (RX), 8E1"
+cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 77 PDF p.170-172 (pins; USART2 PD5/PD6 are not on a 48-pin package), Table 226 (PID 0x423 for F401xB/C). The Get command list and version byte are derived, not printed per device."
+
 [[models]]
 id = "stm32g474c"
 kind = "mcu"
@@ -3938,6 +4263,56 @@ missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_contro
 # 46/47 USART3 (PB10/PB11), 48/73 VCAP, 52-54 SPI2 (PB13-15), 68/69 USART1
 # (PA9/PA10), 70/71 USB (PA11/PA12), 72/76 SWDIO/SWCLK, 83 SD_CMD (PD2),
 # 86/87 USART2 (PD5/PD6), 92/93 I2C1 (PB6/PB7), 94 BOOT0.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Boot source = PB8-BOOT0 pin only when option bit nSWBOOT0 = 1 (FLASH_OPTR bit 26); with nSWBOOT0 = 0 the nBOOT0 option
+# bit (bit 27) is used instead. BOOT_LOCK (FLASH_SEC1R bit 16) = 1 forces main flash. nBOOT1 = FLASH_OPTR bit 23.
+# FACTORY DEFAULT modelled: FLASH_OPTR 0xFFEF F8AA (nBOOT1 = 1, nBOOT0 = 1, nSWBOOT0 = 1), FLASH_SEC1R 0xFF00 FF00
+# (BOOT_LOCK = 0), so the PB8 pin selects and nBOOT1 = 1.
+[models.strap_latch]
+event = "reset_release"
+note  = "the BOOT0 pin (PB8) is latched, together with the nBOOT1 option bit, on the 4th edge of the internal startup clock source after reset release, and re-sampled when exiting Standby; model state is the factory default nSWBOOT0 = 1, nBOOT1 = 1, BOOT_LOCK = 0; PB8 reverts to analog mode once reset is released"
+cite  = "RM0440 Rev 6, section 2.6.1 'Boot configuration', Table 5 and text, PDF p.90-91; OPTR production value PDF p.110; FLASH_SEC1R production value PDF p.114"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.3, 0.0]
+vih  = [0.7, 0.0]
+cite = "DS12288 Rev 6 (STM32G474xB/xC/xE), Table 58 'NRST pin characteristics', PDF p.133: VIL(NRST) max 0.3xVDD, VIH(NRST) min 0.7xVDD; PG10-NRST pad 7 (UFQFPN48 and LQFP48), Table 12 PDF p.58"
+
+[[models.boot_inputs]]
+role = "pb8_boot0"
+internal_pull = "unknown"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 6 PDF p.91 (no pull stated)"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { pb8_boot0 = "low" }
+outcome = "user_flash"
+detail = "factory option bits (BOOT_LOCK = 0, nSWBOOT0 = 1) with the BOOT0 pin low: main Flash memory is selected as boot area (nBOOT1 is a don't-care); user firmware runs"
+cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.90"
+
+[[models.boot_modes]]
+name = "system memory (factory nBOOT1 = 1)"
+when = { pb8_boot0 = "high" }
+outcome = "rom_bootloader"
+detail = "factory option bits (BOOT_LOCK = 0, nBOOT1 = 1, nSWBOOT0 = 1) with the BOOT0 pin high: system memory (ST bootloader, 0x1FFF0000) is the boot area; user firmware does not run"
+cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.90; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x31
+product_id = 0x0469
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
+port = "USART1 PA9 (TX) / PA10 (RX), USART2 PA2/PA3 or USART3 PC10/PC11, 8E1"
+cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
+
+# UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
+# (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
+# whatever the pin). (d) Dual-bank / BFB2 and "both banks empty" rows of AN2606 Pattern 14: not a pin function.
 [[models]]
 id = "stm32f77xv"
 kind = "mcu"
@@ -4262,18 +4637,68 @@ missing = ["adc_injection", "i2c_controller_bridge", "spi_controller_bridge", "c
 # KiCad 9 RF_Module / MCU_Espressif symbols. The strap `vdd` role is the supply
 # pad of the domain that powers the strap IO (the one VIL/VIH scale with).
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Boot source = BOOT0 pin plus option bits nBOOT1 (FLASH_OPTR bit 31), nBOOT_SEL (bit 29), nBOOT0 (bit 30).
+# FACTORY DEFAULT modelled: FLASH_OPTR 0x8070 00AA => nBOOT1 = 1, nBOOT0 = 0, nBOOT_SEL = 0, so the BOOT0 pin selects
+# ("default mode"). BOOT0 is shared with PB9.
+[models.strap_latch]
+event = "reset_release"
+note  = "on category 1 devices (L011/L021) the BOOT0 pin state is latched on the NRST rising edge as the BOOT0 value (not re-sampled when exiting Standby); model state is the factory default nBOOT_SEL = 0, nBOOT1 = 1; empty flash overrides pin low (see unlisted note)"
+cite  = "RM0377 Rev 10, section 2.4 'Boot configuration', Table 4 and text, PDF p.56-57; FLASH_OPTR production value PDF p.110; DocID027973 Rev 5 section 3.4.4 PDF p.24"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.3, 0.0]
+vih  = [0.39, 0.59]
+cite = "DocID027973 Rev 5 (STM32L011x3/x4), Table 53 'NRST pin characteristics', PDF p.79: VIL(NRST) max 0.3VDD, VIH(NRST) min 0.39VDD+0.59 V (confirmed on the rendered page); NRST pad 4 on LQFP32, Table 13 PDF p.37"
+
+[[models.boot_inputs]]
+role = "pb9_boot0"
+internal_pull = "unknown"
+vil = [0.14, 0.0]
+vih = [0.15, 0.56]
+cite = "DocID027973 Rev 5, Table 50 'I/O static characteristics', PDF p.75: BOOT0 pin VIL max 0.14VDD, VIH min 0.15VDD+0.56 V (guaranteed by characterization); BOOT0 pin leakage VIN=VSS typ 0 uA, VIN=VDD typ +2 uA (PDF p.75, no pull stated); PB9-BOOT0 pad 31 on LQFP32, pin type I, I/O structure B, Table 13 PDF p.40"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { pb9_boot0 = "low" }
+outcome = "user_flash"
+detail = "factory nBOOT_SEL = 0 with the BOOT0 pin low: Flash program memory is selected as boot area (nBOOT1 is a don't-care) UNLESS the internal empty-check flag is set (virgin part), in which case system memory boots instead"
+cite = "RM0377 Rev 10, Table 4 row 'nBOOT1 X, BOOT0 0, nBOOT_SEL 0, nBOOT0 X', PDF p.56; empty check PDF p.57"
+
+[[models.boot_modes]]
+name = "system memory (factory nBOOT1 = 1)"
+when = { pb9_boot0 = "high" }
+outcome = "rom_bootloader"
+detail = "factory nBOOT_SEL = 0, nBOOT1 = 1 with the BOOT0 pin high: system memory (ST bootloader, 0x1FF00000) is the boot area; user firmware does not run"
+cite = "RM0377 Rev 10, Table 4 row 'nBOOT1 1, BOOT0 1, nBOOT_SEL 0, nBOOT0 X', PDF p.56; AN2606 Rev 70 Table 2 Pattern 6, PDF p.34-36"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x31
+product_id = 0x0457
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
+port = "USART2 on PA9 (TX) / PA10 (RX), or PA2 (TX) / PA3 (RX), 8E1"
+cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 142 PDF p.342 (pins), Table 226 (PID 0x457 for L01x/L02x). The Get command list and version byte are derived, not printed per device."
+
+# UNLISTED ON PURPOSE (L0): (a) SRAM row (nBOOT1 = 0 with BOOT0 high) needs nBOOT1 = 0, not factory. (b) nBOOT_SEL = 1 rows
+# (BOOT0 from the nBOOT0 option bit): grey = category 1 only and not the factory state. (c) The empty-check override is
+# an internal flag (pin low + empty flash -> system memory); it cannot be expressed in pin terms and is only in `detail`.
+# (d) AN2606 notes the jump from user code to the system bootloader is not possible on this product (Pattern 6 note, PDF p.343).
 [[models]]
 id = "esp32_wroom"
 kind = "mcu"
 description = "Espressif ESP32 classic module (WROOM-32 / WROVER)"
 
 [models.match]
-# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules. The
+# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules (not the
+# ESP32-WROOM-DA, whose pinout differs: datasheet v0.7 Table 2). The
 # trailing flash/PSRAM/revision suffixes (e.g. "ESP32-WROOM-32E-N4" on the
 # Olimex EVB rev L) must all match the same strap table, so the suffix is left
 # open after "32". The value names the module, so it fixes the pad map. A bare
 # "ESP32"/"ESP32-D0WD" value is a QFN chip: see esp32 / esp32_qfn48 below.
-value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WRO(OM|VER)[-_ ]?32?.*)$"
+value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WROOM[-_ ]?32.*|ESP32[-_ ]?WROVER.*)$"
 # No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
 # of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
@@ -4375,6 +4800,94 @@ missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "nati
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Bare classic ESP32 chip, package unknown: identity only (see the family note).
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32_wroom pad 3, esp32_qfn48 pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # esp32_qfn48 pad 24 (wroom calls pad 26 'p04'); used by the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
+
 [[models]]
 id = "esp32"
 kind = "mcu"
@@ -4413,6 +4926,8 @@ backend = "qemu:esp32"
 "22" = "gpio2"
 "34" = "gpio5"
 "18" = "gpio12"
+"9"  = "en"          # CHIP_PU (Table 2-1 pin 9): the reset the chip leaves to start
+"24" = "gpio4"       # Table 2-1 pin 24
 "21" = "gpio15"
 "41" = "p01_txd"
 "40" = "p03_rxd"
@@ -4460,6 +4975,93 @@ implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_outp
 missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32_wroom pad 3, esp32_qfn48 pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # esp32_qfn48 pad 24 (wroom calls pad 26 'p04'); used by the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
 
 [[models]]
 id = "esp32_pico"
@@ -4526,6 +5128,94 @@ note = "GPIO2 must be low or floating at reset"
 # pad numbering is LilyGO's, not Espressif's, so there is no pad map here: GPIO
 # roles come from the board's pin names ("IO36/SVP", "IO25"), which the binder
 # reads as gpio<n>. The core is the classic ESP32 die, as on esp32_pico.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32_wroom pad 3, esp32_qfn48 pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # esp32_qfn48 pad 24 (wroom calls pad 26 'p04'); used by the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
+
 [[models]]
 id = "lilygo_t_micro32"
 kind = "mcu"
@@ -4655,6 +5345,100 @@ max_voltage_v = 3.6
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
 missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 3 ms (min) after CHIP_PU is high; the latched values are held until power-down"
+cite  = "ESP32-S3 Series Datasheet v2.2, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.32-33"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32s3_wroom pad 3, esp32s3_qfn56 pad 4 (Table 2-1 pin 4 = CHIP_PU)
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-S3 Series Datasheet v2.2, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO0 Weak pull-up, 1) PDF p.32; Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio46"
+pin = "GPIO46"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO46 also controls ROM-message printing to UART0 (TRM Table 8.3-1)"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO46 Weak pull-down, 0) PDF p.32; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio45"
+pin = "GPIO45"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO45 is not a boot-mode pin: it selects the VDD_SPI voltage. GPIO45 = 0 (default, EFUSE_VDD_SPI_FORCE = 0): VDD_SPI is 3.3 V from VDD3P3_RTC. GPIO45 = 1: VDD_SPI is 1.8 V from the Flash Voltage Regulator, so a 3.3 V flash or PSRAM on VDD_SPI is under-supplied if the board pulls GPIO45 high. EFUSE_VDD_SPI_FORCE = 1 overrides the pin"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO45 Weak pull-down, 0) PDF p.32; Table 3-4 'VDD_SPI Voltage Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio3"
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO3 is not a boot-mode pin: it selects the JTAG signal source; it has no internal pull resistors and its level must be set by the external circuit"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO3 Floating) PDF p.32; section 3.4 'JTAG Signal Source Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio1"
+pin = "GPIO1"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO1 = 1). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO2 = 0). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio0 = "high" }          # GPIO46: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash (normally the second-stage bootloader, then the application). GPIO46 can be any value"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 'Chip Boot Mode Control', PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio0 = "low", gpio46 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO46 = 0: Joint Download Boot, which supports USB Download Boot (USB-Serial-JTAG and USB-OTG) and UART Download Boot; the user firmware does not run unless it has been downloaded into SRAM"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 and footnote 2, PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio0 = "low", gpio46 = "high", gpio1 = "high", gpio2 = "low" }   # gpio1 and gpio2 are not strapping pins; esp32s3_qfn56 maps them (pads 6/7)
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0, GPIO46 = 1, GPIO1 = 1, GPIO2 = 0: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO1 and GPIO2 are not strapping pins but must be reserved; they are floating by default and high-impedance at reset. Only in the TRM, not the datasheet"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535"
+
+[models.qemu_boot]
+device = "esp32s3.gpio"
+property = "strap_mode"
+flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   # bits 1:0 are 'Reserved' in TRM v1.8 p.506; positions from ESP-IDF esp32s3 boot_mode.h (SPI download 0b0110) and an Espressif QEMU ROM run
+cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
+
 [[models]]
 id = "esp32s3_qfn56"
 kind = "mcu"
@@ -4683,6 +5467,8 @@ must_not_float_roles = "en"
 "8"  = "gpio3"
 "51" = "gpio45"
 "52" = "gpio46"
+"6"  = "gpio1"       # Table 2-1 pin 6 (SPI download strap)
+"7"  = "gpio2"       # Table 2-1 pin 7 (SPI download strap)
 
 [models.pin_capability.adc]
 basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 8 GPIO3 ADC1_CH2; GPIO0, GPIO45 and GPIO46 carry no ADC channel"
@@ -4733,6 +5519,101 @@ missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation",
 # ESP32-S2, package unknown: identity only (see the family note). The earlier
 # single map (27/7/6) matched neither package: on the S2-WROOM pads 27/7/6 are
 # IO33/IO4/IO3, and on the bare QFN56 pad 27 is the VDD3P3_RTC_IO supply.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 3 ms (min) after CHIP_PU is high; the latched values are held until power-down"
+cite  = "ESP32-S3 Series Datasheet v2.2, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.32-33"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32s3_wroom pad 3, esp32s3_qfn56 pad 4 (Table 2-1 pin 4 = CHIP_PU)
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-S3 Series Datasheet v2.2, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO0 Weak pull-up, 1) PDF p.32; Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio46"
+pin = "GPIO46"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO46 also controls ROM-message printing to UART0 (TRM Table 8.3-1)"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO46 Weak pull-down, 0) PDF p.32; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio45"
+pin = "GPIO45"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO45 is not a boot-mode pin: it selects the VDD_SPI voltage. GPIO45 = 0 (default, EFUSE_VDD_SPI_FORCE = 0): VDD_SPI is 3.3 V from VDD3P3_RTC. GPIO45 = 1: VDD_SPI is 1.8 V from the Flash Voltage Regulator, so a 3.3 V flash or PSRAM on VDD_SPI is under-supplied if the board pulls GPIO45 high. EFUSE_VDD_SPI_FORCE = 1 overrides the pin"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO45 Weak pull-down, 0) PDF p.32; Table 3-4 'VDD_SPI Voltage Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio3"
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO3 is not a boot-mode pin: it selects the JTAG signal source; it has no internal pull resistors and its level must be set by the external circuit"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO3 Floating) PDF p.32; section 3.4 'JTAG Signal Source Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio1"
+pin = "GPIO1"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO1 = 1). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO2 = 0). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio0 = "high" }          # GPIO46: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash (normally the second-stage bootloader, then the application). GPIO46 can be any value"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 'Chip Boot Mode Control', PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio0 = "low", gpio46 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO46 = 0: Joint Download Boot, which supports USB Download Boot (USB-Serial-JTAG and USB-OTG) and UART Download Boot; the user firmware does not run unless it has been downloaded into SRAM"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 and footnote 2, PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio0 = "low", gpio46 = "high", gpio1 = "high", gpio2 = "low" }   # gpio1 and gpio2 are not strapping pins; esp32s3_qfn56 maps them (pads 6/7)
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0, GPIO46 = 1, GPIO1 = 1, GPIO2 = 0: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO1 and GPIO2 are not strapping pins but must be reserved; they are floating by default and high-impedance at reset. Only in the TRM, not the datasheet"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535"
+
+[models.qemu_boot]
+device = "esp32s3.gpio"
+property = "strap_mode"
+flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   # bits 1:0 are 'Reserved' in TRM v1.8 p.506; positions from ESP-IDF esp32s3 boot_mode.h (SPI download 0b0110) and an Espressif QEMU ROM run
+cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
+
 [[models]]
 id = "esp32s2"
 kind = "mcu"
@@ -4924,6 +5805,89 @@ role = "gpio2"
 level = "high"
 note = "GPIO2 must be high at reset"
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }   # TRM v1.4 p.181 lists bits 0, 2, 3 only; bit 1 = GPIO3 rests on an Espressif QEMU ROM run, unconfirmed by any Espressif document
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c3_wroom02"
 kind = "mcu"
@@ -4984,6 +5948,89 @@ role = "gpio2"
 level = "high"
 note = "GPIO2 must be high at reset"
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }   # TRM v1.4 p.181 lists bits 0, 2, 3 only; bit 1 = GPIO3 rests on an Espressif QEMU ROM run, unconfirmed by any Espressif document
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c3_qfn32"
 kind = "mcu"
@@ -5010,6 +6057,8 @@ backend = "qemu:esp32c3"
 "6"  = "gpio2"
 "14" = "gpio8"
 "15" = "gpio9"
+"7"  = "en"          # CHIP_EN (Table 2-1 pin 7)
+"8"  = "gpio3"       # Table 2-1 pin 8 (SPI download strap)
 "28" = "p021_txd"
 "27" = "p020_rxd"
 
@@ -5070,6 +6119,90 @@ note = "GPIO2 must be high at reset"
 # lint scales VIL/VIH from the `vdd` role. No per-pin or package current rating
 # is set: Table 6-1 lists only VDD33, and Table 6-3 gives IOH/IOL as typical
 # drive strengths, not limits.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }   # TRM v1.4 p.181 lists bits 0, 2, 3 only; bit 1 = GPIO3 rests on an Espressif QEMU ROM run, unconfirmed by any Espressif document
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c6_mini1"
 kind = "mcu"
@@ -5204,6 +6337,451 @@ missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ESP32-S3-MINI-1 / -1U module (65 pads; -N8 / -N4R2 / -H4R2 variants).
+# Source: Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 3-1 Pin
+# Definitions (PDF pp.11-12), Table 6-1/6-2/6-3 (VDD33 maximum 3.6 V, recommended
+# 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD). One pad map for the -1 and
+# the -1U (same table). The pad numbers are the module's, NOT the bare chip's or
+# the WROOM-1's: the WROOM-1 numbers the same GPIOs on other pads, so a card for
+# either does not describe this footprint (see the PAD MAPS ARE PER PACKAGE note
+# above). tests/suite/module_pad_tables/esp32_s3_mini_1.tsv is the datasheet table
+# this map is checked against pad by pad.
+[[models]]
+id = "esp32s3_mini1"
+kind = "mcu"
+description = "Espressif ESP32-S3-MINI-1/-1U module, 65 pads"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-s3-mini-1_mini-1u_datasheet_en.pdf"
+title = "Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7"
+locator = "Table 3-1 Pin Definitions (PDF pp.11-12); Table 6-1 Absolute Maximum Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC Characteristics; Section 4 Boot Configurations"
+sha256 = "4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?S3[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N\\d+(R\\d+)?|H\\d+R\\d+))?$"
+
+[models.params]
+backend = "qemu:esp32s3"
+# Table 3-1: EN (pad 45) "Low: off, the chip powers off. Note: Do not leave the
+# EN pin floating." The module has no pull on it.
+must_not_float_roles = "en"
+
+[models.pins]
+# Table 3-1 Pin Definitions. GND = 1, 2, 42, 43, 46-65; IO26 (pad 26) is used by
+# the embedded PSRAM on the -N4R2 variants (note b) and cannot be used there.
+"1" = "gnd"           # GND
+"2" = "gnd2"          # GND
+"3" = "vdd"           # 3V3
+"4" = "gpio0"         # IO0
+"5" = "gpio1"         # IO1
+"6" = "gpio2"         # IO2
+"7" = "gpio3"         # IO3
+"8" = "gpio4"         # IO4
+"9" = "gpio5"         # IO5
+"10" = "gpio6"        # IO6
+"11" = "gpio7"        # IO7
+"12" = "gpio8"        # IO8
+"13" = "gpio9"        # IO9
+"14" = "gpio10"       # IO10
+"15" = "gpio11"       # IO11
+"16" = "gpio12"       # IO12
+"17" = "gpio13"       # IO13
+"18" = "gpio14"       # IO14
+"19" = "gpio15"       # IO15
+"20" = "gpio16"       # IO16
+"21" = "gpio17"       # IO17
+"22" = "gpio18"       # IO18
+"23" = "gpio19"       # IO19
+"24" = "gpio20"       # IO20
+"25" = "gpio21"       # IO21
+"26" = "gpio26"       # IO26
+"27" = "gpio47"       # IO47
+"28" = "gpio33"       # IO33
+"29" = "gpio34"       # IO34
+"30" = "gpio48"       # IO48
+"31" = "gpio35"       # IO35
+"32" = "gpio36"       # IO36
+"33" = "gpio37"       # IO37
+"34" = "gpio38"       # IO38
+"35" = "gpio39"       # IO39
+"36" = "gpio40"       # IO40
+"37" = "gpio41"       # IO41
+"38" = "gpio42"       # IO42
+"39" = "gpio43_txd0"  # TXD0
+"40" = "gpio44_rxd0"  # RXD0
+"41" = "gpio45"       # IO45
+"42" = "gnd3"         # GND
+"43" = "gnd4"         # GND
+"44" = "gpio46"       # IO46
+"45" = "en"           # EN
+"46" = "gnd5"         # GND
+"47" = "gnd6"         # GND
+"48" = "gnd7"         # GND
+"49" = "gnd8"         # GND
+"50" = "gnd9"         # GND
+"51" = "gnd10"        # GND
+"52" = "gnd11"        # GND
+"53" = "gnd12"        # GND
+"54" = "gnd13"        # GND
+"55" = "gnd14"        # GND
+"56" = "gnd15"        # GND
+"57" = "gnd16"        # GND
+"58" = "gnd17"        # GND
+"59" = "gnd18"        # GND
+"60" = "gnd19"        # GND
+"61" = "gnd20"        # GND
+"62" = "gnd21"        # GND
+"63" = "gnd22"        # GND
+"64" = "gnd23"        # GND
+"65" = "gnd24"        # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 3-1 Pin Definitions (PDF pp.11-12): IO1-IO10 ADC1_CH0-CH9, IO11-IO20 ADC2_CH0-CH9"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH0"
+"6" = "ADC1_CH1"
+"7" = "ADC1_CH2"
+"8" = "ADC1_CH3"
+"9" = "ADC1_CH4"
+"10" = "ADC1_CH5"
+"11" = "ADC1_CH6"
+"12" = "ADC1_CH7"
+"13" = "ADC1_CH8"
+"14" = "ADC1_CH9"
+"15" = "ADC2_CH0"
+"16" = "ADC2_CH1"
+"17" = "ADC2_CH2"
+"18" = "ADC2_CH3"
+"19" = "ADC2_CH4"
+"20" = "ADC2_CH5"
+"21" = "ADC2_CH6"
+"22" = "ADC2_CH7"
+"23" = "ADC2_CH8"
+"24" = "ADC2_CH9"
+
+# Table 3-1: EN (pad 45) "High: on, enables the chip. Low: off". Chapter 8 module
+# schematic: CHIP_PU is wired straight to the module pad with no pull-up on it.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 6-1 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V) and Table 6-2 Recommended Operating Conditions (VDD33 3.0 / 3.3 / 3.6 V)"
+
+# Section 4 Boot Configurations (excerpt of the ESP32-S3 Series Datasheet): chip
+# boot mode from GPIO0 and GPIO46, VDD_SPI voltage from GPIO45. The module maps
+# the chip's GPIOn to pad IOn (Table 3-1), so the roles are the chip's.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+[models.ratings]
+max_voltage_v = 3.6   # Table 6-1, VDD33 -0.3 to 3.6 V
+
+[models.coverage]
+implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
+missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ESP32-S2-MINI-1 / -1U module (65 pads; -N4 / -N4R2 and end-of-life -H4 variants, datasheet v1.6 Tables 1-2 p.10).
+# Source: Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 3 Pin
+# Definitions (PDF pp.11-12), Tables 9-11 (VDD33 maximum 3.6 V, recommended
+# 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD). No co-sim core exists for
+# the S2 (as on esp32s2_wroom); lint, strap, envelope and rating checks read the
+# pad map. tests/suite/module_pad_tables/esp32_s2_mini_1.tsv is the datasheet
+# table this map is checked against pad by pad.
+[[models]]
+id = "esp32s2_mini1"
+kind = "mcu"
+description = "Espressif ESP32-S2-MINI-1/-1U module, 65 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-s2-mini-1_esp32-s2-mini-1u_datasheet_en.pdf"
+title = "Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6"
+locator = "Table 3 Pin Definitions (PDF pp.11-12); Table 9 Absolute Maximum Ratings; Table 10 Recommended Operating Conditions; Table 11 DC Characteristics; Section 3.3 Strapping Pins"
+sha256 = "06999476c9d1dede2e6828384dc79aa1e7935059e0fc8349e51f0c962fcfa882"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?S2[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N\\d+(R\\d+)?|H\\d+))?$"
+
+[models.params]
+must_not_float_roles = "en"
+
+[models.pins]
+# Table 3 Pin Definitions. GND = 1, 2, 30, 42, 43, 46-65; NC = 27; IO26 (pad 26)
+# is used by the embedded PSRAM on the -N4R2 variants (note 2).
+"1" = "gnd"           # GND
+"2" = "gnd2"          # GND
+"3" = "vdd"           # 3V3
+"4" = "gpio0"         # IO0
+"5" = "gpio1"         # IO1
+"6" = "gpio2"         # IO2
+"7" = "gpio3"         # IO3
+"8" = "gpio4"         # IO4
+"9" = "gpio5"         # IO5
+"10" = "gpio6"        # IO6
+"11" = "gpio7"        # IO7
+"12" = "gpio8"        # IO8
+"13" = "gpio9"        # IO9
+"14" = "gpio10"       # IO10
+"15" = "gpio11"       # IO11
+"16" = "gpio12"       # IO12
+"17" = "gpio13"       # IO13
+"18" = "gpio14"       # IO14
+"19" = "gpio15"       # IO15
+"20" = "gpio16"       # IO16
+"21" = "gpio17"       # IO17
+"22" = "gpio18"       # IO18
+"23" = "gpio19"       # IO19
+"24" = "gpio20"       # IO20
+"25" = "gpio21"       # IO21
+"26" = "gpio26"       # IO26
+"27" = "nc"           # NC
+"28" = "gpio33"       # IO33
+"29" = "gpio34"       # IO34
+"30" = "gnd3"         # GND
+"31" = "gpio35"       # IO35
+"32" = "gpio36"       # IO36
+"33" = "gpio37"       # IO37
+"34" = "gpio38"       # IO38
+"35" = "gpio39"       # IO39
+"36" = "gpio40"       # IO40
+"37" = "gpio41"       # IO41
+"38" = "gpio42"       # IO42
+"39" = "gpio43_txd0"  # TXD0
+"40" = "gpio44_rxd0"  # RXD0
+"41" = "gpio45"       # IO45
+"42" = "gnd4"         # GND
+"43" = "gnd5"         # GND
+"44" = "gpio46"       # IO46
+"45" = "en"           # EN
+"46" = "gnd6"         # GND
+"47" = "gnd7"         # GND
+"48" = "gnd8"         # GND
+"49" = "gnd9"         # GND
+"50" = "gnd10"        # GND
+"51" = "gnd11"        # GND
+"52" = "gnd12"        # GND
+"53" = "gnd13"        # GND
+"54" = "gnd14"        # GND
+"55" = "gnd15"        # GND
+"56" = "gnd16"        # GND
+"57" = "gnd17"        # GND
+"58" = "gnd18"        # GND
+"59" = "gnd19"        # GND
+"60" = "gnd20"        # GND
+"61" = "gnd21"        # GND
+"62" = "gnd22"        # GND
+"63" = "gnd23"        # GND
+"64" = "gnd24"        # GND
+"65" = "gnd25"        # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 3 Pin Definitions (PDF pp.11-12): IO1-IO10 ADC1_CH0-CH9, IO11-IO20 ADC2_CH0-CH9"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH0"
+"6" = "ADC1_CH1"
+"7" = "ADC1_CH2"
+"8" = "ADC1_CH3"
+"9" = "ADC1_CH4"
+"10" = "ADC1_CH5"
+"11" = "ADC1_CH6"
+"12" = "ADC1_CH7"
+"13" = "ADC1_CH8"
+"14" = "ADC1_CH9"
+"15" = "ADC2_CH0"
+"16" = "ADC2_CH1"
+"17" = "ADC2_CH2"
+"18" = "ADC2_CH3"
+"19" = "ADC2_CH4"
+"20" = "ADC2_CH5"
+"21" = "ADC2_CH6"
+"22" = "ADC2_CH7"
+"23" = "ADC2_CH8"
+"24" = "ADC2_CH9"
+
+# Table 3: EN (pad 45) "High: on, enables the chip. Low: off. Do not leave the EN
+# pin floating."
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 9 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V) and Table 10 Recommended Operating Conditions (VDD33 3.0 / 3.3 / 3.6 V)"
+
+# Section 3.3 Strapping Pins: chip boot mode from GPIO0 and GPIO46, VDD_SPI
+# voltage from GPIO45, ROM message printing from GPIO46.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot
+# Table 11: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
+
+[models.ratings]
+max_voltage_v = 3.6   # Table 9, VDD33 -0.3 to 3.6 V
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ESP32-C6-WROOM-1 / -1U module (29 pads).
+# Source: Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 3-1 Pin
+# Definitions (PDF p.11), Tables 4-1/4-3 (boot straps), 6-1/6-2/6-3 (VDD33
+# maximum 3.6 V, recommended 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD).
+# The WROOM-1 numbers the GPIOs on other pads than the MINI-1 (esp32c6_mini1),
+# so it needs its own map. No co-sim core exists for the ESP32-C6 (as on
+# esp32c6_mini1). tests/suite/module_pad_tables/esp32_c6_wroom_1.tsv is the
+# datasheet table this map is checked against pad by pad.
+[[models]]
+id = "esp32c6_wroom1"
+kind = "mcu"
+description = "Espressif ESP32-C6-WROOM-1/-1U module, 29 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-c6-wroom-1_wroom-1u_datasheet_en.pdf"
+title = "Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4"
+locator = "Table 3-1 Pin Definitions (PDF p.11); Table 4-1 Default Configuration of Strapping Pins; Table 4-3 Chip Boot Mode Control; Table 6-1 Absolute Maximum Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC Characteristics"
+sha256 = "163020762fa6d499e0c611c5a13e78ad9d4720b421c6bc5e14e16fc748862b73"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?C6[-_ ]?WROOM[-_ ]?1(U|/U)?([-_ ]?(N\\d+|H\\d+))?$"
+
+[models.params]
+backend = "none:esp32c6"
+
+[models.pins]
+# Table 3-1 Pin Definitions. GND = 1, 28 and the exposed pad (29); NC = 22.
+"1" = "gnd"           # GND
+"2" = "vdd"           # 3V3
+"3" = "en"            # EN
+"4" = "gpio4"         # IO4
+"5" = "gpio5"         # IO5
+"6" = "gpio6"         # IO6
+"7" = "gpio7"         # IO7
+"8" = "gpio0"         # IO0
+"9" = "gpio1"         # IO1
+"10" = "gpio8"        # IO8
+"11" = "gpio10"       # IO10
+"12" = "gpio11"       # IO11
+"13" = "gpio12"       # IO12
+"14" = "gpio13"       # IO13
+"15" = "gpio9"        # IO9
+"16" = "gpio18"       # IO18
+"17" = "gpio19"       # IO19
+"18" = "gpio20"       # IO20
+"19" = "gpio21"       # IO21
+"20" = "gpio22"       # IO22
+"21" = "gpio23"       # IO23
+"22" = "nc"           # NC
+"23" = "gpio15"       # IO15
+"24" = "gpio17_rxd0"  # RXD0
+"25" = "gpio16_txd0"  # TXD0
+"26" = "gpio3"        # IO3
+"27" = "gpio2"        # IO2
+"28" = "gnd2"         # GND
+"29" = "gnd3"         # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 3-1 Pin Definitions (PDF p.11): ADC1_CH0-CH6 on IO0-IO6; no other pad carries an ADC channel"
+[models.pin_capability.adc.pads]
+"4" = "ADC1_CH4"
+"5" = "ADC1_CH5"
+"6" = "ADC1_CH6"
+"8" = "ADC1_CH0"
+"9" = "ADC1_CH1"
+"26" = "ADC1_CH3"
+"27" = "ADC1_CH2"
+
+# Table 3-1: EN (pad 3) "High: on, enables the chip. Low: off, the chip powers
+# off. Note: Do not leave the EN pin floating."
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[models.ratings]
+max_voltage_v = 3.6       # Table 6-1, VDD33 -0.3 to 3.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 6-2 VDD33 3.0-3.6 V; Table 6-1 VDD33 max 3.6 V"
+
+# Table 4-3: GPIO9 = 1 selects SPI boot whatever GPIO8 is; GPIO9 = 0 with GPIO8 = 1
+# selects joint download boot. Table 4-1: GPIO9 has a weak pull-up, GPIO8 floats.
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot
+internal_pull = "pull_up"   # Table 4-1: GPIO9 default weak pull-up
+# Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO9 (BOOT) high = SPI boot (normal); low with GPIO8 high = download boot"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "pin_and_package_current_ratings"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "nrf52840"
 kind = "mcu"
@@ -5253,6 +6831,111 @@ min_v = 1.7
 max_v = 3.6
 abs_max_v = 3.9
 basis = "Nordic nRF52840 Product Specification (docs.nordicsemi.com ps_nrf52840), Recommended operating conditions, VDD supply voltage 1.7 V to 3.6 V; Absolute maximum ratings, VDD -0.3 V to +3.9 V"
+
+# Output stage per PIN_CNF.DRIVE mode. nRF52840 PS v1.7 section 6.9.3.1 PDF p.159: IOL,SD /
+# IOH,SD min 1 mA at 0.4 V (VDD >= 1.7 V), IOL,HDH / IOH,HDH min 6 mA at 0.4 V (VDD >= 2.7 V).
+# Modes per section 6.9.2.10 PDF p.158-159: S0S1=0, H0S1=1, S0H1=2, H0H1=3, D0S1=4, D0H1=5,
+# S0D1=6, H0D1=7 ('0' is the pin driven low, '1' high; D = disconnected). S0S1 is the reset
+# default. Points are at VDD 3.0 V (the typical supply, section 5.3.8.1 PDF p.83).
+[[models.output_drive]]
+setting = "S0S1"
+selector = 0
+reset_default = true   # S0S1 is the default DRIVE setting at reset (PS v1.7 p.57, PIN_CNF reset 0x00000002)
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0S1"
+selector = 1
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "S0H1"
+selector = 2
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0H1"
+selector = 3
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "D0S1"
+selector = 4
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+]
+disconnected = ["low"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "D0H1"
+selector = 5
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+]
+disconnected = ["low"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "S0D1"
+selector = 6
+vdd = 3.0
+points = [
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+disconnected = ["high"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0D1"
+selector = 7
+vdd = 3.0
+points = [
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+disconnected = ["high"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+# GPIO P0/P1 PIN_CNF[n] at base + 0x700 + 4n, DRIVE bits 10:8 (PS v1.7 section 6.9.2.10 PDF
+# p.158-159; P0 at 0x50000000, P1 at 0x50000300, instantiation table section 4.2.4 PDF p.23).
+[models.drive_select]
+port_bases = { "0" = 0x50000700, "1" = 0x50000A00 }
+register_stride = 4
+pins_per_register = 1
+lsb = 8
+width = 3
+basis = "nRF52840 PS v1.7 section 6.9.2.10 PIN_CNF[n] PDF p.158-159: offset 0x700 + 4n, DRIVE bits 10:8, S0S1=0 H0S1=1 S0H1=2 H0H1=3 D0S1=4 D0H1=5 S0D1=6 H0D1=7"
+
+# Brown-out reset: nRF52840 PS v1.7 section 5.3.8.4 PDF p.85, VBOR,ON (System ON, VDD only)
+# min 1.57 V, typ 1.6 V, max 1.63 V. No hysteresis is printed, so release_above_v is absent.
+# The nRESET pin exists only when UICR PSELRESET maps it (section 4.5.1.4 PDF p.45) and the
+# datasheet prints no nRESET-specific VIL/VIH, so the card carries no reset pin threshold.
+[models.reset]
+supply_pin = "vdd"
+assert_below_v = 1.6
+basis = "nRF52840 PS v1.7 section 5.3.8.4 Power fail comparator, VBOR,ON typ 1.6 V (PDF p.85)"
 
 # nice!nano (v1/v2): an nRF52840 on the Pro Micro footprint. Its pin names are
 # Nordic port pins ("P0.06", "P1.15-LF"), which the binder reads as p0<bit> /
@@ -5428,6 +7111,76 @@ boot_select = false
 internal_pull = "pull_up"
 note = "RUN is active low with an internal pull-up; held low it keeps the chip in reset"
 
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour. RUN is the global asynchronous reset: low holds the chip in reset
+# regardless of DVDD (section 2.12.5 PDF p.168; pin list Table 619 PDF p.614). The datasheet
+# prints no RUN-specific VIL/VIH; RUN is typed 'Digital In (FT)' in the IOVDD domain, so the
+# generic Table 625 input levels at IOVDD 3.3 V are applied by pin type (VIL max 0.8 V, VIH
+# min 2.0 V, PDF p.616-617). Brown-out watches DVDD (the 1.1 V core), not IOVDD: nominal
+# threshold 0.86 V at power-on or after a reset (section 2.12.3.2 PDF p.167, Table 194), BOD
+# enabled at reset (BOD register EN reset 0x1, Table 190 PDF p.159-160). No rising threshold
+# is printed, so release_above_v is absent.
+[models.reset]
+supply_pin = "dvdd"
+assert_below_v = 0.86
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 194 PDF p.167 (DVDD, nominal 0.86 V, 0.83-0.89 V), BOD enabled at reset Table 190 PDF p.159-160; RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
 missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
@@ -5436,6 +7189,47 @@ missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two
 
 # The identity entry above retains pad56 when the package is absent or unknown.
 # Only this more specific match supplies the complete numeric pad map.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "reset_release"
+note  = "RP2040 has NO hardware latch on the strap. After RUN is high and the chip leaves reset, processor 0 runs the bootrom, which checks whether the SPI CS pin (QSPI_SS) is tied low ('bootrom button') and skips flash boot if so. The pin is sampled once, by software, after the watchdog-scratch check and before the QSPI pins are set up; the pin's reset state is a pull-up"
+cite  = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence', PDF p.130-131 (printed 129-130); Table 616 QSPI pins (QSPI_CSn, Pull-Up) PDF p.614 (printed 613)"
+
+[models.reset_input]
+role = "run"
+vil  = [0.0, 0.8]                  # IOVDD = 3.3 V row of Table 625: VIL max 0.8 V. (1.8 V row: 0.35 x IOVDD; 2.5 V row: 0.7 V)
+vih  = [0.0, 2.0]                  # IOVDD = 3.3 V row: VIH min 2 V. (1.8 V row: 0.65 x IOVDD; 2.5 V row: 1.7 V)
+cite = "RP2040 Datasheet, Table 619 'Miscellaneous pins' (RUN, pin 26, 'Digital In (FT)', Pull-Up, 'Chip enable / reset') PDF p.614 (printed 613); Table 625 'Digital IO characteristics - Standard and FT unless otherwise stated', VIH/VIL at IOVDD=3.3V, PDF p.616 (printed 615). RUN has no separate threshold row, so the generic digital-IO rows are applied"
+
+[[models.boot_inputs]]
+role = "qspi_ss"
+pin = "QSPI_SS (QSPI_CSn)"
+internal_pull = "pull_up"
+vil = [0.0, 0.8]                   # Table 625, IOVDD = 3.3 V
+vih = [0.0, 2.0]
+note = "Hardware design guide: QSPI_SS is connected to the flash and also has two resistors. R2 is a pull-up to 3.3 V (10 kohm, marked DNF/Do Not Fit on the reference schematic). R1 is a 1 kohm resistor in series with the header J2 labelled 'USB_BOOT' to ground: 'It is important to include resistor R1, as this allows the QSPI_SS pin to safely over-drive the applied pull-down when the RP2040 starts booting.' The guide shows a jumper header; it contains no push-button (BOOTSEL button) text"
+cite = "RP2040 Datasheet Table 616 'QSPI pins' (QSPI_CSn, pin 56, Pull-Up) PDF p.614 (printed 613); Table 625 PDF p.616 (printed 615); Hardware design with RP2040, section 2.2 'Flash storage', PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "BOOTSEL (USB boot)"
+when = { qspi_ss = "low" }
+outcome = "rom_bootloader"
+detail = "QSPI_SS held low at boot: the bootrom skips flash boot and drops to USB device boot, where RP2040 appears as a USB Mass Storage Device (UF2 drag-and-drop programs the SPI flash or loads and runs code in SRAM; an extended PICOBOOT interface is also available). The user firmware in flash does not run. Needs the 12 MHz crystal or clock input the USB bootloader requires"
+cite = "RP2040 Datasheet, section 2.8.1, PDF p.131 (printed 130); section 1.4.2 'Pin Descriptions' Table 1 (XIN and XOUT row) PDF p.12 (printed 11); Hardware design with RP2040 section 2.2 'Flash storage' PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "Flash boot"
+when = { qspi_ss = "high" }
+outcome = "user_flash"
+detail = "QSPI_SS not low: the bootrom sets up the QSPI pins, issues the XIP exit sequence, copies 256 bytes from SPI flash into SRAM5 and checks a CRC32; if the checksum passes it treats the bytes as a valid second stage and executes them from SRAM. If no valid image is found after 0.5 seconds of attempting to boot, the bootrom drops to USB device boot (the same USB mass-storage mode as BOOTSEL), so a blank or corrupt flash ends up in USB boot even with QSPI_SS high. Earlier, non-pin routes can pre-empt flash boot: a Rescue DP power-up halts, and watchdog scratch registers set to indicate pre-loaded SRAM code jump to that code"
+cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and 2.8.1.2 'Flash Boot Sequence', PDF pp.130-131 (printed 129-130)"
+
+[models.rom_bootloader]
+protocol = "usb_only"
+cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
+
 [[models]]
 id = "rp2040_qfn56"
 kind = "mcu"
@@ -5648,11 +7442,121 @@ min_v = 1.62
 max_v = 3.63
 basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, ADC_AVDD ADC 1.62-3.63 V (ADC performance compromised below 2.97 V)"
 
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour. RUN is the global asynchronous reset: low holds the chip in reset
+# regardless of DVDD (section 2.12.5 PDF p.168; pin list Table 619 PDF p.614). The datasheet
+# prints no RUN-specific VIL/VIH; RUN is typed 'Digital In (FT)' in the IOVDD domain, so the
+# generic Table 625 input levels at IOVDD 3.3 V are applied by pin type (VIL max 0.8 V, VIH
+# min 2.0 V, PDF p.616-617). Brown-out watches DVDD (the 1.1 V core), not IOVDD: nominal
+# threshold 0.86 V at power-on or after a reset (section 2.12.3.2 PDF p.167, Table 194), BOD
+# enabled at reset (BOD register EN reset 0x1, Table 190 PDF p.159-160). No rising threshold
+# is printed, so release_above_v is absent.
+[models.reset]
+supply_pin = "dvdd"
+assert_below_v = 0.86
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 194 PDF p.167 (DVDD, nominal 0.86 V, 0.83-0.89 V), BOD enabled at reset Table 190 PDF p.159-160; RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
 missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "reset_release"
+note  = "RP2040 has NO hardware latch on the strap. After RUN is high and the chip leaves reset, processor 0 runs the bootrom, which checks whether the SPI CS pin (QSPI_SS) is tied low ('bootrom button') and skips flash boot if so. The pin is sampled once, by software, after the watchdog-scratch check and before the QSPI pins are set up; the pin's reset state is a pull-up"
+cite  = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence', PDF p.130-131 (printed 129-130); Table 616 QSPI pins (QSPI_CSn, Pull-Up) PDF p.614 (printed 613)"
+
+[models.reset_input]
+role = "run"
+vil  = [0.0, 0.8]                  # IOVDD = 3.3 V row of Table 625: VIL max 0.8 V. (1.8 V row: 0.35 x IOVDD; 2.5 V row: 0.7 V)
+vih  = [0.0, 2.0]                  # IOVDD = 3.3 V row: VIH min 2 V. (1.8 V row: 0.65 x IOVDD; 2.5 V row: 1.7 V)
+cite = "RP2040 Datasheet, Table 619 'Miscellaneous pins' (RUN, pin 26, 'Digital In (FT)', Pull-Up, 'Chip enable / reset') PDF p.614 (printed 613); Table 625 'Digital IO characteristics - Standard and FT unless otherwise stated', VIH/VIL at IOVDD=3.3V, PDF p.616 (printed 615). RUN has no separate threshold row, so the generic digital-IO rows are applied"
+
+[[models.boot_inputs]]
+role = "qspi_ss"
+pin = "QSPI_SS (QSPI_CSn)"
+internal_pull = "pull_up"
+vil = [0.0, 0.8]                   # Table 625, IOVDD = 3.3 V
+vih = [0.0, 2.0]
+note = "Hardware design guide: QSPI_SS is connected to the flash and also has two resistors. R2 is a pull-up to 3.3 V (10 kohm, marked DNF/Do Not Fit on the reference schematic). R1 is a 1 kohm resistor in series with the header J2 labelled 'USB_BOOT' to ground: 'It is important to include resistor R1, as this allows the QSPI_SS pin to safely over-drive the applied pull-down when the RP2040 starts booting.' The guide shows a jumper header; it contains no push-button (BOOTSEL button) text"
+cite = "RP2040 Datasheet Table 616 'QSPI pins' (QSPI_CSn, pin 56, Pull-Up) PDF p.614 (printed 613); Table 625 PDF p.616 (printed 615); Hardware design with RP2040, section 2.2 'Flash storage', PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "BOOTSEL (USB boot)"
+when = { qspi_ss = "low" }
+outcome = "rom_bootloader"
+detail = "QSPI_SS held low at boot: the bootrom skips flash boot and drops to USB device boot, where RP2040 appears as a USB Mass Storage Device (UF2 drag-and-drop programs the SPI flash or loads and runs code in SRAM; an extended PICOBOOT interface is also available). The user firmware in flash does not run. Needs the 12 MHz crystal or clock input the USB bootloader requires"
+cite = "RP2040 Datasheet, section 2.8.1, PDF p.131 (printed 130); section 1.4.2 'Pin Descriptions' Table 1 (XIN and XOUT row) PDF p.12 (printed 11); Hardware design with RP2040 section 2.2 'Flash storage' PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "Flash boot"
+when = { qspi_ss = "high" }
+outcome = "user_flash"
+detail = "QSPI_SS not low: the bootrom sets up the QSPI pins, issues the XIP exit sequence, copies 256 bytes from SPI flash into SRAM5 and checks a CRC32; if the checksum passes it treats the bytes as a valid second stage and executes them from SRAM. If no valid image is found after 0.5 seconds of attempting to boot, the bootrom drops to USB device boot (the same USB mass-storage mode as BOOTSEL), so a blank or corrupt flash ends up in USB boot even with QSPI_SS high. Earlier, non-pin routes can pre-empt flash boot: a Rescue DP power-up halts, and watchdog scratch registers set to indicate pre-loaded SRAM code jump to that code"
+cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and 2.8.1.2 'Flash Boot Sequence', PDF pp.130-131 (printed 129-130)"
+
+[models.rom_bootloader]
+protocol = "usb_only"
+cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
 
 [[models]]
 id = "rpi_pico"
@@ -5801,6 +7705,70 @@ basis = "Raspberry Pi Pico Datasheet (build date 03/07/2026), Figure 2 pinout of
 "31" = "ADC0"
 "32" = "ADC1"
 "34" = "ADC2"
+
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour: RUN (header pin 30) is the chip's global reset; low holds the chip in
+# reset (RP2040 Datasheet section 2.12.5 PDF p.168). The datasheet prints no RUN-specific
+# VIL/VIH; RUN is typed 'Digital In (FT)' so Table 625 input levels at IOVDD 3.3 V apply by pin
+# type (PDF p.616-617). The module's DVDD is internal, so no supply threshold is carried.
+[models.reset]
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
 
 [[models]]
 id = "daisy_seed"
@@ -6035,6 +8003,31 @@ level = "high"
 boot_select = false
 internal_pull = "pull_up"
 note = "RESETn is active low with an internal 35-55 kOhm pull-up to DVDD; held low it keeps the part in reset"
+
+# Both crystal oscillators carry tunable load capacitors on the die, which the crystal
+# load-cap check reads. With no external caps the two pins in series reach at most
+# half the per-pin maximum, so a crystal above that needs external caps: for the LFXO
+# 24.5 / 2 = 12.25 pF, matching Table 4.12 note 2 (p.34): "Crystals with a load
+# capacitance of greater than 12 pF require external load capacitors".
+# HFXO: Rev. 1.4 section 3.3.2 Internal and External Oscillators (p.9): "a high
+# frequency crystal oscillator (HFXO) with integrated load capacitors, tunable in
+# small steps"; Table 4.11 (p.33) gives a 0.04 pF tuning step and a supported CL of
+# 10 pF and prints no capacitance range, so none is stated here.
+# LFXO: Table 4.12 (p.34): CLFXO_MIN 4 pF at CAPTUNE = 0 and CLFXO_MAX 24.5 pF at
+# CAPTUNE = 0x4F; note 5: each XTAL pin has a tuning cap and the crystal sees the two
+# in series. Pads: Table 6.3 (p.62) LFXO.LFXTAL_O on PD00 and LFXO.LFXTAL_I on PD01;
+# Table 6.2 (p.61) QFN40 numbers PD01 as pin 39 and PD00 as pin 40.
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "HFXO"
+pads = ["9", "10"]
+basis = "EFM32PG22 Data Sheet Rev. 1.4, 3.3.2 Internal and External Oscillators (p.9): HFXO with integrated load capacitors, tunable in small steps; Table 4.11 (p.33): on-chip tuning step 0.04 pF, no range printed; Table 6.2 (p.60) QFN40 pins 9 HFXTAL_I and 10 HFXTAL_O"
+
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "LFXO"
+pads = ["39", "40"]
+min_f = 4.0e-12
+max_f = 24.5e-12
+basis = "EFM32PG22 Data Sheet Rev. 1.4, Table 4.12 (p.34): on-chip tuning capacitor 4 pF at CAPTUNE = 0 (CLFXO_MIN) to 24.5 pF at CAPTUNE = 0x4F (CLFXO_MAX) on each XTAL pin (note 5: the crystal sees the two in series); Table 6.3 (p.62) LFXTAL_I on PD01, LFXTAL_O on PD00; Table 6.2 (p.61) QFN40 pins 39 and 40"
 
 [models.ratings]
 # Absolute Maximum Ratings.

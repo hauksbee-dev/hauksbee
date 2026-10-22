@@ -364,6 +364,7 @@ fn downstream_mcu_evidence_struct_literals_keep_the_legacy_field_contract() {
         supply_stand_in: None,
         min_supply_v: None,
         supply_floors: HashMap::new(),
+        electrical: hauksbee_bind::mcu_electrical::McuElectrical::default(),
     };
     let _substitution = hauksbee_engine::scheduler::McuSubstitution {
         reference: "U1".into(),

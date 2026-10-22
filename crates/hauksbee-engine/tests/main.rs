@@ -35,6 +35,8 @@ mod bitbang_spi_cosim;
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]
 mod bom_placement_cli;
+#[path = "boot_straps_cosim.rs"]
+mod boot_straps_cosim;
 #[path = "bug_hunt_physics.rs"]
 mod bug_hunt_physics;
 #[path = "bundled_sensor_catalog.rs"]

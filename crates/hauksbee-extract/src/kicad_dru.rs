@@ -26,6 +26,8 @@ use std::collections::BTreeMap;
 
 use forge_sexpr::{Document, List, Sexpr};
 
+use crate::drc_rules::CustomClearanceRule;
+
 const SUPPORTED_VERSION: u64 = 1;
 
 /// Valid KiCad constraints whose bounds are distances. Hauksbee does not check
@@ -114,6 +116,10 @@ pub struct KicadDruRule {
     pub line_number: usize,
     pub condition: Option<String>,
     pub layer: Option<String>,
+    /// The `(layer ...)` value was written as a quoted string. KiCad reads the
+    /// bare words `outer` and `inner` as layer groups but a quoted one as a
+    /// layer name that does not exist.
+    pub layer_is_quoted: bool,
     pub severity: Option<String>,
     pub constraints: Vec<KicadDruConstraint>,
 }
@@ -131,6 +137,32 @@ impl KicadDruRule {
     #[must_use]
     pub const fn is_global(&self) -> bool {
         self.condition.is_none() && self.layer.is_none()
+    }
+
+    /// The rule as the clearance sweep applies it: its scope compiled, with
+    /// the bound it sets. `None` for a rule that sets no clearance bound.
+    #[must_use]
+    pub fn custom_clearance_rule(&self) -> Option<CustomClearanceRule> {
+        let min_mm = self.clearance_min_mm()?;
+        Some(CustomClearanceRule::compile(
+            &self.name,
+            self.condition.as_deref(),
+            self.layer.as_deref(),
+            self.layer_is_quoted,
+            self.severity.as_deref(),
+            min_mm,
+        ))
+    }
+
+    /// True when the sweep can judge this rule's scope: it is unconditional, or
+    /// it sets a clearance bound under a condition and layer the evaluator
+    /// understands. A rule that is not is disclosed as not evaluated.
+    #[must_use]
+    pub fn is_scope_evaluated(&self) -> bool {
+        self.is_global()
+            || self
+                .custom_clearance_rule()
+                .is_some_and(|rule| rule.is_evaluable())
     }
 
     #[must_use]
@@ -194,11 +226,29 @@ impl KicadDruRules {
         })
     }
 
-    pub fn unevaluated_rules(&self) -> impl Iterator<Item = &KicadDruRule> {
-        let file_inactive = self.has_bare_values();
+    /// The clearance rules the sweep applies, in file order (a later matching
+    /// rule wins). Empty when KiCad would discard the whole file for a bare
+    /// value.
+    #[must_use]
+    pub fn clearance_rules(&self) -> Vec<CustomClearanceRule> {
+        if self.has_bare_values() {
+            return Vec::new();
+        }
         self.rules
             .iter()
-            .filter(move |rule| file_inactive || !rule.is_global() || rule.has_bare_value())
+            .filter_map(KicadDruRule::custom_clearance_rule)
+            .collect()
+    }
+
+    /// Rules the sweep cannot fully apply: everything when the file is
+    /// inactive, a rule with a bare value, and a rule whose condition or layer
+    /// the evaluator does not understand. A conditional rule it does understand
+    /// is applied pair by pair, not listed here.
+    pub fn unevaluated_rules(&self) -> impl Iterator<Item = &KicadDruRule> {
+        let file_inactive = self.has_bare_values();
+        self.rules.iter().filter(move |rule| {
+            file_inactive || !rule.is_scope_evaluated() || rule.has_bare_value()
+        })
     }
 
     pub fn has_bare_values(&self) -> bool {
@@ -318,6 +368,7 @@ fn parse_rule(
 
     let mut condition = None;
     let mut layer = None;
+    let mut layer_is_quoted = false;
     let mut severity = None;
     let mut constraints = Vec::new();
     for field in rule.lists() {
@@ -328,7 +379,10 @@ fn parse_rule(
                 "condition",
                 &name,
             )?,
-            Some("layer") => set_once(&mut layer, one_argument(field, "layer")?, "layer", &name)?,
+            Some("layer") => {
+                set_once(&mut layer, one_argument(field, "layer")?, "layer", &name)?;
+                layer_is_quoted = field.arg(0).is_some_and(forge_sexpr::Token::is_string);
+            }
             Some("severity") => set_once(
                 &mut severity,
                 one_argument(field, "severity")?,
@@ -366,6 +420,7 @@ fn parse_rule(
         line_number,
         condition,
         layer,
+        layer_is_quoted,
         severity,
         constraints,
     })

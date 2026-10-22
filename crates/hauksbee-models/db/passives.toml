@@ -930,6 +930,206 @@ value_re = '''(?ix) ^(
 "1" = "a"
 "2" = "b"
 
+# Crystals whose datasheet states the load capacitance. The ordering code is the
+# discriminator (the same family is sold in several load capacitances), so each
+# card matches only the codes whose CL the sheet fixes. A crystal named only by a
+# frequency still falls to `crystal_value` and is judged by its Value text.
+#
+# `cl_f` = specified load capacitance, `c0_f` = the shunt capacitance the sheet
+# prints as its maximum (a bound, not a typical: the pullability estimate that
+# uses it is therefore a lower bound on pulling, stated as such by the check).
+
+[[models]]
+id = "abracon_abm8_272_t3"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABM8-272-T3 12 MHz crystal, CL 10 pF (Raspberry Pi approved)"
+
+[models.match]
+mpn_re = '^ABM8-272-T3$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (3.0 pF max). The crystal load-capacitor check reads both.
+cl_f = 10.0e-12
+c0_f = 3.0e-12
+
+[models.pins]
+# Four pads: the crystal sits between pads 1 and 3, pads 2 and 4 are ground
+# (Mechanical Dimensions, p.4 of 9).
+"1" = "a"
+"2" = "gnd"
+"3" = "b"
+"4" = "gnd"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/datasheets/ABM8-272-T3.pdf"
+title = "Abracon ABM8-272-T3 datasheet, Rev B, 16 Sept 2024 (also RP2040 datasheet Table 257)"
+locator = "Key Electrical Specifications table: Load capacitance (CL) 10 pF; Shunt capacitance (C0) 3.0 pF max; Mechanical Dimensions p.4: pads 1 and 3 crystal, pads 2 and 4 ground"
+sha256 = "aead22b6bd9d6f8ad4472352f70fce3ade633e90b9772ba80fabe8fd0856ae91"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "abracon_abs07_cl_12p5"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABS07 32.768 kHz crystal, CL 12.5 pF (blank CL option = 12.5 pF)"
+
+[models.match]
+mpn_re = '^ABS07-32\.768KHZ(-(H|W|1|4|T))*$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (2.0 pF max; 0.9 to 1.2 pF typical). The crystal load-capacitor check reads both.
+cl_f = 12.5e-12
+c0_f = 2.0e-12
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/Resonators/ABS07.pdf"
+title = "Abracon ABS07 32.768 kHz SMD crystal datasheet, revised 08-10-22"
+locator = "Key Electrical Specifications (C0 2.0 pF max); Options and Part Identification, Load Capacitance column (blank CL option = 12.5 pF)"
+sha256 = "5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "abracon_abs07_cl_9"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABS07 32.768 kHz crystal, CL 9.0 pF (CL option 9)"
+
+[models.match]
+mpn_re = '^ABS07-32\.768KHZ-9(-(H|W|1|4|T))*$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (2.0 pF max; 0.9 to 1.2 pF typical). The crystal load-capacitor check reads both.
+cl_f = 9.0e-12
+c0_f = 2.0e-12
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/Resonators/ABS07.pdf"
+title = "Abracon ABS07 32.768 kHz SMD crystal datasheet, revised 08-10-22"
+locator = "Key Electrical Specifications (C0 2.0 pF max); Options and Part Identification, Load Capacitance column (CL option 9)"
+sha256 = "5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "abracon_abs07_cl_7"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABS07 32.768 kHz crystal, CL 7.0 pF (CL option 7)"
+
+[models.match]
+mpn_re = '^ABS07-32\.768KHZ-7(-(H|W|1|4|T))*$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (2.0 pF max; 0.9 to 1.2 pF typical). The crystal load-capacitor check reads both.
+cl_f = 7.0e-12
+c0_f = 2.0e-12
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/Resonators/ABS07.pdf"
+title = "Abracon ABS07 32.768 kHz SMD crystal datasheet, revised 08-10-22"
+locator = "Key Electrical Specifications (C0 2.0 pF max); Options and Part Identification, Load Capacitance column (CL option 7)"
+sha256 = "5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "abracon_abs07_cl_6"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABS07 32.768 kHz crystal, CL 6.0 pF (CL option 6)"
+
+[models.match]
+mpn_re = '^ABS07-32\.768KHZ-6(-(H|W|1|4|T))*$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (2.0 pF max; 0.9 to 1.2 pF typical). The crystal load-capacitor check reads both.
+cl_f = 6.0e-12
+c0_f = 2.0e-12
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/Resonators/ABS07.pdf"
+title = "Abracon ABS07 32.768 kHz SMD crystal datasheet, revised 08-10-22"
+locator = "Key Electrical Specifications (C0 2.0 pF max); Options and Part Identification, Load Capacitance column (CL option 6)"
+sha256 = "5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "abracon_abs07_cl_4p"
+kind = "passive"
+passive_class = "crystal"
+description = "Abracon ABS07 32.768 kHz crystal, CL 4.0 pF (CL option 4P)"
+
+[models.match]
+mpn_re = '^ABS07-32\.768KHZ-4P(-(H|W|1|4|T))*$'
+
+[models.params]
+# The load capacitance the crystal is trimmed to (what the oscillator circuit must
+# present across the crystal, stray included) and its holder shunt capacitance
+# (2.0 pF max; 0.9 to 1.2 pF typical). The crystal load-capacitor check reads both.
+cl_f = 4.0e-12
+c0_f = 2.0e-12
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://abracon.com/Resonators/ABS07.pdf"
+title = "Abracon ABS07 32.768 kHz SMD crystal datasheet, revised 08-10-22"
+locator = "Key Electrical Specifications (C0 2.0 pF max); Options and Part Identification, Load Capacitance column (CL option 4P)"
+sha256 = "5b21d42d9ca704d86cfb8f1b93488f3f3671c55ca90f334aa66f931866277dd1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ─────────────────────────────────────────────────────────────────────────────
 # A net tie is a deliberate short between two nets the designer wants the DRC to
 # treat as separate (an analog and a digital ground, usually) and the copper to
