@@ -440,3 +440,51 @@ fn power_mosfet_siblings_do_not_resolve_to_the_cards() {
         ],
     );
 }
+
+#[test]
+fn si7461dp_resolves_as_a_p_channel_power_mosfet_with_the_powerpak_pins() {
+    for v in ["Si7461DP", "SI7461DP", "Si7461DP-T1-E3", "Si7461DP-T1-GE3"] {
+        assert_eq!(id_of(v).as_deref(), Some("si7461dp"), "{v}");
+    }
+    let m = card("Si7461DP");
+    assert_eq!(m.kind, ComponentKind::Pmos);
+    assert_eq!(m.ratings.max_voltage_v, Some(60.0), "VDS");
+    assert_eq!(m.ratings.max_current_a, Some(6.9), "ID at TA = 70 °C");
+    assert_eq!(m.ratings.max_power_w, Some(1.2), "PD at TA = 70 °C");
+    assert_eq!(m.ratings.max_junction_temp_c, Some(150.0), "TJ");
+    assert_eq!(m.ratings.rds_on_vgs, Some(4.5), "RDS(on) VGS");
+    assert_eq!(m.ratings.vgs_th_max, Some(3.0), "VGS(th) max");
+    super::assert_pins(
+        &m,
+        &super::pins("1=source 2=source 3=source 4=gate 5=drain 6=drain 7=drain 8=drain"),
+    );
+    // P-channel: the threshold is negative, and the fit reproduces both guaranteed RDS(on) maxima.
+    let (vto, kp, rd, rs) = (
+        super::param(&m, "vto"),
+        super::param(&m, "kp"),
+        super::param(&m, "rd"),
+        super::param(&m, "rs"),
+    );
+    assert!(vto < 0.0);
+    for (vgs, max) in [(10.0_f64, 0.0145), (4.5, 0.019)] {
+        let ron = 1.0 / (kp * (vgs + vto)) + rd + rs;
+        assert!(
+            (ron - max).abs() < 2e-4,
+            "RDS(on) at {vgs} V: {ron} vs {max}"
+        );
+    }
+}
+
+#[test]
+fn si7461dp_siblings_do_not_resolve_to_it() {
+    assert_not(
+        "si7461dp",
+        &[
+            "Si7461",
+            "Si7463DP",
+            "Si7461DPT1",
+            "SI7461DP-T1-E3X",
+            "Si7461BDP",
+        ],
+    );
+}

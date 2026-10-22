@@ -4685,3 +4685,179 @@ implements = ["nmos_channel", "pin_identity", "absolute_ratings"]
 missing = ["body_diode", "temperature_dependent_behavior", "switching_transients", "self_heating", "avalanche_behavior"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Si7461DP: Vishay Siliconix P-channel 60 V power MOSFET, PowerPAK SO-8 ──
+[[models]]
+id = "si7461dp"
+kind = "pmos"
+description = "Si7461DP Vishay Siliconix P-channel 60V TrenchFET PowerPAK SO-8, 14.5 mOhm max @ Vgs=-10V, 19 mOhm @ -4.5V"
+
+[models.match]
+# The two orderable codes the datasheet prints (Si7461DP-T1-E3, Si7461DP-T1-GE3) and the bare part name.
+value_re = "(?i)^SI7461DP(?:-T1-(?:E3|GE3))?$"
+
+[models.params]
+# Source: Vishay Si7461DP, Document Number 72567, S13-2282-Rev. H, 04-Nov-13. The sheet plots its capacitances and prints no numeric table, so there is no cgs/cgd.
+# kp: ASSUMED fit, derived from the two guaranteed MAXIMUM RDS(on) rows at |VGS| = 10 V (0.0145 Ohm) and 4.5 V (0.019 Ohm), |vto| = 2 V:
+#   kp = (1/(4.5-2) - 1/(10-2)) / (0.019 - 0.0145) = 61.11 A/V^2; rd + rs = 0.0145 - 1/(61.11*8) = 0.012455 Ohm, split evenly.
+#   Both fitted rows are reproduced.
+# NOT MODELLED: the body diode (VSD -1.2 V max at IS = -4.5 A), `lambda` (no output-conductance data), avalanche, SOA, and the RDS(on) temperature curve.
+vto = -2.0            # ASSUMED midpoint of the -1..-3 V VGS(th) band (Specifications, Static); no typical is printed
+kp = 61.11            # A/V^2: fitted to the RDS(on) max rows at VGS = -10 V and -4.5 V with vto = -2 V (see above)
+rd = 0.0062275        # half the fitted ohmic residue (see above)
+rs = 0.0062275        # other half
+
+[models.pins]
+# Page 1 Bottom View: pins 1, 2, 3 are S, pin 4 is G, pins 5, 6, 7, 8 are D.
+"1" = "source"
+"2" = "source"
+"3" = "source"
+"4" = "gate"
+"5" = "drain"
+"6" = "drain"
+"7" = "drain"
+"8" = "drain"
+"G" = "gate"
+"D" = "drain"
+"S" = "source"
+
+[models.ratings]
+max_current_a = 6.9       # |ID| steady state at TA = 70 C, TJ = 150 C, the least favourable tagged row (8.6 A at TA = 25 C; 14.4 A and 11.5 A for t <= 10 s)
+max_surge_current_a = 60.0 # |IDM| pulsed drain current
+max_power_w = 1.2         # PD steady state at TA = 70 C, the least favourable tagged row (1.9 W at TA = 25 C; board is 1 in x 1 in FR4)
+max_voltage_v = 60.0      # |VDS| absolute maximum
+max_junction_temp_c = 150.0 # TJ max
+theta_ja_c_per_w = 65.0   # RthJA steady-state maximum, 1 in x 1 in FR4 board
+theta_jc_c_per_w = 1.3    # RthJC (drain) steady-state maximum
+rds_on_vgs = 4.5          # lowest |VGS| an RDS(on) row is specified at
+vgs_th_max = 3.0          # |VGS(th)| max @ VDS = VGS, ID = -250 uA
+vgs_max = 20.0            # VGS absolute maximum, both polarities
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.vishay.com/docs/72567/si7461dp.pdf"
+title = "Vishay Siliconix Si7461DP P-Channel 60 V (D-S) MOSFET datasheet, Document Number 72567, S13-2282-Rev. H, 04-Nov-13"
+locator = "page 1 Product Summary, Bottom View, Absolute Maximum Ratings, Thermal Resistance Ratings; page 2 Specifications (Static)"
+sha256 = "392becde1ede4721cb707e1f1439e174e9f7960f5f1ae70034d6ab644132d765"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vto"
+low = -3.0
+high = -1.0
+unit = "V"
+kind = "specification-limits"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 2, Static, VGS(th) min -1 V and max -3 V at VDS = VGS, ID = -250 uA: the declared range; vto = -2 V is the midpoint, no typ printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "kp"
+reason = "kp, rd and rs are fitted to guaranteed MAXIMUM RDS(on) rows, not to typical values: a typical part conducts better than this card"
+[[models.source.pinout]]
+package = "PowerPAK SO-8"
+standard = "page 1 Bottom View prints pins 1, 2, 3 as S, pin 4 as G and pins 5, 6, 7, 8 as D"
+pins = { "1" = "S", "2" = "S", "3" = "S", "4" = "G", "5" = "D", "6" = "D", "7" = "D", "8" = "D" }
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -8.6
+unit = "A"
+conditions = "TA = 25 °C, TJ = 150 °C, steady state"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, ID, steady state column, TA = 25 °C"
+[[models.source.characteristic]]
+parameter = "ID continuous drain current"
+rating = "max_current_a"
+max = -6.9
+unit = "A"
+conditions = "TA = 70 °C, TJ = 150 °C, steady state"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, ID, steady state column, TA = 70 °C"
+[[models.source.characteristic]]
+parameter = "IDM pulsed drain current"
+max = -60.0
+unit = "A"
+conditions = "pulsed"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, IDM"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 1.9
+unit = "W"
+conditions = "TA = 25 °C, steady state, surface mounted on 1 in x 1 in FR4 board"
+mounting = "1 in x 1 in FR4 board"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, PD, steady state column, TA = 25 °C"
+[[models.source.characteristic]]
+parameter = "PD maximum power dissipation"
+rating = "max_power_w"
+max = 1.2
+unit = "W"
+conditions = "TA = 70 °C, steady state, surface mounted on 1 in x 1 in FR4 board"
+mounting = "1 in x 1 in FR4 board"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, PD, steady state column, TA = 70 °C"
+[[models.source.characteristic]]
+parameter = "VDS drain-source voltage"
+rating = "max_voltage_v"
+max = -60.0
+unit = "V"
+conditions = "TA = 25 °C, absolute maximum"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings (TA = 25 °C unless otherwise noted), VDS"
+[[models.source.characteristic]]
+parameter = "VGS gate-source voltage"
+max = 20.0
+unit = "V"
+conditions = "absolute maximum, both polarities"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, VGS, ± 20 V"
+[[models.source.characteristic]]
+parameter = "TJ operating junction and storage temperature range"
+min = -55.0
+max = 150.0
+unit = "°C"
+conditions = "operating and storage"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Absolute Maximum Ratings, TJ, Tstg"
+[[models.source.characteristic]]
+parameter = "RthJA junction-to-ambient"
+rating = "theta_ja_c_per_w"
+max = 65.0
+unit = "°C/W"
+conditions = "steady state, surface mounted on 1 in x 1 in FR4 board"
+mounting = "1 in x 1 in FR4 board"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Thermal Resistance Ratings, RthJA, steady state, maximum column"
+[[models.source.characteristic]]
+parameter = "RthJC junction-to-case (drain)"
+rating = "theta_jc_c_per_w"
+max = 1.3
+unit = "°C/W"
+conditions = "steady state"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 1, Thermal Resistance Ratings, RthJC, steady state, maximum column"
+[[models.source.characteristic]]
+parameter = "VGS(th) gate threshold voltage"
+min = -1.0
+max = -3.0
+unit = "V"
+conditions = "VDS = VGS, ID = -250 uA"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 2, Specifications, Static, VGS(th)"
+[[models.source.characteristic]]
+parameter = "RDS(on) drain-source on-state resistance"
+typ = 0.0115
+max = 0.0145
+unit = "Ω"
+conditions = "VGS = -10 V, ID = -14.4 A"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 2, Specifications, Static, RDS(on)"
+[[models.source.characteristic]]
+parameter = "RDS(on) drain-source on-state resistance"
+typ = 0.015
+max = 0.019
+unit = "Ω"
+conditions = "VGS = -4.5 V, ID = -12.6 A"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 2, Specifications, Static, RDS(on)"
+[[models.source.characteristic]]
+parameter = "gfs forward transconductance"
+typ = 31.0
+unit = "S"
+conditions = "VDS = -15 V, ID = -14.4 A"
+basis = "Vishay Si7461DP Doc 72567 Rev. H, page 2, Specifications, Static, gfs"
+
+[models.coverage]
+implements = ["pmos_channel", "pin_identity", "absolute_ratings"]
+missing = ["body_diode", "temperature_dependent_behavior", "switching_transients", "self_heating", "avalanche_behavior", "gate_capacitances"]
+
+# ─────────────────────────────────────────────────────────────────────────────
