@@ -5370,7 +5370,7 @@ disconnected = ["high"]
 basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
 
 # GPIO P0/P1 PIN_CNF[n] at base + 0x700 + 4n, DRIVE bits 10:8 (PS v1.7 section 6.9.2.10 PDF
-# p.158-159; P0 at 0x50000000, P1 at 0x50000300, instantiation table PDF p.30).
+# p.158-159; P0 at 0x50000000, P1 at 0x50000300, instantiation table section 4.2.4 PDF p.23).
 [models.drive_select]
 port_bases = { "0" = 0x50000700, "1" = 0x50000A00 }
 register_stride = 4
@@ -5630,7 +5630,7 @@ supply_pin = "dvdd"
 assert_below_v = 0.86
 pin_vil_v = 0.8
 pin_vih_v = 2.0
-basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 190 PDF p.159-160 (DVDD, nominal 0.86 V, 0.83-0.89 V); RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 194 PDF p.167 (DVDD, nominal 0.86 V, 0.83-0.89 V), BOD enabled at reset Table 190 PDF p.159-160; RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
@@ -5920,7 +5920,7 @@ supply_pin = "dvdd"
 assert_below_v = 0.86
 pin_vil_v = 0.8
 pin_vih_v = 2.0
-basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 190 PDF p.159-160 (DVDD, nominal 0.86 V, 0.83-0.89 V); RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 194 PDF p.167 (DVDD, nominal 0.86 V, 0.83-0.89 V), BOD enabled at reset Table 190 PDF p.159-160; RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
