@@ -866,7 +866,7 @@ fn judge_against_spec(
         return (
             SiSeverity::Info,
             format!(
-                "board CL ~ {cl} pF ({stray_note}{on_chip}) vs spec {spec_cl:.1} pF [{cite}]: \
+                "board CL ~ {cl} pF ({stray_note}{on_chip}) vs spec {spec_cl} pF [{cite}]: \
                  {ppm:.0} ppm of pull at worst - ok"
             ),
         );
