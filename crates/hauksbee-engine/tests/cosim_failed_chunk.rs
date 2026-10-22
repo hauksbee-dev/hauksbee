@@ -37,6 +37,8 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         realtime_factor: 0.0,
         total_toggles: 0,
         uart_seen: false,
+        uart_output: String::new(),
+        uart_output_dropped_bytes: 0,
         error_budget: sched.error_budget().expect("test scheduler budget"),
         activity_summary: Vec::new(),
         timing_coverage: sched.timing_coverage(),
@@ -275,4 +277,42 @@ fn cosim_valid_run_reports_analog_valid_true() {
         "pass",
         "a converged co-sim passes"
     );
+}
+
+#[test]
+fn cosim_json_carries_the_uart_text() {
+    let mut circuit = Circuit::new();
+    let n1 = circuit.node("n1");
+    circuit.add(vsource(
+        "V1".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    circuit.add(resistor("R1".to_string(), n1, NodeId::GROUND, 1_000.0));
+    let board = crate::support::bound_board("uart", circuit, &[("n1", n1)]);
+    let sched = Scheduler::new(board, None, SolverOptions::default()).expect("scheduler");
+
+    // Silent firmware: the field is omitted, as every older consumer expects.
+    let quiet = serde_json::to_string(&cosim_json_from(&sched)).expect("serialize");
+    assert!(!quiet.contains("uart_output"), "{quiet}");
+
+    let mut c = cosim_json_from(&sched);
+    c.uart_seen = true;
+    c.set_uart_output(b"boot ok\r\ntemp=21.5\r\n");
+    let value: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&c).expect("serialize")).expect("parse");
+    assert_eq!(value["uart_output"], "boot ok\r\ntemp=21.5\r\n");
+    assert!(value.get("uart_output_dropped_bytes").is_none(), "{value}");
+
+    // A chatty run is cut at the cap, on a character boundary, and says so.
+    let cap = hauksbee_engine::result::COSIM_UART_OUTPUT_MAX_BYTES;
+    let chatty = "\u{e9}".repeat(cap);
+    c.set_uart_output(chatty.as_bytes());
+    assert_eq!(
+        c.uart_output_dropped_bytes,
+        (chatty.len() - c.uart_output.len()) as u64
+    );
+    assert!(c.uart_output.len() <= cap);
+    assert!(c.uart_output.chars().all(|ch| ch == '\u{e9}'));
 }

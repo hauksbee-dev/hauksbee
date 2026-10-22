@@ -500,6 +500,31 @@ fn text_of(run: &std::process::Output) -> String {
     )
 }
 
+/// The exit-status contract is in `--help` where a person looks for it, and 4
+/// is named as the partial success it is.
+#[test]
+fn extract_help_lists_every_exit_status_and_names_4_as_partial_success() {
+    let out = Command::new(hauksbee())
+        .args(["models", "extract", "--help"])
+        .output()
+        .expect("run hauksbee");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help.contains("Exit status of --unmodelled")
+            && help.contains("4  PARTIAL SUCCESS, not a total failure")
+            && help.contains("--retry-failed"),
+        "{help}"
+    );
+    let top = Command::new(hauksbee())
+        .arg("--help")
+        .output()
+        .expect("run hauksbee");
+    assert!(
+        String::from_utf8_lossy(&top.stdout).contains("PARTIAL SUCCESS"),
+        "the top-level exit codes point at 4"
+    );
+}
+
 /// A real extraction failure (the agent writes no card) fails the run, and is
 /// kept apart from the part with no datasheet in the same batch.
 #[cfg(unix)]
@@ -515,7 +540,9 @@ fn a_failed_extraction_exits_non_zero_and_is_not_counted_as_no_datasheet() {
     );
     assert!(
         all.contains("1 of the extractions failed: XOPAMP1-TR")
-            && all.contains("Batch: 0 saved, 1 for hand supply, 1 failed (XOPAMP1-TR)"),
+            && all.contains("Batch: 0 saved, 1 for hand supply, 1 failed (XOPAMP1-TR)")
+            && all.contains("Exit status 1: 1 part(s) failed and none was saved")
+            && all.contains("error: 1 of the extractions failed"),
         "{all}"
     );
     let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
@@ -544,6 +571,13 @@ fn a_partly_saved_batch_exits_4_and_says_saved_for_hand_supply_and_failed() {
         all.contains("Batch: 1 saved, 1 failed (XNOSHEET7)")
             && all
                 .contains("1 of the extractions failed: XNOSHEET7 (1 others were saved and kept)"),
+        "{all}"
+    );
+    // Exit 4 is worded as the partial success it is, where the person reads it.
+    assert!(
+        all.contains("Exit status 4 = partial success, not a total failure")
+            && all.contains("partial success: 1 of the extractions failed")
+            && !all.contains("error: 1 of the extractions failed"),
         "{all}"
     );
     assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
@@ -585,7 +619,9 @@ fn a_failed_part_is_not_sent_again_unless_asked_or_its_inputs_change() {
         all.contains("XOPAMP1-TR: skipped, it failed earlier today")
             && all.contains("--retry-failed")
             && all.contains("XNOSHEET7: not searching again")
-            && all.contains("Batch: 0 saved, 1 for hand supply, 1 skipped (failed before)"),
+            && all.contains(
+                "Batch: 0 saved, 1 for hand supply, 1 skipped (failed before; --retry-failed tries them again)"
+            ),
         "{all}"
     );
     assert!(

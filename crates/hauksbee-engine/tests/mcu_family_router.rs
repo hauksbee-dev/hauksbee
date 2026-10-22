@@ -156,8 +156,8 @@ backend = "renode:stm32f103"
 fn recognized_family_without_platform_and_non_mcu_parts_stay_unresolved() {
     let s2_board = board_with(component(
         "U2",
-        "ESP32-S2-MINI-1",
-        "RF_Module:ESP32-S2-MINI-1",
+        "ESP32-S2-SOLO-2",
+        "RF_Module:ESP32-S2-SOLO-2",
         vec![pin("1", Some(1), "GPIO1")],
     ));
     let s2 = bind_board(&s2_board, &ModelLibrary::builtin());
@@ -215,6 +215,46 @@ fn esp32s3_db_model_binds_qemu_backend_not_avr() {
     ));
 }
 
+// A processor on a MODULE footprint binds through the module card's pad map:
+// the ESP32-S3-MINI-1 numbers its pads (3V3 on 3, IO0 on 4, IO45 on 41, EN on
+// 45) differently from the bare chip and from the WROOM-1 (IO0 on 27), so a
+// board that carries the module must get the roles from the card, with the
+// module's pad names as the board prints them.
+#[test]
+fn a_module_footprint_binds_its_processor_through_the_module_cards_pad_map() {
+    let board = board_with(component(
+        "U1",
+        "ESP32-S3-MINI-1",
+        "RF_Module:ESP32-S3-MINI-1",
+        vec![
+            pin("4", Some(4), "IO0"),
+            pin("3", Some(5), "3V3"),
+            pin("1", Some(6), "GND"),
+            pin("45", Some(5), "EN"),
+            pin("41", Some(1), "IO45"),
+        ],
+    ));
+
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+
+    assert_eq!(bound.mcus.len(), 1, "{:#?}", bound.report.rows);
+    let mcu = &bound.mcus[0];
+    assert_eq!(mcu.backend, "qemu:esp32s3");
+    for (pad, role) in [
+        ("4", "gpio0"),
+        ("3", "vdd"),
+        ("1", "gnd"),
+        ("45", "en"),
+        ("41", "gpio45"),
+    ] {
+        assert_eq!(
+            mcu.pad_roles.get(pad).map(String::as_str),
+            Some(role),
+            "pad {pad}"
+        );
+    }
+}
+
 // Regression: a DB-resolved MCU entry with no `backend` param for a family
 // the router knows has NO co-sim platform (ESP32-S2) must not silently
 // default to `simavr:atmega328p`. The binding stays (straps lint etc. still
@@ -223,7 +263,7 @@ fn esp32s3_db_model_binds_qemu_backend_not_avr() {
 #[test]
 fn esp32s2_db_model_does_not_default_to_avr_backend() {
     // "ESP32-S2-WROOM" matches the builtin esp32s2 DB entry's value_re, so
-    // (unlike the -MINI- variant in the unresolved test above) the model DB
+    // (unlike the -SOLO-2 variant in the unresolved test above) the model DB
     // resolves it and the family-router fallback never runs.
     let board = board_with(component(
         "U2",

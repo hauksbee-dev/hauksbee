@@ -677,6 +677,25 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    // A strap's supply is the pin its thresholds scale on: a role the card
+    // names, and a supply, or the divider check would scale on nothing.
+    for strap in &entry.straps {
+        if let Some(supply) = strap.supply.as_deref() {
+            let is_supply = crate::pin_roles::power_pin(supply, entry.kind)
+                .is_some_and(|pin| pin.kind == crate::pin_roles::PowerKind::Supply);
+            p.require(
+                entry.pins.values().any(|r| r == supply) && is_supply,
+                || {
+                    format!(
+                        "strap '{}' supply '{supply}' must be a supply role in [models.pins] \
+                     (the pad's IO supply, e.g. vddio or iovdd)",
+                        strap.role
+                    )
+                },
+            );
+        }
+    }
+
     check_pin_capability(entry, &mut p);
     check_peripheral_limits(entry, &mut p);
 

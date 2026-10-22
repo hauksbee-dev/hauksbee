@@ -6,7 +6,7 @@
 //! guide, so the drafter is told exactly what the validator then holds it to.
 //! Nothing here changes a value: a refused draft is redrafted.
 //!
-//! Measured cases (round-3 drafts): a "0.7 VDD" row written as 0.7 V; input
+//! Measured cases (round-3 drafts; a VIH above its own supply later): a "0.7 VDD" row written as 0.7 V; input
 //! thresholds at a 1.8 V supply beside output levels at 3 V; an enable's max
 //! column written as its nominal threshold; an EEPROM's write current as its
 //! static draw; a buck's internal bias-LDO dropout as its `dropout_v`.
@@ -16,7 +16,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::param_names::{cited_rows, has_symbol, row_column};
-use crate::schema::{Characteristic, ComponentKind, ModelEntry, ParamValue};
+use crate::pin_roles::{power_pin, PowerKind};
+use crate::schema::{Characteristic, ComponentKind, ModelEntry, OperatingEnvelope, ParamValue};
 
 /// A supply rail as rows and ratiometric limits name it (VDD, VCC, VDDIO, VS).
 pub const RAIL: &str = r"(V(?:DD|CC|IO|S|L|REF|BAT)[A-Z0-9_]*)";
@@ -77,6 +78,14 @@ pub const RULES: &[Rule] = &[
                 the interface active or at a running clock rate is a dynamic draw, never the \
                 static one",
         check: static_supply,
+    },
+    Rule {
+        id: "vih_within_supply",
+        guide: "an input-high threshold (vih, or a point of the levels.vih table) is read at a \
+                supply and can never exceed it: a vih above the card's own supply maximum (or \
+                above the supply its rows are read at) is the wrong column, the wrong supply's \
+                row, or a ratio such as 0.7 VDD written as volts at a larger rail",
+        check: vih_above_supply,
     },
     Rule {
         id: "converter_dropout",
@@ -456,6 +465,59 @@ fn static_supply(entry: &ModelEntry) -> Vec<String> {
     .collect()
 }
 
+/// How far above the supply a VIH may print before it is called wrong: rounding
+/// in the datasheet's own figures.
+const VIH_SUPPLY_SLACK_V: f64 = 0.05;
+
+/// The largest recommended maximum among the card's primary supply pins, with
+/// the pin that states it.
+#[must_use]
+pub fn supply_max_v(entry: &ModelEntry) -> Option<(f64, String)> {
+    entry
+        .envelope
+        .iter()
+        .filter_map(|e| match e {
+            OperatingEnvelope::SupplyRange { pin, max_v, .. }
+                if power_pin(pin, entry.kind).is_some_and(|p| p.kind == PowerKind::Supply) =>
+            {
+                Some((*max_v, pin.clone()))
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+/// An input-high threshold above the supply it is read at: the card's `vih`
+/// param against the supply its rows are read at (else the supply maximum), and
+/// each `[vcc, volts]` point of a `levels.vih` table against its own `vcc`.
+#[must_use]
+pub fn vih_above_supply(entry: &ModelEntry) -> Vec<String> {
+    let mut out = Vec::new();
+    let ceiling = levels_corner(entry)
+        .map(|c| (c, format!("the {c} V supply its rows are read at")))
+        .or_else(|| {
+            supply_max_v(entry).map(|(m, pin)| {
+                (
+                    m,
+                    format!("the {m} V supply maximum ('{pin}' supply_range)"),
+                )
+            })
+        });
+    if let (Some(v), Some((c, why))) = (entry.params.get_f64("vih"), ceiling) {
+        if v > c + VIH_SUPPLY_SLACK_V {
+            out.push(format!("`vih = {v}` is above {why}"));
+        }
+    }
+    for [vcc, v] in entry.levels.get("vih").into_iter().flatten() {
+        if *v > vcc + VIH_SUPPLY_SLACK_V {
+            out.push(format!(
+                "levels.vih reads {v} V at a {vcc} V supply, above the supply itself"
+            ));
+        }
+    }
+    out
+}
+
 fn converter_dropout(entry: &ModelEntry) -> Vec<String> {
     const BIAS: &[&str] = &[
         "vcc", "intvcc", "extvcc", "drvcc", "bias", "internal", "ldo",
@@ -601,6 +663,35 @@ mod tests {
             .replace("IVCC", "IOUT");
         assert!(rule_ids(&entry(&own)).is_empty());
         assert!(rule_ids(&entry(&card.replace("max = 0.27", "max = 0.4"))).is_empty());
+    }
+
+    /// A VIH written above the supply it is read at: the wrong column or a ratio
+    /// written as volts at a larger rail.
+    #[test]
+    fn a_vih_above_its_own_supply_is_refused() {
+        let card = |vih: f64| {
+            format!(
+                "[[models]]\nid = \"x\"\nkind = \"digital\"\n[models.params]\nvih = {vih}\n\
+                 [models.pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n\
+                 [[models.envelope]]\nkind = \"supply_range\"\npin = \"vdd\"\nmin_v = 1.65\nmax_v = 3.6\nbasis = \"ROC\"\n"
+            )
+        };
+        let bad = problems(&entry(&card(5.0)));
+        assert!(
+            bad.iter()
+                .any(|p| p.starts_with("vih_within_supply") && p.contains("3.6 V supply maximum")),
+            "{bad:?}"
+        );
+        // 2.0 V at a 3.6 V maximum is an ordinary LVTTL threshold.
+        assert!(rule_ids(&entry(&card(2.0))).is_empty());
+        // No supply stated, nothing to hold the figure to.
+        let bare = "[[models]]\nid = \"x\"\nkind = \"digital\"\n[models.params]\nvih = 5.0\n";
+        assert!(rule_ids(&entry(bare)).is_empty());
+        // A table point above its own supply is refused even with no envelope.
+        let table = "[[models]]\nid = \"x\"\nkind = \"digital\"\n[models.levels]\nvih = [[1.8, 1.26], [3.3, 3.6]]\n";
+        let found = vih_above_supply(&entry(table));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("3.6 V at a 3.3 V supply"), "{found:?}");
     }
 
     #[test]

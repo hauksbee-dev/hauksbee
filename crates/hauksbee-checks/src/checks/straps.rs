@@ -276,7 +276,7 @@ fn pull_fix(
     strap: &StrapPin,
     net_name: &str,
 ) -> String {
-    let vdd = role_net_id(comp, model, "vdd")
+    let vdd = role_net_id(comp, model, strap.supply_role(model))
         .and_then(|id| board.net(id))
         .map_or_else(|| "its supply".to_string(), |n| format!("'{}'", n.name));
     match strap.level {
@@ -1070,8 +1070,13 @@ fn judge_divider(
             model.id, strap.role
         ));
     };
-    let vdd = role_net_id(mcu, model, "vdd")
-        .ok_or_else(|| format!("the '{}' card names no vdd pin to scale VIL/VIH", model.id))?;
+    let supply = strap.supply_role(model);
+    let vdd = role_net_id(mcu, model, supply).ok_or_else(|| {
+        format!(
+            "the '{}' card names no {supply} pin to scale VIL/VIH",
+            model.id
+        )
+    })?;
     // The rails in play (the vdd net shares a corner with a pull to it).
     let mut nets: Vec<(i64, Vec<f64>)> = Vec::new();
     for id in pulls.iter().filter(|p| p.up).map(|p| p.far).chain([vdd]) {
@@ -1857,5 +1862,100 @@ vih = [0.0, 2.0]
         let held = run(float, vec![up9(), on("C9", "100n", 5, 1)]);
         assert!(held.is_empty(), "{held:#?}");
         assert!(run(float, vec![]).is_empty());
+    }
+
+    /// A part with a 1.2 V core (`vdd`) and a 3.3 V IO supply (`iovdd`): the
+    /// strap pad is powered from the IO supply, so its thresholds scale there.
+    fn io_domain_card(strap_lines: &str) -> String {
+        format!(
+            r#"
+[[models]]
+id = "strap_io_mcu"
+kind = "mcu"
+description = "IO-domain strap fixture"
+[models.match]
+value_re = "^STRAPIO$"
+[models.pins]
+"1" = "vdd"
+"2" = "iovdd"
+"3" = "boot0"
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+{strap_lines}
+"#
+        )
+    }
+
+    fn io_lint(card: &str, parts: Vec<Component>) -> Vec<(Severity, String)> {
+        let dir = hauksbee_testkit::fresh_scratch_dir("straps", "io");
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        assert!(lib.load_user_dir(&dir).is_empty(), "test card must load");
+        let nets = [(1, "GND"), (2, "+3V3"), (3, "/BOOT0"), (5, "+1V2")];
+        let b = board(&nets, parts);
+        let report = strap_lint_with_drives(&b, &lib, &BTreeMap::new());
+        report
+            .of_check(LintCheck::StrapPin)
+            .map(|f| (f.severity, f.message.clone()))
+            .collect()
+    }
+
+    fn io_mcu() -> Component {
+        part("U9", "STRAPIO", &[("1", 5), ("2", 2), ("3", 3)])
+    }
+
+    /// The pad's thresholds are read at the IO rail the card names, not the
+    /// core rail: a 10k/10k divider at 3.3 V is mid-band for 0.3/0.7 x 3.3 V
+    /// (undefined), where the core 1.2 V rail would call it a clean high.
+    #[test]
+    fn a_strap_on_the_io_domain_is_judged_at_the_io_rail() {
+        let divider = || vec![io_mcu(), pull("R1", "10k", 2), pull("R2", "10k", 1)];
+        for card in [
+            io_domain_card("supply = \"iovdd\""),
+            io_domain_card("").replace(
+                "[[models.straps]]",
+                "[models.level_rails]\niovdd = [\"boot0\"]\n[[models.straps]]",
+            ),
+        ] {
+            let found = io_lint(&card, divider());
+            assert_eq!(found.len(), 1, "{found:#?}");
+            assert_eq!(found[0].0, High, "{found:#?}");
+            assert!(
+                found[0].1.contains("undefined") && found[0].1.contains("VIH >= 2."),
+                "{}",
+                found[0].1
+            );
+        }
+        // Left on the core rail (the card says nothing about the pad's domain),
+        // the same divider reads a clean HIGH against 0.7 x 1.2 V: the very
+        // error a drafted card makes by mapping the pad to the core domain.
+        let core = io_lint(&io_domain_card(""), divider());
+        assert_eq!(core.len(), 1, "{core:#?}");
+        assert!(
+            core[0].1.contains("reads HIGH at every corner"),
+            "{core:#?}"
+        );
+    }
+
+    /// Correct IO-domain boards stay silent, and the fix names the IO rail.
+    #[test]
+    fn a_correct_io_domain_strap_board_is_silent() {
+        let card = io_domain_card("supply = \"iovdd\"");
+        // Active-low strap: 1k down against 10k up reads 0.3 V (<= 0.99 V).
+        let parts = vec![io_mcu(), pull("R1", "10k", 2), pull("R2", "1k", 1)];
+        assert!(io_lint(&card, parts).is_empty());
+        let plain = vec![io_mcu(), pull("R1", "10k", 1)];
+        assert!(io_lint(&card, plain).is_empty());
+        // A floating pad names the IO rail in its fix, not the core rail.
+        let float = io_lint(
+            &card.replace("level = \"low\"", "level = \"high\""),
+            vec![io_mcu()],
+        );
+        assert!(float.iter().all(|(_, m)| !m.contains("+1V2")), "{float:#?}");
     }
 }

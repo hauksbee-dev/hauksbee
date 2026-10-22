@@ -1,0 +1,30 @@
+# pad	printed name	kind	gpio
+1	GND	gnd	
+2	3V3	vdd	
+3	EN	en	
+4	IO4	io	4
+5	IO5	io	5
+6	IO6	io	6
+7	IO7	io	7
+8	IO0	io	0
+9	IO1	io	1
+10	IO8	io	8
+11	IO10	io	10
+12	IO11	io	11
+13	IO12	io	12
+14	IO13	io	13
+15	IO9	io	9
+16	IO18	io	18
+17	IO19	io	19
+18	IO20	io	20
+19	IO21	io	21
+20	IO22	io	22
+21	IO23	io	23
+22	NC	nc	
+23	IO15	io	15
+24	RXD0	io	17
+25	TXD0	io	16
+26	IO3	io	3
+27	IO2	io	2
+28	GND	gnd	
+29	GND	gnd	

@@ -16,12 +16,8 @@ use hauksbee_ir::observations::{
 
 use super::symbols::SymbolTable;
 use super::{fmt_duration, fmt_hz, McuObs, Observer, PinTrace, RawBusTxn};
-use crate::execution::ExecutionEvidence;
+use crate::execution::{ExecutionEvidence, PARK_MAX_DISTINCT_PCS, PARK_MIN_SAMPLES};
 
-/// Samples a parked-loop verdict needs before it is trusted.
-const PARK_MIN_SAMPLES: u64 = 16;
-/// A loop this tight (distinct program counters) is a park, not a program.
-const PARK_MAX_DISTINCT_PCS: u64 = 3;
 /// A core is quiet only if its last output is older than this fraction of the
 /// run (and at least two chunks).
 const QUIET_FRACTION: f64 = 0.25;
@@ -191,6 +187,19 @@ fn core_state(
             CoreState::Faulted,
             None,
             format!("faulted: {}", ev.faults.join(", ")),
+        );
+    }
+    if let Some(stall) = &ev.stall {
+        return (
+            CoreState::Parked,
+            Some(ParkSite {
+                pc: stall.pc,
+                symbol: stall.symbol.clone(),
+                pc_samples: ev.pc_samples,
+                distinct_pcs: ev.distinct_pcs,
+                quiet_since_s: obs.last_activity_s,
+            }),
+            stall.detail.clone(),
         );
     }
     let Some(pc) = ev.last_pc else {

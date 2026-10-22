@@ -278,11 +278,19 @@ The block identifies what actually ran and how fast:
 | `requested_part` | string | the part the board asked for, e.g. `"ATmega328P"` |
 | `wall_s` | float | wall-clock seconds the headless co-sim loop consumed; `0` when the producing path did not measure |
 | `realtime_factor` | float | *achieved* sim seconds per wall second, measured rather than assumed; `0` when unmeasured |
+| `uart_output` | string | the text the firmware sent over UART (lossy UTF-8, capped at 64 KiB); omitted when it sent nothing, so check `uart_seen` for whether any came |
+| `uart_output_dropped_bytes` | integer | present only when `uart_output` was cut at the cap: how many bytes of UART text it leaves out |
 
 Beyond that, activity (`total_toggles`, `uart_seen`, `activity_summary[]`) and
 `analog_valid` (+ `failed_windows[]`), the co-sim block surfaces every coverage
 degradation so a run that silently lost fidelity never reads as healthy:
 
+- `execution[]`, per MCU evidence that the firmware ran (`executed`,
+  `reached_entry`, PC samples, faults, UART bytes, GPIO toggles, reset, supply
+  and clock). A core that stalled early is not `executed`: `stall` then holds
+  `{phase: "before_main" | "clock_wait", pc, symbol?, detail}` saying where it
+  stuck (`symbol` needs a firmware ELF with a symbol table). A stall with
+  UART or GPIO output of its own stays `executed` but is not a firmware pass.
 - `timing_coverage[]`, per live MCU `{mcu_ref, backend, cycle_exact,
   timestamp_precision_s, minimum_guaranteed_pulse_s, chunk_s}` measured at the
   actual chunk. Push callbacks report one-cycle precision; poll backends report
@@ -353,6 +361,7 @@ A clean short run on `blinky.kicad_pcb` with `testdata/firmware/demo/demo.hex`:
   "requested_part": "ATmega328P",
   "substituted": false,
   "total_toggles": 1,
+  "uart_output": "hello\r\n",
   "uart_seen": true,
   "wall_s": 0.344896583
 }
