@@ -34,6 +34,8 @@ mod esp_qemu_install;
 mod firmware_arch_gate;
 #[path = "host_serial_pty.rs"]
 mod host_serial_pty;
+#[path = "periph_snapshot_decode.rs"]
+mod periph_snapshot_decode;
 #[path = "qemu_bus_mailbox.rs"]
 mod qemu_bus_mailbox;
 #[path = "qemu_clock_truth.rs"]
