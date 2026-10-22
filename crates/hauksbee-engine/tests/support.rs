@@ -461,3 +461,54 @@ pub fn r0402(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
         pins,
     )
 }
+
+/// The RP2040 hardware design guide's 12 MHz crystal circuit for a KiCad board
+/// text: `(pads, parts)`, the XIN/XOUT pads (20 and 21) for the QFN-56 module
+/// and the crystal, 15 pF load capacitors and 1 kOhm series resistor on XOUT.
+///
+/// The caller declares the four nets (`gnd`, `xin`, `xout`, `xtal_b`, named
+/// "GND", "XIN", "XOUT" and "`XTAL_B`"). The Pico SDK's start-up code enables the
+/// crystal oscillator and waits for it to report stable, which on silicon never
+/// happens with nothing fitted, so firmware booted on a co-sim board only
+/// starts when this circuit (or an oscillator) is there.
+pub fn rp2040_crystal(gnd: u32, xin: u32, xout: u32, xtal_b: u32) -> (String, String) {
+    let pads = format!(
+        "(pad 20 smd rect (at -3 7) (net {xin} \"XIN\"))\n    \
+         (pad 21 smd rect (at -3 8) (net {xout} \"XOUT\"))"
+    );
+    let parts = format!(
+        r#"
+  (module Crystal:Crystal_SMD_3225-4Pin (layer F.Cu)
+    (at 105 105)
+    (fp_text reference Y1 (at 0 0) (layer F.SilkS))
+    (fp_text value 12MHz (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net {xin} "XIN"))
+    (pad 2 smd rect (at 1 0) (net {gnd} "GND"))
+    (pad 3 smd rect (at 2 0) (net {xtal_b} "XTAL_B"))
+    (pad 4 smd rect (at 3 0) (net {gnd} "GND"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 105 110)
+    (fp_text reference R20 (at 0 0) (layer F.SilkS))
+    (fp_text value 1k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net {xout} "XOUT"))
+    (pad 2 smd rect (at 2 0) (net {xtal_b} "XTAL_B"))
+  )
+  (module Capacitor_SMD:C_0603_1608Metric (layer F.Cu)
+    (at 105 115)
+    (fp_text reference C20 (at 0 0) (layer F.SilkS))
+    (fp_text value 15pF (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net {xin} "XIN"))
+    (pad 2 smd rect (at 2 0) (net {gnd} "GND"))
+  )
+  (module Capacitor_SMD:C_0603_1608Metric (layer F.Cu)
+    (at 105 120)
+    (fp_text reference C21 (at 0 0) (layer F.SilkS))
+    (fp_text value 15pF (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net {xtal_b} "XTAL_B"))
+    (pad 2 smd rect (at 2 0) (net {gnd} "GND"))
+  )
+"#
+    );
+    (pads, parts)
+}

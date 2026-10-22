@@ -5603,6 +5603,7 @@ impl Scheduler {
                     ),
                     supply_v: m.rails.supply_v(),
                     clock: m.binding.clock.clone(),
+                    external_clock_modelled: m.core.external_clock_modelled(),
                 };
                 let mut evidence = crate::execution::ExecutionEvidence::new(
                     &m.binding.reference,
