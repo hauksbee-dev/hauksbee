@@ -9497,7 +9497,7 @@ supply_static_ua = 640.0   # Section 6.5 IQ typ, VSENSE = 0 V (750 uA max at 25 
 supply_pin = "6"           # VS
 gnd_pin    = "7"           # GND
 # Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
-i2c_max_hz = { max = 2940000.0, unit = "Hz", conditions = "I2C high-speed mode; fast mode is 400 kHz max, the minimum in both is 1 kHz", basis = "TI INA228 SLYS021A (Jan 2021, rev May 2022), section 6.6 Timing Requirements (I2C), I2C BUS (HIGH-SPEED MODE) F(SCL) max 2940 kHz (p.7)" }
+i2c_max_hz = { max = 2940000.0, unit = "Hz", conditions = "I2C high-speed mode; fast mode is 400 kHz max; the minimum is 1 kHz in fast mode and 10 kHz in high-speed mode", basis = "TI INA228 SLYS021A (Jan 2021, rev May 2022), section 6.6 Timing Requirements (I2C), I2C BUS (HIGH-SPEED MODE) F(SCL) max 2940 kHz (p.7)" }
 
 [models.pins]
 # Table 5-1 Pin Functions, DGS (VSSOP-10), all 10 pins.

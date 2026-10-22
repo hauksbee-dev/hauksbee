@@ -5235,7 +5235,7 @@ basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'wh
 resolution_bits = 12
 enob_bits = 8.7
 condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
-basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562), typical 8.7 bits; Table 627 (p.616) prints 8.7 bits as its minimum"
 
 # Ref: RP2040 Datasheet (build 2.21), sec 2.8.1.2 "Boot sequence" and sec 2.8.6
 # "Bootrom contents"; the GPIO_QSPI_SS pin must idle high (flash CS) for normal
@@ -5392,7 +5392,7 @@ basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'wh
 resolution_bits = 12
 enob_bits = 8.7
 condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
-basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562), typical 8.7 bits; Table 627 (p.616) prints 8.7 bits as its minimum"
 
 [models.pin_capability.adc]
 basis = "Raspberry Pi RP2040 Datasheet, Table 615 GPIO pins (PDF p.613-614): GPIO26-GPIO29 are ADC0-ADC3, pads 38-41; every other GPIO has no ADC channel"
@@ -5604,7 +5604,7 @@ basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'wh
 resolution_bits = 12
 enob_bits = 8.7
 condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
-basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562), typical 8.7 bits; Table 627 (p.616) prints 8.7 bits as its minimum"
 
 [models.pin_capability.adc]
 basis = "Raspberry Pi Pico Datasheet (build date 03/07/2026), Figure 2 pinout of the Pico Rev3 board (PDF p.5): physical pin 31 GP26 ADC0, pin 32 GP27 ADC1, pin 34 GP28 ADC2; ADC3 (GP29) is wired to VSYS/3 on the board and is not on the header"
