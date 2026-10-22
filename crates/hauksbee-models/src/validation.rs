@@ -1857,6 +1857,14 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
                 "peripheral instance",
                 &what,
             );
+            for pad in &t.master_only {
+                p.require(t.pads.contains_key(pad), || {
+                    format!(
+                        "[models.pin_capability.{}] master_only pad '{pad}' is not one of its pads",
+                        function.key()
+                    )
+                });
+            }
         }
     }
 }

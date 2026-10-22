@@ -8,6 +8,11 @@
 //! table, `hauksbee_ir::header_pinouts`, each row citing the document that
 //! states it.
 //!
+//! The FTDI cable's pin 3 is a fixed +5 V output, not the target's supply
+//! (`FT_000054` Table 4.1: 5 V even on the 3.3 V cable). Wired to a net whose
+//! name states a rail that is not 5 V, the cable overdrives it, so that is
+//! flagged; a 5 V rail, a name that states no voltage and an open pin are not.
+//!
 //! Judged only on definite evidence:
 //!
 //! - **The header is named.** A connector with exactly the pin count of a
@@ -39,7 +44,7 @@ use hauksbee_extract::{
 };
 use hauksbee_ir::header_pinouts::{headers_named, HeaderSignal, StandardHeader};
 use hauksbee_ir::pin_functions::{functions_named, PinFunction};
-use hauksbee_models::netclass::is_positive_supply;
+use hauksbee_models::netclass::{is_positive_supply, rail_voltage};
 use hauksbee_models::{ComponentKind, ModelLibrary};
 
 /// The lower-case words of `text`, split on everything but letters and digits.
@@ -157,6 +162,21 @@ fn mcu_role(
         .flatten()
 }
 
+/// The fixed output of an adapter's supply pin, volts.
+const ADAPTER_SUPPLY_VOLTS: f64 = 5.0;
+/// How far a named rail may sit from the adapter's supply before the two are
+/// not one rail (a nominal 5 V rail runs 4.5 to 5.5 V).
+const RAIL_TOLERANCE_VOLTS: f64 = 0.5;
+
+/// The rail on `net` when its name states a voltage the adapter's fixed +5 V
+/// output must not be wired to (`+3V3`, `+12V`). A name that states no voltage
+/// is not judged.
+fn rail_clash(board: &ExtractedBoard, net: i64) -> Option<(String, f64)> {
+    let name = board.net(net)?.name.clone();
+    let volts = rail_voltage(&name)?;
+    ((volts - ADAPTER_SUPPLY_VOLTS).abs() > RAIL_TOLERANCE_VOLTS).then_some((name, volts))
+}
+
 /// What the nets at `net` say a header pin carries, `None` when nothing is said
 /// or the readings disagree.
 fn pin_signal(
@@ -232,6 +252,56 @@ fn board_uart(
     (tx, rx)
 }
 
+/// A serial header pin (`number`) that faces the board's pin of the same
+/// direction: the board's transmitter on the adapter's `TXD`, or its receiver on
+/// the adapter's `RXD`.
+fn serial_fault(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    header: &Component,
+    number: &str,
+    net: i64,
+    expected: HeaderSignal,
+) -> Option<String> {
+    let (tx, rx) = board_uart(board, lib, header, net);
+    let transmit_side = expected == HeaderSignal::AdapterTransmit;
+    let (wrong, kind, other) = if transmit_side {
+        (&tx, "transmit", &rx)
+    } else {
+        (&rx, "receive", &tx)
+    };
+    (!wrong.is_empty() && other.is_empty()).then(|| {
+        let adapter = if transmit_side { "TXD" } else { "RXD" };
+        let needed = if transmit_side { "RX" } else { "TX" };
+        let name = board.net(net).map_or("", |n| n.name.as_str());
+        format!(
+            "pin {number} faces the adapter's {adapter}, but net '{name}' carries the \
+             board's {kind} pin {}: transmit would meet transmit and receive \
+             receive; the board's {needed} belongs here",
+            wrong.join(", ")
+        )
+    })
+}
+
+/// The adapter's fixed +5 V output on a rail whose name states another voltage:
+/// the pin drives 5 V whatever the board's rail is, so that rail is overdriven.
+fn supply_fault(
+    board: &ExtractedBoard,
+    number: &str,
+    net: i64,
+    expected: HeaderSignal,
+) -> Option<String> {
+    rail_clash(board, net).map(|(rail, volts)| {
+        format!(
+            "pin {number} is {} in the standard, a fixed {ADAPTER_SUPPLY_VOLTS} V output \
+             even on the 3.3 V cable, but net '{rail}' is a {volts} V rail: the cable would \
+             drive {ADAPTER_SUPPLY_VOLTS} V onto it. Leave the pin unconnected, or feed the \
+             rail from it only through a regulator for that rail",
+            expected.label(),
+        )
+    })
+}
+
 /// Flag every named standard header whose pins carry something else.
 #[must_use]
 pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -259,32 +329,28 @@ pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
             let fault = match expected {
                 HeaderSignal::Unused | HeaderSignal::Handshake => None,
                 HeaderSignal::AdapterTransmit | HeaderSignal::AdapterReceive => {
-                    let (tx, rx) = board_uart(board, lib, comp, net);
-                    let transmit_side = expected == HeaderSignal::AdapterTransmit;
-                    let (wrong, kind, other) = if transmit_side {
-                        (&tx, "transmit", &rx)
-                    } else {
-                        (&rx, "receive", &tx)
-                    };
-                    (!wrong.is_empty() && other.is_empty()).then(|| {
-                        let adapter = if transmit_side { "TXD" } else { "RXD" };
-                        let needed = if transmit_side { "RX" } else { "TX" };
-                        format!(
-                            "pin {} faces the adapter's {adapter}, but net '{}' carries the \
-                             board's {kind} pin {}: transmit would meet transmit and receive \
-                             receive; the board's {needed} belongs here",
-                            pin.number,
-                            name(net),
-                            wrong.join(", ")
-                        )
-                    })
+                    serial_fault(board, lib, comp, &pin.number, net, expected)
+                }
+                HeaderSignal::AdapterSupply5V
+                    if pin_signal(board, lib, comp, net) == Some(HeaderSignal::Supply) =>
+                {
+                    let clash = supply_fault(board, &pin.number, net, expected);
+                    power |= clash.is_some();
+                    clash
                 }
                 _ => pin_signal(board, lib, comp, net)
                     .filter(|got| *got != expected)
                     .map(|got| {
-                        power |= matches!(expected, HeaderSignal::Ground | HeaderSignal::Supply)
-                            || matches!(got, HeaderSignal::Ground | HeaderSignal::Supply);
-                        let home = header.pins_of(got);
+                        power |= matches!(
+                            expected,
+                            HeaderSignal::Ground
+                                | HeaderSignal::Supply
+                                | HeaderSignal::AdapterSupply5V
+                        ) || matches!(got, HeaderSignal::Ground | HeaderSignal::Supply);
+                        let mut home = header.pins_of(got);
+                        if got == HeaderSignal::Supply {
+                            home.extend(header.pins_of(HeaderSignal::AdapterSupply5V));
+                        }
                         let home = if home.is_empty() {
                             String::new()
                         } else {
@@ -449,6 +515,42 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::High);
         assert!(found[0].message.contains("pin 1 is GND in the standard"));
+    }
+
+    /// Pin 3 of the cable is a +5 V output (`FT_000054` Table 4.1), 5 V even on
+    /// the 3.3 V cable: a rail named for another voltage on it is overdriven.
+    #[test]
+    fn the_ftdi_supply_pin_is_a_5v_output_that_must_not_meet_a_lower_rail() {
+        let mut nets = NETS.to_vec();
+        nets.push((9, "+3V3"));
+        nets.push((10, "VDD"));
+        let on = |net| {
+            debug_header_lint(
+                &board(&nets, vec![header("FTDI", &[("1", GND), ("3", net)])]),
+                &ModelLibrary::builtin(),
+            )
+            .findings
+        };
+        let found = on(9);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        assert_eq!(found[0].nets, ["+3V3"]);
+        for want in [
+            "pin 3 is the adapter's +5 V output (VCC)",
+            "even on the 3.3 V cable",
+            "'+3V3' is a 3.3 V rail",
+        ] {
+            assert!(
+                found[0].message.contains(want),
+                "{want}: {}",
+                found[0].message
+            );
+        }
+        // A 5 V rail, or a supply whose name states no voltage, is not judged.
+        assert!(on(V5).is_empty());
+        assert!(on(10).is_empty());
+        // Left unconnected is the usual way to use the cable.
+        assert!(run(vec![header("FTDI", &[("1", GND), ("4", RX)])]).is_empty());
     }
 
     #[test]

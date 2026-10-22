@@ -26,6 +26,11 @@
 //!   which way a name means `TX` is the writer's viewpoint. For PWM, the net is
 //!   named for it. Nets one series resistor away count as the same line.
 //!
+//! A pad a table lists under `master_only` (the USART's SPI mode, which has
+//! no slave role) serves the function only for the bus master: a partner that
+//! drives the bus (its `SCK` or `MOSI` typed an output, its `MISO` an input)
+//! makes the MCU the slave, and that pad then counts as unlisted.
+//!
 //! The table covers the hardware peripheral. A software (bit-banged) bus can
 //! use any pad, so a finding names the pads that could carry the function and
 //! leaves the choice to the firmware author. A PWM name alone is weaker evidence
@@ -39,6 +44,7 @@ use hauksbee_extract::{
     NetLintReport, Pin, Severity,
 };
 use hauksbee_ir::pin_functions::{names_a_uart, peripheral_functions_named, PeripheralFunction};
+use hauksbee_models::schema::FunctionPads;
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use PeripheralFunction as F;
@@ -85,6 +91,9 @@ struct Evidence {
     partners: Vec<String>,
     /// A partner has a serial-port pin.
     serial: bool,
+    /// A partner drives the bus (its `SCK` or `MOSI` is typed an output, its
+    /// `MISO` an input), so the MCU is the SPI slave.
+    mcu_is_slave: bool,
 }
 
 /// The partner evidence for the line at `net`, one series resistor included.
@@ -109,6 +118,12 @@ fn evidence(board: &ExtractedBoard, lib: &ModelLibrary, mcu: &Component, net: i6
                 .map(String::as_str);
             let at = format!("{} pin {} ({})", part.reference, pin.number, pin.function);
             if let Some(f) = bus_function(role, &pin.function) {
+                let kind = pin.kind.trim().to_ascii_lowercase();
+                e.mcu_is_slave |= match f {
+                    F::SpiSck | F::SpiMosi => kind == "output",
+                    F::SpiMiso => kind == "input",
+                    _ => false,
+                };
                 e.bus.insert(f);
                 e.partners.push(at);
             } else if serial_pin(part, pin, role) {
@@ -141,14 +156,24 @@ fn serial_pin(part: &Component, pin: &Pin, card_role: Option<&str>) -> bool {
         || card_role.is_some_and(|r| uart_pin_role(&as_symbol(r.replace('_', "/"))).is_some())
 }
 
+/// Whether `pad` can carry the function of `table`: it is listed, and not for
+/// the bus master alone when the MCU is the slave.
+fn carries(table: &FunctionPads, pad: &str, mcu_is_slave: bool) -> bool {
+    table.pads.contains_key(pad) && !(mcu_is_slave && table.master_only.contains(pad))
+}
+
 /// The pads of `table` that can carry the function, as a message lists them.
-fn alternatives(model: &ModelEntry, functions: &[PeripheralFunction]) -> String {
+fn alternatives(model: &ModelEntry, functions: &[PeripheralFunction], slave: bool) -> String {
     let mut shown: Vec<String> = Vec::new();
     for f in functions {
         let Some(table) = model.pin_capability.table(*f) else {
             continue;
         };
-        for (pad, signal) in &table.pads {
+        for (pad, signal) in table
+            .pads
+            .iter()
+            .filter(|(pad, _)| carries(table, pad, slave))
+        {
             let role = model.pins.get(pad).map_or("", String::as_str);
             let item = format!("pad {pad} ({}, {signal})", role.to_ascii_uppercase());
             if !shown.contains(&item) {
@@ -162,6 +187,27 @@ fn alternatives(model: &ModelEntry, functions: &[PeripheralFunction]) -> String 
         format!("{list} and {more} more")
     } else {
         list
+    }
+}
+
+/// What else the card says `pad` is, when it is the pad of another peripheral
+/// function than the ones asked for (`" (that pad is this part's I2C data (SDA))"`).
+fn also_text(model: &ModelEntry, asked: &[PeripheralFunction], pad: &str) -> String {
+    let others: Vec<&str> = F::ALL
+        .iter()
+        .filter(|g| {
+            !asked.contains(g)
+                && model
+                    .pin_capability
+                    .table(**g)
+                    .is_some_and(|t| t.pads.contains_key(pad))
+        })
+        .map(|g| g.label())
+        .collect();
+    if others.is_empty() {
+        String::new()
+    } else {
+        format!(" (that pad is this part's {})", others.join(" and "))
     }
 }
 
@@ -217,40 +263,37 @@ pub fn pin_mux_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport
                     model
                         .pin_capability
                         .table(*f)
-                        .is_some_and(|t| t.pads.contains_key(&pin.number))
+                        .is_some_and(|t| carries(t, &pin.number, ev.mcu_is_slave))
                 })
             {
                 continue;
             }
-            let others: Vec<&str> = F::ALL
-                .iter()
-                .filter(|g| {
-                    !tables.contains(g)
-                        && model
-                            .pin_capability
-                            .table(**g)
-                            .is_some_and(|t| t.pads.contains_key(&pin.number))
-                })
-                .map(|g| g.label())
-                .collect();
+            // A pad listed only for the bus master, with a partner that is the master.
+            let master_only = tables.iter().any(|f| {
+                model
+                    .pin_capability
+                    .table(*f)
+                    .is_some_and(|t| t.master_only.contains(&pin.number))
+            });
             let net_name = board.net(net).map_or_else(String::new, |n| n.name.clone());
             let evidence_text = if ev.partners.is_empty() {
                 format!("the net is named '{net_name}'")
             } else {
                 format!("{} on net '{net_name}'", ev.partners.join(", "))
             };
-            let also = if others.is_empty() {
-                String::new()
+            let listed = if master_only {
+                "that pad for it only as a bus master (a USART's SPI mode has no slave \
+                 role), but the partner here drives the bus, so this part is the slave"
             } else {
-                format!(" (that pad is this part's {})", others.join(" and "))
+                "no such function on that pad"
             };
+            let also = also_text(&model, &tables, &pin.number);
             report.findings.push(LintFinding {
                 check: LintCheck::PinMuxCapability,
                 severity: strength,
                 message: format!(
-                    "{} ({}) pad {} ({}) is wired as {wanted}, but the card '{}' lists no such \
-                     function on that pad{also}: {evidence_text}. A hardware peripheral can \
-                     reach only {}. Move the line to one of those pads; if the firmware will \
+                    "{} ({}) pad {} ({}) is wired as {wanted}, but the card '{}' lists {listed}{also}: \
+                     {evidence_text}. A hardware peripheral can reach only {}. Move the line to one of those pads; if the firmware will \
                      bit-bang it in software this does not apply, but the hardware peripheral \
                      is then unavailable",
                     mcu.reference,
@@ -258,7 +301,7 @@ pub fn pin_mux_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport
                     pin.number,
                     role.to_ascii_uppercase(),
                     model.id,
-                    alternatives(&model, &tables),
+                    alternatives(&model, &tables, ev.mcu_is_slave),
                 ),
                 refs: vec![mcu.reference.clone()],
                 nets: vec![net_name],
@@ -352,6 +395,41 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:#?}");
         assert!(found[0].message.contains("SPI clock (SCK)"));
         assert!(found[0].message.contains("pad 19 (PB5_SCK, SCK)"));
+    }
+
+    /// The USART's SPI mode is master only (Table 21-3): as the slave of a
+    /// master that drives SCK and MOSI, the MCU needs the SPI pads.
+    #[test]
+    fn the_usart_spi_pads_never_serve_an_spi_slave() {
+        let nets = [(GND, "GND"), (A, "SCK"), (B, "MOSI")];
+        let typed = |kind: &str| {
+            let mut dev = sensor(&[("1", "SCK", A), ("2", "MOSI", B)]);
+            for pin in &mut dev.pins {
+                pin.kind = kind.into();
+            }
+            dev
+        };
+        // A master drives the clock and data (pins typed output); XCK0 (pad 6)
+        // and TXD0 (pad 3) are the USART's master-only pads.
+        let found = run(&nets, vec![mcu(&[("6", A), ("3", B)]), typed("output")]);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        for want in [
+            "only as a bus master",
+            "this part is the slave",
+            "pad 19 (PB5_SCK, SCK)",
+        ] {
+            assert!(
+                found[0].message.contains(want),
+                "{want}: {}",
+                found[0].message
+            );
+        }
+        assert!(!found[0].message.contains("XCK0"), "{}", found[0].message);
+        // The same slave on the SPI pads PB5 and PB3 is silent,
+        assert!(run(&nets, vec![mcu(&[("19", A), ("17", B)]), typed("output")]).is_empty());
+        // and the USART pads are fine when the MCU is the master of a slave
+        // device (its SCK and MOSI pins are inputs).
+        assert!(run(&nets, vec![mcu(&[("6", A), ("3", B)]), typed("input")]).is_empty());
     }
 
     #[test]

@@ -33,6 +33,10 @@ pub enum HeaderSignal {
     Ground,
     /// The target's supply, as a reference or as power to the adapter.
     Supply,
+    /// A fixed +5 V supply the adapter drives out to the board (the `VCC` pin of
+    /// an FTDI TTL-232R cable: 5 V even on the 3.3 V cable). Unlike
+    /// [`HeaderSignal::Supply`], the board does not set its level.
+    AdapterSupply5V,
     /// The target's reset line.
     Reset,
     /// SPI MOSI (programming data into the target).
@@ -66,6 +70,7 @@ impl HeaderSignal {
         match self {
             Self::Ground => "GND",
             Self::Supply => "the target supply",
+            Self::AdapterSupply5V => "the adapter's +5 V output (VCC)",
             Self::Reset => "RESET",
             Self::Mosi => "MOSI",
             Self::Miso => "MISO",
@@ -140,7 +145,7 @@ const FTDI_TTL_232R: HeaderSource = HeaderSource {
     document: "FTDI TTL-232R TTL to USB Serial Converter Range of Cables, datasheet v2.01, FT_000054",
     url: "https://www.cl.cam.ac.uk/teaching/0910/P31/docs/usbseriallead.pdf",
     sha256: "7f2040db6cbd121261a6d242308b58822b1bc7e20bef324a3fc7c7225ddf9679",
-    location: "section 4.1 Figure 4.1 (6 way header pin out) and section 4.2 Table 4.1 (cable signal descriptions)",
+    location: "section 4.1 Figure 4.1 (6 way header pin out) and section 4.2 Table 4.1 (cable signal descriptions; pin 3 VCC is a +5 V output on every cable, the 3.3 V one included)",
 };
 
 const AVR042: HeaderSource = HeaderSource {
@@ -166,7 +171,7 @@ pub const STANDARD_HEADERS: &[StandardHeader] = &[
         pins: &[
             ("1", S::Ground),
             ("2", S::Handshake),
-            ("3", S::Supply),
+            ("3", S::AdapterSupply5V),
             ("4", S::AdapterTransmit),
             ("5", S::AdapterReceive),
             ("6", S::Handshake),
@@ -283,6 +288,9 @@ mod tests {
         assert_eq!(ftdi.signal_at("4"), Some(HeaderSignal::AdapterTransmit));
         assert_eq!(ftdi.signal_at("5"), Some(HeaderSignal::AdapterReceive));
         assert_eq!(ftdi.pins_of(HeaderSignal::Ground), ["1"]);
+        // Table 4.1: pin 3 is a +5 V output of the cable, not the target's supply.
+        assert_eq!(ftdi.signal_at("3"), Some(HeaderSignal::AdapterSupply5V));
+        assert!(ftdi.pins_of(HeaderSignal::Supply).is_empty());
         let isp = header("avr_isp_6").unwrap();
         assert_eq!(isp.signal_at("4"), Some(HeaderSignal::Mosi));
         assert_eq!(isp.signal_at("1"), Some(HeaderSignal::Miso));

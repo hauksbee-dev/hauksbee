@@ -13,7 +13,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_ir::evidence::{
     ModelIntervalKind, ModelSourceTier, ModelUncertainty, ModelValidation,
@@ -328,6 +328,11 @@ pub struct FunctionPads {
     /// empty.
     #[serde(default)]
     pub pads: BTreeMap<String, String>,
+    /// The listed pads that serve the function only when the part is the bus
+    /// master (the pads of a USART's SPI mode, which has no slave role). A
+    /// bus whose master is another part never uses one.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub master_only: BTreeSet<String>,
 }
 
 /// The ADC-capable pads of an MCU package (see [`PinCapability::adc`]).

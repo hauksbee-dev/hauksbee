@@ -832,7 +832,9 @@ software (bit-banged) bus is not covered. A part whose pins reach any pad throug
 routing matrix (an ESP32 GPIO matrix, an RP2040 PIO) declares no table for the
 function. A mode of another peripheral that the datasheet states can carry the
 function (the ATmega328P USART's SPI mode for SPI) belongs in the table with its
-instance named. Validation is the ADC table's: an `mcu` card, a basis, pads that exist
+instance named. A pad that serves the function only when the part is the bus master
+(that USART mode has no slave role) is also listed in the table's `master_only = ["6"]`
+key, so a bus whose master is another part does not count it. Validation is the ADC table's: an `mcu` card, a basis, pads that exist
 in `[models.pins]` and none a supply or ground role.
 
 ## Peripheral limits: UART baud generators, ADC timing, bus clocks
