@@ -71,6 +71,13 @@
 //! - [`signal_direction`]: a signal net wired against its pins' directions:
 //!   only outputs (or only inputs) on it, or a transmit pin facing a transmit
 //!   pin, judged from the symbol pin types and the cards' pad roles.
+//! - [`symbol_card_pins`]: a schematic symbol pin whose name states a different
+//!   pin (crystal input against output, supply against ground, reset) than the
+//!   card's role for the same pad number: the board is read two ways at once.
+//! - [`debug_header`]: a header named as a standard programming or serial header
+//!   (FTDI 6-pin, AVR ISP 6/10, ARM Cortex 10-pin) whose pins carry other
+//!   signals than the standard pin order (the board's TX on the cable's TX pin,
+//!   MOSI/MISO exchanged, supply on a ground pin). Pinouts: `hauksbee_ir::header_pinouts`.
 //! - [`datasheet_field`]: a part's `Datasheet` field whose file name clearly
 //!   names a different device or logic family, so a model drafted from it
 //!   would describe the wrong part (a low-severity, non-gating note).
@@ -127,6 +134,7 @@ pub mod converter;
 pub mod crystal_caps;
 pub mod datasheet_field;
 pub mod dc_stress;
+pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
 pub mod floating_inputs;
@@ -151,6 +159,7 @@ pub mod siblings;
 pub mod signal_direction;
 pub mod straps;
 pub mod switch_short;
+pub mod symbol_card_pins;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod usb_c;
@@ -589,6 +598,12 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         })
         .collect();
     report.findings.extend(direction);
+    report
+        .findings
+        .extend(symbol_card_pins::symbol_card_pin_lint(board, lib).findings);
+    report
+        .findings
+        .extend(debug_header::debug_header_lint(board, lib).findings);
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
