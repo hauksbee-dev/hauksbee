@@ -433,6 +433,8 @@ fn check_flash(c: &Flash) {
 
 const PINS8: &str = "1=cs 2=miso 3=wp_n 4=gnd 5=mosi 6=sck 7=hold_n 8=vcc";
 const PINS16: &str = "1=hold_n 2=vcc 3=nc 4=nc 5=nc 6=nc 7=cs 8=miso 9=wp_n 10=gnd 11=nc 12=nc 13=nc 14=nc 15=mosi 16=sck";
+/// W25Q64JV 16-pin SOIC: pad 3 is /RESET (Rev J 3.5, PDF p.6).
+const PINS16_W25: &str = "1=hold_n 2=vcc 3=reset_n 4=nc 5=nc 6=nc 7=cs 8=miso 9=wp_n 10=gnd 11=nc 12=nc 13=nc 14=nc 15=mosi 16=sck";
 
 #[test]
 fn winbond_jv_cards_bind_their_density_and_package_family() {
@@ -463,7 +465,7 @@ fn winbond_jv_cards_bind_their_density_and_package_family() {
         value: "W25Q64JVSFIQ",
         footprint: Some(SOIC16),
         id: "w25q64jv_soic16",
-        pins: PINS16,
+        pins: PINS16_W25,
         supply: (2.7, 3.6, 4.6),
         cites: "W25Q64JV",
         size: 8_388_608,

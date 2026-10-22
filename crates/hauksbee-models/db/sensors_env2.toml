@@ -2087,7 +2087,7 @@ default = 0.0
 name = "heat_off"
 bits = [3, 3]
 
-# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 4, nb_conv bits 3:0.
+# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 5 (BME688 datasheet 5.3.4.7 p.40, Table 22 p.33), nb_conv bits 3:0.
 [[sensor.write_register]]
 addr = 0x71
 encoding = "u8"
@@ -2096,7 +2096,7 @@ default = 0.0
 
 [[sensor.write_register.field]]
 name = "run_gas"
-bits = [4, 4]
+bits = [5, 5]
 
 [[sensor.write_register.field]]
 name = "nb_conv"

@@ -176,7 +176,7 @@ float_tolerated_basis = "Rev J: /RESET has an internal pull-up and can be left f
 # 3.5 Pin Description SOIC 300-mil (PDF p.7).
 "1" = "hold_n"
 "2" = "vcc"
-"3" = "nc"
+"3" = "reset_n"
 "4" = "nc"
 "5" = "nc"
 "6" = "nc"
