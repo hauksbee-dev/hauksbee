@@ -1387,3 +1387,3188 @@ package = "DFN-4"
 mounting = "die pad not soldered"
 
 
+# HTU21D and SHT21: two vendors' 3 x 3 mm DFN-6 humidity and temperature sensors that share the I2C address 0x40, one command set, one user
+# register and one CRC-8 (polynomial 0x31, initial value 0x00, no final XOR). They are two cards because the vendor, the supply range, the
+# absolute maximum and the ordering codes differ. Sources: TE Connectivity HTU21D(F) datasheet HPC199_6 edition 8 (05/2017), sha256
+# 9168a7d22a78b6d9b491c737ebfde45fe259ddbc550082e2528229f36de27ae3; Sensirion SHT21 datasheet Version 5 (October 2022), sha256
+# e5905c92060a0e0ae0e40712fee0933ef3ce6392b0419ec88abd9ba5c3cab3ee.
+# The Sensirion SHT20 and SHT25 and the TE HTU20D are NOT matched: no datasheet of theirs was read in this batch.
+# PINS (both): 1 SDA/DATA, 2 GND/VSS, 3 NC, 4 NC, 5 VDD, 6 SCL/SCK; the die pad is internally connected to ground (HTU21D p.17, SHT21 Fig. 1)
+# and the land pattern allows it floating or grounded, so no pad is mapped. The HTU21D interface table labels pin 6 'Selector for RH or Temp';
+# the same page, the typical circuit and the timing section show it is the serial clock.
+# LEVELS. VIH 0.7 x VDD, VIL 0.3 x VDD are ratiometric, the card holds volts, so they are evaluated at the printed 3.0 V test supply and the
+# ratios are kept as characteristic records (unit VDD).
+# BEHAVIOUR. A trigger command (0xE3 / 0xF3 temperature, 0xE5 / 0xF5 humidity) latches a measurement from the sensor inputs temperature_c and
+# humidity_pct; the next read returns MSB, LSB (status bits 00 for temperature, 10 for humidity) and CRC-8. T = -46.85 + 175.72 x S / 2^16, RH
+# = -6 + 125 x S / 2^16 with the status bits cleared (both datasheets, conversion section). The user register (read 0xE7, write 0xE6, default
+# 0x02) resolution bits 7 and 0 set the code step: RH 12/8/10/11 bit, T 14/12/13/11 bit; the code is rounded to that step and clamped to the
+# representable range (a derived rounding rule, the datasheets only publish the resolution). Soft reset 0xFE restores the defaults except the
+# heater bit. CRC-8 is a generated arithmetic parity expression (evalexpr has no bit operations) and is checked in the co-simulation tests
+# against the datasheet examples 0xDC -> 0x79, 0x683A -> 0x7C, 0x4E85 -> 0x6B.
+# Cross-check only: Renode's SHT21 model (MIT, Antmicro) agrees on the command codes and the conversions; its user register reset value 0x3A
+# is the Si7021's, while both datasheets here print the default 0x02. No Renode code is used.
+[[models]]
+id = "htu21d"
+kind = "digital"
+description = "TE Connectivity HTU21D / HTU21DF humidity and temperature sensor, 6-pad DFN, I2C address 0x40: VDD supply draw, logic levels and the command-framed T and RH measurement, user register and CRC-8"
+
+[models.match]
+value_re = "(?i)^(?:HTU21D(?:-?F)?|HPP845E[01]31R[145])$"
+
+[models.params]
+warning = "source-bound: the sleep VDD current (0.02 uA typ), the logic levels (evaluated at the printed VDD = 3.0 V) and the I2C protocol (T and RH triggers, user register resolution bits, soft reset, status bits and CRC-8) are executable; the measurement time and the NACK while busy, hold-master clock stretching, the heater, the end-of-battery bit, the diagnostic states and the accuracy are not represented"
+vih = 2.1       # derived: 70 % x VDD (DC characteristics p.9) at VDD = 3.0 V, the printed test supply
+vil = 0.9       # derived: 30 % x VDD at VDD = 3.0 V
+vol = { max = 0.4, unit = "V", conditions = "VDD = 3 V, -4 mA < IOL < 0 mA", basis = "Input/output DC characteristics p.9, VOL max column" }
+supply_static_ua = 0.02   # electrical and general items p.3, idd sleep mode, typ column (VDD = 3 V, 25 C)
+supply_pin = "5"
+gnd_pin = "2"
+
+[models.pins]
+"1" = "sda"   # DATA, serial data (open drain, external pull-up)
+"2" = "gnd"   # GND
+"3" = "nc"   # NC, must be left unconnected
+"4" = "nc"   # NC, must be left unconnected
+"5" = "vdd"   # VDD
+"6" = "scl"   # SCK, serial clock input
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.5
+max_v = 3.6
+abs_max_v = 3.6
+basis = "HTU21D(F) edition 8 'Electrical and general items' p.3, supply voltage VDD 1.5 V min / 3.0 V typ / 3.6 V max"
+abs_max_basis = "Maximum Ratings table p.2, VDD to GND -0.3 V to 3.6 V (supply voltage peak 3.8 V for under 10 % of the operating life)"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "HTU21D"
+bus = "i2c"
+i2c_address = 0x40
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# sel: what the next read returns. 0 = nothing, 1 = temperature, 2 = humidity, 3 = user register.
+[[sensor.state]]
+name = "sel"
+default = 0.0
+
+# User register (Table 8): default 0x02 (resolution 00, heater off, OTP reload disabled).
+[[sensor.state]]
+name = "ureg"
+default = 2.0
+
+# Code step of the chosen resolution: 2^(16 - bits). Defaults: RH 12 bit -> 16, T 14 bit -> 4.
+[[sensor.state]]
+name = "rstep"
+default = 16.0
+
+[[sensor.state]]
+name = "tstep"
+default = 4.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "trigger_t_hold_master"
+match_mask = 0xFF
+match_value = 0xE3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "trigger_t_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "trigger_rh_hold_master"
+match_mask = 0xFF
+match_value = 0xE5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+
+[[sensor.write_command]]
+name = "trigger_rh_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+
+[[sensor.write_command]]
+name = "write_user_register"
+match_mask = 0xFF
+match_value = 0xE6
+prefix = true
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "uval"
+bits = [7, 0]
+
+[sensor.write_command.update]
+ureg = "uval"
+tstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 4.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 8.0, 32.0)))"
+rstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 256.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 64.0, 32.0)))"
+
+[[sensor.write_command]]
+name = "read_user_register"
+match_mask = 0xFF
+match_value = 0xE7
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "3.0"
+
+# Soft reset: the default settings come back, except the heater bit (bit 2) of the user register.
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0xFE
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "0.0"
+ureg = "2.0 + if(ureg % 8.0 >= 4.0, 4.0, 0.0)"
+tstep = "4.0"
+rstep = "16.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(sel == 1.0, t_hi, if(sel == 2.0, rh_hi, if(sel == 3.0, ureg, 255.0)))",
+  "if(sel == 1.0, t_lo, if(sel == 2.0, rh_lo, 255.0))",
+  "if(sel == 1.0, (((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), if(sel == 2.0, (((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0))",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.5   # p.3, VDD min
+idle_a = 2e-08               # p.3, idd sleep mode typ
+read_a = 0.00045             # p.3, idd measuring typ
+write_a = 0.00045
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_typical_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x40", "trigger_t_and_rh_commands_0xE3_0xE5_0xF3_0xF5", "user_register_read_write_0xE7_0xE6", "measurement_resolution_bits_7_0", "soft_reset_0xFE_keeps_heater_bit", "temperature_conversion_formula", "humidity_conversion_formula", "status_bits_t_00_rh_10", "crc8_poly_0x31_init_0x00", "sensor_input_temperature_c", "sensor_input_humidity_pct"]
+missing = ["measurement_duration_and_busy_nack_polling", "hold_master_clock_stretching", "heater_bit_self_heating", "end_of_battery_status_bit_6", "otp_reload_bit_1", "diagnostic_states_open_and_short_circuit", "accuracy_hysteresis_and_noise", "rh_temperature_coefficient_compensation", "serial_number_readout", "pullup_resistor_requirement", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/assets/4/d/6/3/8/ENG_DS_HPC199_6_A6.pdf"
+title = "TE Connectivity HTU21D(F) RH/T Sensor IC datasheet, HPC199_6, edition 8 (05/2017)"
+locator = "Maximum ratings p.2; electrical and general items, relative humidity p.3; temperature p.5; interface specification p.8; input/output DC characteristics and timing p.9; start-up, commands and measurement sequences p.10-11; soft reset, user register p.12-13; CRC p.13-14; conversion of signal outputs p.15; die pad note p.17; ordering information p.21"
+sha256 = "9168a7d22a78b6d9b491c737ebfde45fe259ddbc550082e2528229f36de27ae3"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy graphs"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "p.3 prints the sleep current typ 0.02 uA and max 0.14 uA at VDD = 3 V, 25 C; the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measuring current typ (450 uA, min 300 uA, max 500 uA at SCK = 400 kHz); the datasheet gives no per-transaction bus current"
+[[models.source.pinout]]
+package = "DFN-6 (3 x 3 x 0.9 mm dual flat no-lead, 6 I/O pads and a die pad)"
+pins = { "1" = "DATA", "2" = "GND", "3" = "NC", "4" = "NC", "5" = "VDD", "6" = "SCK" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 1.5
+typ = 3.0
+max = 3.6
+unit = "V"
+conditions = "T = 25 C"
+basis = "Electrical and general items p.3, VDD, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode supply current"
+typ = 0.02
+max = 0.14
+unit = "uA"
+conditions = "VDD = 3 V, SCK = 400 kHz, 25 C"
+basis = "Electrical and general items p.3, idd sleep mode, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measuring supply current"
+min = 300.0
+typ = 450.0
+max = 500.0
+unit = "uA"
+conditions = "VDD = 3 V, SCK = 400 kHz, 25 C"
+basis = "Electrical and general items p.3, idd measuring, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode power dissipation"
+typ = 0.06
+max = 0.5
+unit = "uW"
+conditions = "VDD = 3 V, 25 C"
+basis = "Electrical and general items p.3, power dissipation sleep mode, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Average power dissipation, 8 bit"
+typ = 2.7
+unit = "uW"
+conditions = "VDD = 3 V, SCK = 400 kHz, below 60 C, duty cycle below 10 %"
+basis = "Electrical and general items p.3, power dissipation average 8 bit, typ column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "VDD = 3 V, -4 mA < IOL < 0 mA"
+basis = "Input/output DC characteristics p.9, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Input/output DC characteristics p.9, VOH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Input/output DC characteristics p.9, VIL, max column (30 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Input/output DC characteristics p.9, VIH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "SCK frequency"
+max = 0.4
+unit = "MHz"
+conditions = "I2C fast mode"
+basis = "Timing specifications p.9, fSCK, max column"
+
+[[models.source.characteristic]]
+parameter = "Capacitive load on bus line"
+max = 500.0
+unit = "pF"
+conditions = "I2C fast mode"
+basis = "Timing specifications p.9, CB, max column"
+
+[[models.source.characteristic]]
+parameter = "Humidity measuring time, 12 bit"
+typ = 14.0
+max = 16.0
+unit = "ms"
+conditions = "default resolution"
+basis = "Sensor performance, relative humidity p.3, measuring time 12 bits, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measuring time, 11 bit"
+typ = 7.0
+max = 8.0
+unit = "ms"
+conditions = "11 bit resolution"
+basis = "Sensor performance, relative humidity p.3, measuring time 11 bits, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measuring time, 10 bit"
+typ = 4.0
+max = 5.0
+unit = "ms"
+conditions = "10 bit resolution"
+basis = "Sensor performance, relative humidity p.3, measuring time 10 bits, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measuring time, 8 bit"
+typ = 2.0
+max = 3.0
+unit = "ms"
+conditions = "8 bit resolution"
+basis = "Sensor performance, relative humidity p.3, measuring time 8 bits, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measuring time, 14 bit"
+typ = 44.0
+max = 50.0
+unit = "ms"
+conditions = "default resolution"
+basis = "Temperature p.5, measuring time 14 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measuring time, 13 bit"
+typ = 22.0
+max = 25.0
+unit = "ms"
+conditions = "13 bit resolution"
+basis = "Temperature p.5, measuring time 13 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measuring time, 12 bit"
+typ = 11.0
+max = 13.0
+unit = "ms"
+conditions = "12 bit resolution"
+basis = "Temperature p.5, measuring time 12 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measuring time, 11 bit"
+typ = 6.0
+max = 7.0
+unit = "ms"
+conditions = "11 bit resolution"
+basis = "Temperature p.5, measuring time 11 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Start-up time to idle state"
+max = 15.0
+unit = "ms"
+conditions = "SCK high after power up"
+basis = "Start-up sensor p.10, the device needs at most 15 ms to reach idle state, max column"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 15.0
+unit = "ms"
+conditions = "after the soft reset command"
+basis = "Soft reset p.12, the soft reset takes less than 15 ms, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to VDD"
+min = -0.3
+unit = "V"
+conditions = "digital I/O pins DATA and SCK to VDD"
+basis = "Maximum Ratings table p.2, digital I/O pins to VDD, -0.3 V lower limit, min column"
+
+
+[[models]]
+id = "sht21"
+kind = "digital"
+description = "Sensirion SHT21 humidity and temperature sensor, 6-pad DFN, I2C address 0x40: VDD supply draw, logic levels and the command-framed T and RH measurement, user register and CRC-8"
+
+[models.match]
+value_re = "(?i)^(?:SHT21|1-100(?:707|645|694)-01)$"
+
+[models.params]
+warning = "source-bound: the sleep VDD current (0.15 uA typ), the logic levels (evaluated at the printed VDD = 3.0 V) and the I2C protocol (T and RH triggers, user register resolution bits, soft reset, status bits and CRC-8) are executable; the measurement time and the NACK while busy, hold-master clock stretching, the heater, the end-of-battery bit and the accuracy are not represented"
+vih = 2.1       # derived: 70 % x VDD (Table 4 p.6) at VDD = 3.0 V, the typical supply of Table 1
+vil = 0.9       # derived: 30 % x VDD at VDD = 3.0 V
+vol = { max = 0.4, unit = "V", conditions = "VDD = 3.0 V, -4 mA < IOL < 0 mA", basis = "Table 4 p.6, output low voltage VOL, max column" }
+supply_static_ua = 0.15   # Table 1 p.2, supply current IDD sleep mode, typ column
+supply_pin = "5"
+gnd_pin = "2"
+
+[models.pins]
+"1" = "sda"   # SDA, serial data, bidirectional
+"2" = "gnd"   # VSS, ground
+"3" = "nc"   # NC, remain floating
+"4" = "nc"   # NC, remain floating
+"5" = "vdd"   # VDD, supply voltage
+"6" = "scl"   # SCL, serial clock
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.1
+max_v = 3.6
+abs_max_v = 5.0
+basis = "SHT21 Version 5 Table 1 p.2, supply voltage VDD 2.1 V min / 3.0 V typ / 3.6 V max"
+abs_max_basis = "Table 3 p.6 Electrical absolute maximum ratings, VDD to VSS -0.3 V to 5 V"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "SHT21"
+bus = "i2c"
+i2c_address = 0x40
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# sel: what the next read returns. 0 = nothing, 1 = temperature, 2 = humidity, 3 = user register.
+[[sensor.state]]
+name = "sel"
+default = 0.0
+
+# User register (Table 8): default 0x02 (resolution 00, heater off, OTP reload disabled).
+[[sensor.state]]
+name = "ureg"
+default = 2.0
+
+# Code step of the chosen resolution: 2^(16 - bits). Defaults: RH 12 bit -> 16, T 14 bit -> 4.
+[[sensor.state]]
+name = "rstep"
+default = 16.0
+
+[[sensor.state]]
+name = "tstep"
+default = 4.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "trigger_t_hold_master"
+match_mask = 0xFF
+match_value = 0xE3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "trigger_t_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "trigger_rh_hold_master"
+match_mask = 0xFF
+match_value = 0xE5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+
+[[sensor.write_command]]
+name = "trigger_rh_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+
+[[sensor.write_command]]
+name = "write_user_register"
+match_mask = 0xFF
+match_value = 0xE6
+prefix = true
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "uval"
+bits = [7, 0]
+
+[sensor.write_command.update]
+ureg = "uval"
+tstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 4.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 8.0, 32.0)))"
+rstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 256.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 64.0, 32.0)))"
+
+[[sensor.write_command]]
+name = "read_user_register"
+match_mask = 0xFF
+match_value = 0xE7
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "3.0"
+
+# Soft reset: the default settings come back, except the heater bit (bit 2) of the user register.
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0xFE
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "0.0"
+ureg = "2.0 + if(ureg % 8.0 >= 4.0, 4.0, 0.0)"
+tstep = "4.0"
+rstep = "16.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(sel == 1.0, t_hi, if(sel == 2.0, rh_hi, if(sel == 3.0, ureg, 255.0)))",
+  "if(sel == 1.0, t_lo, if(sel == 2.0, rh_lo, 255.0))",
+  "if(sel == 1.0, (((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), if(sel == 2.0, (((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0))",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.1   # Table 1 p.2, VDD min
+idle_a = 1.5e-07             # Table 1 p.2, sleep mode IDD typ
+read_a = 0.0003              # Table 1 p.2, measuring IDD typ
+write_a = 0.0003
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_typical_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x40", "trigger_t_and_rh_commands_0xE3_0xE5_0xF3_0xF5", "user_register_read_write_0xE7_0xE6", "measurement_resolution_bits_7_0", "soft_reset_0xFE_keeps_heater_bit", "temperature_conversion_formula", "humidity_conversion_formula", "status_bits_t_00_rh_10", "crc8_poly_0x31_init_0x00", "sensor_input_temperature_c", "sensor_input_humidity_pct"]
+missing = ["measurement_duration_and_busy_nack_polling", "hold_master_clock_stretching", "heater_bit_self_heating", "end_of_battery_status_bit_6", "otp_reload_bit_1", "diagnostic_states_open_and_short_circuit", "accuracy_hysteresis_and_noise", "rh_temperature_coefficient_compensation", "serial_number_readout", "pullup_resistor_requirement", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://sensirion.com/media/documents/120BBE4C/63500094/Sensirion_Datasheet_Humidity_Sensor_SHT21.pdf"
+title = "Sensirion Datasheet SHT21 Humidity and Temperature Sensor IC, Version 5, October 2022"
+locator = "Fig. 1 pad drawing p.1; Table 1 electrical specification and packaging information p.2; Table 2 pin assignment, Table 3 absolute maximum ratings, Table 4 DC characteristics p.6; Table 5 timing, start-up section 5.1 p.7; Table 6 commands section 5.3-5.4 p.8; Table 7 measurement times, soft reset, Table 8 user register, CRC section 5.7 p.9; section 6 conversion p.10"
+sha256 = "e5905c92060a0e0ae0e40712fee0933ef3ce6392b0419ec88abd9ba5c3cab3ee"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy figures"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 1 prints the sleep current typ 0.15 uA and max 0.4 uA; the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measuring current typ (300 uA, min 200 uA, max 330 uA at VDD = 3.0 V, below 60 C); the datasheet gives no per-transaction bus current"
+[[models.source.pinout]]
+package = "DFN-6 (3 x 3 x 1.1 mm dual flat no-lead, 6 I/O pads and a die pad)"
+pins = { "1" = "SDA", "2" = "VSS", "3" = "NC", "4" = "NC", "5" = "VDD", "6" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 2.1
+typ = 3.0
+max = 3.6
+unit = "V"
+conditions = "Table 1"
+basis = "Table 1 p.2, supply voltage VDD, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode supply current"
+typ = 0.15
+max = 0.4
+unit = "uA"
+conditions = "sleep mode"
+basis = "Table 1 p.2, supply current IDD sleep mode, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measuring supply current"
+min = 200.0
+typ = 300.0
+max = 330.0
+unit = "uA"
+conditions = "measuring, VDD = 3.0 V, below 60 C"
+basis = "Table 1 p.2, supply current IDD measuring, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Start-up supply current"
+max = 350.0
+unit = "uA"
+conditions = "during start up"
+basis = "Start up sensor section 5.1 p.7, current consumption during start up is 350 uA, max column"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode power dissipation"
+typ = 0.5
+max = 1.2
+unit = "uW"
+conditions = "sleep mode"
+basis = "Table 1 p.2, power dissipation sleep mode, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measuring power dissipation"
+min = 0.6
+typ = 0.9
+max = 1.0
+unit = "mW"
+conditions = "measuring"
+basis = "Table 1 p.2, power dissipation measuring, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Average power dissipation, 8 bit"
+typ = 3.2
+unit = "uW"
+conditions = "one 8 bit measurement per second"
+basis = "Table 1 p.2, power dissipation average 8 bit, typ column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.0 V, -4 mA < IOL < 0 mA"
+basis = "Table 4 p.6, output low voltage VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 4 p.6, input low voltage VIL, max column (30 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 4 p.6, input high voltage VIH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency"
+max = 0.4
+unit = "MHz"
+conditions = "I2C fast mode"
+basis = "Table 5 p.7, SCL frequency fSCL, max column"
+
+[[models.source.characteristic]]
+parameter = "Capacitive load on bus line"
+max = 400.0
+unit = "pF"
+conditions = "I2C fast mode"
+basis = "Table 5 p.7, capacitive load on bus line CB, max column"
+
+[[models.source.characteristic]]
+parameter = "Start-up time to idle state"
+max = 15.0
+unit = "ms"
+conditions = "SCL high after power up"
+basis = "Start up sensor section 5.1 p.7, the sensor needs at most 15 ms to reach idle state, max column"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 15.0
+unit = "ms"
+conditions = "after the soft reset command"
+basis = "Soft reset section 5.5 p.9, the soft reset takes less than 15 ms, max column"
+
+[[models.source.characteristic]]
+parameter = "Humidity measurement time, 12 bit"
+typ = 22.0
+max = 29.0
+unit = "ms"
+conditions = "default resolution"
+basis = "Table 7 p.9, RH 12 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measurement time, 11 bit"
+typ = 12.0
+max = 15.0
+unit = "ms"
+conditions = "11 bit resolution"
+basis = "Table 7 p.9, RH 11 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measurement time, 10 bit"
+typ = 7.0
+max = 9.0
+unit = "ms"
+conditions = "10 bit resolution"
+basis = "Table 7 p.9, RH 10 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Humidity measurement time, 8 bit"
+typ = 3.0
+max = 4.0
+unit = "ms"
+conditions = "8 bit resolution"
+basis = "Table 7 p.9, RH 8 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measurement time, 14 bit"
+typ = 66.0
+max = 85.0
+unit = "ms"
+conditions = "default resolution"
+basis = "Table 7 p.9, T 14 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measurement time, 13 bit"
+typ = 33.0
+max = 43.0
+unit = "ms"
+conditions = "13 bit resolution"
+basis = "Table 7 p.9, T 13 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measurement time, 12 bit"
+typ = 17.0
+max = 22.0
+unit = "ms"
+conditions = "12 bit resolution"
+basis = "Table 7 p.9, T 12 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature measurement time, 11 bit"
+typ = 9.0
+max = 11.0
+unit = "ms"
+conditions = "11 bit resolution"
+basis = "Table 7 p.9, T 11 bit, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to VSS"
+min = -0.3
+unit = "V"
+conditions = "digital I/O pins SDA and SCL to VSS"
+basis = "Table 3 p.6, digital I/O pins to VSS, -0.3 V lower limit, min column"
+
+
+# Si7021-A20: Silicon Labs humidity and temperature sensor, DFN-6, I2C address 0x40. Source: Si7021-A20 datasheet Rev. 1.2 (8/16), sha256
+# a31e36d07e15964a198c00eac9b93559782a0d505fe756f9574eab2561cc4f88 (SparkFun copy). Page numbers are the printed Rev. 1.2 page numbers.
+# The card matches Si7021, Si7021-A20 and the twelve ordering codes of Table 15 (-GM, -GMR, -GM1, -GM1R, -IM, -IMR, -IM1, -IM1R, -YM0, -YM0R,
+# -YM1, -YM1R). Si7020, Si7013, Si7006 and other Si70xx parts are NOT matched: their datasheets were not read in this batch.
+# BEHAVIOUR. Same command family as the HTU21D / SHT21 cards (0xE3 / 0xF3 temperature, 0xE5 / 0xF5 humidity, 0xE6 / 0xE7 user register, 0xFE
+# reset, CRC-8 poly 0x31 init 0x00) with the Silicon Labs differences: user register reset 0x3A (reserved bits read 1), the VDDS bit is read
+# only, 0xE0 returns the temperature taken during the last RH measurement (no CRC), the heater control register (write 0x51, read 0x11) and
+# the firmware revision (0x84 0xB8, answer 0x20 for firmware 2.0). T = 175.72 x S / 2^16 - 46.85, RH = 125 x S / 2^16 - 6; humidity LSB ends
+# 10, temperature LSB ends 00. Resolution bits RES1:RES0 set the code step (RH 12/8/10/11 bit, T 14/12/13/11 bit); the code is rounded to the
+# step and clamped to the representable range (a derived rule).
+# PINS. 1 SDA, 2 GND, 3 DNC, 4 DNC, 5 VDD, 6 SCL; the TGND paddle is connected to GND internally and 'should be soldered to a floating pad'
+# (section 7), so no pad is mapped.
+# Cross-check only: Renode's SI70xx model (MIT, Antmicro) agrees on command codes and the 0x3A user register reset; no Renode code is used.
+[[models]]
+id = "si7021"
+kind = "digital"
+description = "Silicon Labs Si7021-A20 humidity and temperature sensor, 3 x 3 mm DFN-6, I2C address 0x40: VDD supply draw, logic levels and the command-framed T and RH measurement, user register, heater register, firmware revision and CRC-8"
+
+[models.match]
+value_re = "(?i)^SI7021(?:-A20(?:-(?:GM1?R?|IM1?R?|YM[01]R?))?)?$"
+
+[models.params]
+warning = "source-bound: the standby VDD current (0.06 uA typ), the logic levels (evaluated at the 3.3 V of the VOL test condition) and the I2C protocol (T and RH measurement, previous-T read, user register and heater register, firmware revision, reset, status bits and CRC-8) are executable; the measurement time and the NACK while busy, hold-master clock stretching, the heater self-heating, the VDD-low status bit, the electronic serial number and the accuracy are not represented"
+vih = 2.31      # derived: 0.7 x VDD (Table 2 p.4) at VDD = 3.3 V, the supply of the VOL test condition
+vil = 0.99      # derived: 0.3 x VDD at VDD = 3.3 V
+vol = { max = 0.6, unit = "V", conditions = "SDA pin, IOL = 2.5 mA, VDD = 3.3 V", basis = "Table 2 p.4, output voltage low VOL, max column" }
+supply_static_ua = 0.06   # Table 2 p.4, standby current -40 to +85 C, typ column (typical measured at 25 C)
+supply_pin = "5"
+gnd_pin = "2"
+
+[models.pins]
+"1" = "sda"   # SDA, I2C data
+"2" = "gnd"   # GND, connected to ground through a trace (do not connect directly to the GND plane)
+"3" = "dnc"   # DNC, solder to a pad for mechanical stability; floating or tied to VDD, never GND
+"4" = "dnc"   # DNC, as pin 3
+"5" = "vdd"   # VDD, power
+"6" = "scl"   # SCL, I2C clock
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.9
+max_v = 3.6
+abs_max_v = 4.2
+basis = "Si7021-A20 Rev. 1.2 Table 1 Recommended Operating Conditions p.4, power supply VDD 1.9 V min / 3.6 V max"
+abs_max_basis = "Table 7 Absolute Maximum Ratings p.10, voltage on VDD with respect to GND -0.3 V to 4.2 V"
+
+[models.ratings]
+theta_ja_c_per_w = 256.0   # Table 6 p.10, junction to air, JEDEC 2-layer board, no airflow
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "Si7021"
+bus = "i2c"
+i2c_address = 0x40
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# sel: what the next read returns. 0 nothing, 1 temperature, 2 humidity, 3 user register 1, 4 temperature of the previous
+# RH measurement, 5 heater control register, 6 firmware revision.
+[[sensor.state]]
+name = "sel"
+default = 0.0
+
+# User register 1, reset 0011_1010 (Register 1): RES1 bit 7, VDDS bit 6 (read only, 0 = VDD OK), HTRE bit 2, RES0 bit 0.
+[[sensor.state]]
+name = "ureg"
+default = 58.0
+
+# Heater control register, reset 0000_0000 (Register 2): HEATER[3:0] in bits 3..0.
+[[sensor.state]]
+name = "hreg"
+default = 0.0
+
+# Code step of the chosen resolution: 2^(16 - bits). Defaults: RH 12 bit -> 16, T 14 bit -> 4.
+[[sensor.state]]
+name = "rstep"
+default = 16.0
+
+[[sensor.state]]
+name = "tstep"
+default = 4.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+# Temperature word taken during the last RH measurement (command 0xE0 reads it).
+[[sensor.state]]
+name = "tp_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "tp_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "measure_t_hold_master"
+match_mask = 0xFF
+match_value = 0xE3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_t_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF3
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "1.0"
+t_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+t_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_rh_hold_master"
+match_mask = 0xFF
+match_value = 0xE5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+tp_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+tp_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_rh_no_hold_master"
+match_mask = 0xFF
+match_value = 0xF5
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "2.0"
+rh_hi = "floor((max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) / 256.0)"
+rh_lo = "(max(0.0, min(65536.0 - (rstep), round(((humidity_pct + 6.0) * 65536.0 / 125.0) / (rstep)) * (rstep)))) % 256.0 + 2.0"
+tp_hi = "floor((max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) / 256.0)"
+tp_lo = "(max(0.0, min(65536.0 - (tstep), round(((temperature_c + 46.85) * 65536.0 / 175.72) / (tstep)) * (tstep)))) % 256.0"
+
+[[sensor.write_command]]
+name = "read_temperature_of_previous_rh_measurement"
+match_mask = 0xFF
+match_value = 0xE0
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "4.0"
+
+[[sensor.write_command]]
+name = "write_user_register_1"
+match_mask = 0xFF
+match_value = 0xE6
+prefix = true
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "uval"
+bits = [7, 0]
+
+[sensor.write_command.update]
+ureg = "(58.0 + floor(uval / 128.0) * 128.0 + uval % 2.0 + (floor(uval / 4.0) % 2.0) * 4.0)"
+tstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 4.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 8.0, 32.0)))"
+rstep = "if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 0.0, 16.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 1.0, 256.0, if((floor(uval / 128.0) * 2.0 + uval % 2.0) == 2.0, 64.0, 32.0)))"
+
+[[sensor.write_command]]
+name = "read_user_register_1"
+match_mask = 0xFF
+match_value = 0xE7
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "3.0"
+
+[[sensor.write_command]]
+name = "write_heater_control_register"
+match_mask = 0xFF
+match_value = 0x51
+prefix = true
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "hval"
+bits = [3, 0]
+
+[sensor.write_command.update]
+hreg = "hval"
+
+[[sensor.write_command]]
+name = "read_heater_control_register"
+match_mask = 0xFF
+match_value = 0x11
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "5.0"
+
+# Firmware revision: the two-byte command 0x84 0xB8, answered with 0x20 (firmware 2.0, the "20" of Si7021-A20).
+[[sensor.write_command]]
+name = "read_firmware_revision"
+match_mask = 0xFF
+match_value = 0x84
+prefix = true
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "6.0"
+
+# Reset: the register reset settings come back (user register 0x3A, heater register 0x00).
+[[sensor.write_command]]
+name = "reset"
+match_mask = 0xFF
+match_value = 0xFE
+group_bytes = 1
+
+[sensor.write_command.update]
+sel = "0.0"
+ureg = "58.0"
+hreg = "0.0"
+tstep = "4.0"
+rstep = "16.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(sel == 1.0, t_hi, if(sel == 2.0, rh_hi, if(sel == 3.0, ureg, if(sel == 4.0, tp_hi, if(sel == 5.0, hreg, if(sel == 6.0, 32.0, 255.0))))))",
+  "if(sel == 1.0, t_lo, if(sel == 2.0, rh_lo, if(sel == 4.0, tp_lo, 255.0)))",
+  "if(sel == 1.0, (((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), if(sel == 2.0, (((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0))",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.9   # Table 1 p.4, VDD min
+idle_a = 6e-08               # Table 2 p.4, standby IDD typ
+read_a = 0.00015             # Table 2 p.4, RH conversion in progress IDD typ
+write_a = 0.00015
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x40", "measure_t_and_rh_commands_0xE3_0xE5_0xF3_0xF5", "read_temperature_of_previous_rh_0xE0", "user_register_1_read_write_0xE7_0xE6", "measurement_resolution_bits_7_0", "heater_control_register_0x51_0x11", "firmware_revision_0x84_0xB8", "reset_0xFE_restores_register_defaults", "temperature_conversion_formula", "humidity_conversion_formula", "status_bits_t_00_rh_10", "crc8_poly_0x31_init_0x00", "sensor_input_temperature_c", "sensor_input_humidity_pct", "user_register_reserved_bits_read_one"]
+missing = ["measurement_duration_and_nack_polling", "hold_master_clock_stretching", "heater_self_heating_effect", "vdds_low_supply_status_bit", "electronic_id_readout_0xFA_0x0F_0xFC_0xC9_serial_bytes_not_printed", "heater_register_reserved_bits_readback", "accuracy_hysteresis_and_noise", "rh_temperature_drift", "pullup_resistor_requirement"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.sparkfun.com/assets/b/1/b/8/5/Si7021-A20.pdf"
+title = "Silicon Labs Si7021-A20 I2C Humidity and Temperature Sensor datasheet, Rev. 1.2 (8/16)"
+locator = "Table 1 recommended operating conditions and Table 2 general specifications p.4-5; Table 3 I2C interface p.5-6; Table 6 thermal characteristics and Table 7 absolute maximum ratings p.10; Table 11 command table p.18; section 5.1 measurement, CRC and conversion formulas p.19-22; section 5.2-5.4 user register, serial number, firmware revision p.23-24; Table 13 heater p.25; Table 14 registers and Register 1-2 p.26-27; section 7 pin descriptions p.28; Table 15 ordering guide p.29"
+sha256 = "a31e36d07e15964a198c00eac9b93559782a0d505fe756f9574eab2561cc4f88"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy figures"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 2 prints the standby current typ 0.06 uA (measured at 25 C) and max 0.62 uA (-40 to +85 C) or 3.8 uA (-40 to +125 C); the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the RH-conversion current typ (150 uA, max 180 uA; the temperature conversion is 90 uA typ); the datasheet gives no per-transaction bus current"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "reset_scope"
+reason = "the datasheet gives the register reset settings (user register 0011_1010, heater register 0000_0000) but not which settings the Reset command 0xFE restores; the card restores both registers and the resolution"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "heater_register_upper_nibble"
+reason = "Register 2 lists bits 7..4 as reserved read/write with reset 0000_0000, while Table 14 note 2 says reserved bits read back as 1; the card reads them as 0 (the reset setting)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "previous_temperature_resolution"
+reason = "command 0xE0 returns the temperature taken during the last RH measurement; the card quantises that word to the current temperature resolution"
+[[models.source.pinout]]
+package = "DFN-6 (3 x 3 x 0.75 mm dual flat no-lead, 6 I/O pads and a TGND paddle)"
+pins = { "1" = "SDA", "2" = "GND", "3" = "DNC", "4" = "DNC", "5" = "VDD", "6" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "Power supply VDD"
+min = 1.9
+max = 3.6
+unit = "V"
+conditions = "recommended operating conditions"
+basis = "Table 1 p.4, power supply VDD, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Standby supply current, -40 to +85 C"
+typ = 0.06
+max = 0.62
+unit = "uA"
+conditions = "no conversion or I2C transaction in progress, typical at 25 C"
+basis = "Table 2 p.4, standby IDD -40 to +85 C, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Standby supply current, -40 to +125 C"
+typ = 0.06
+max = 3.8
+unit = "uA"
+conditions = "no conversion or I2C transaction in progress, typical at 25 C"
+basis = "Table 2 p.4, standby IDD -40 to +125 C, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "RH conversion supply current"
+typ = 150.0
+max = 180.0
+unit = "uA"
+conditions = "RH conversion in progress"
+basis = "Table 2 p.4, IDD RH conversion in progress, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion supply current"
+typ = 90.0
+max = 120.0
+unit = "uA"
+conditions = "temperature conversion in progress"
+basis = "Table 2 p.4, IDD temperature conversion in progress, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Peak supply current during powerup"
+typ = 3.5
+max = 4.0
+unit = "mA"
+conditions = "occurs once during powerup, shorter than 5 ms"
+basis = "Table 2 p.4, peak IDD during powerup, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Peak supply current during I2C operations"
+typ = 3.5
+max = 4.0
+unit = "mA"
+conditions = "reset, user register access, read EID and read firmware version; shorter than 100 us above 100 kHz"
+basis = "Table 2 p.4, peak IDD during I2C operations, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input voltage high VIH"
+min = 0.7
+unit = "VDD"
+conditions = "SCL, SDA pins, ratio of the supply"
+basis = "Table 2 p.4, VIH, min column (0.7 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "Input voltage low VIL"
+max = 0.3
+unit = "VDD"
+conditions = "SCL, SDA pins, ratio of the supply"
+basis = "Table 2 p.4, VIL, max column (0.3 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "Input leakage"
+max = 1.0
+unit = "uA"
+conditions = "SCL, SDA pins"
+basis = "Table 2 p.4, IIL, max column"
+
+[[models.source.characteristic]]
+parameter = "Output voltage low VOL at 2.5 mA"
+max = 0.6
+unit = "V"
+conditions = "SDA pin, IOL = 2.5 mA, VDD = 3.3 V"
+basis = "Table 2 p.4, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "Output voltage low VOL at 1.2 mA"
+max = 0.4
+unit = "V"
+conditions = "SDA pin, IOL = 1.2 mA, VDD = 1.9 V"
+basis = "Table 2 p.4, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "Heater current, setting 0000"
+typ = 3.09
+unit = "mA"
+conditions = "HTRE bit set, VDD = 3.3 V"
+basis = "Table 13 p.25, heater control setting 0000, typical current draw"
+
+[[models.source.characteristic]]
+parameter = "Heater current, setting 1111"
+typ = 94.2
+unit = "mA"
+conditions = "HTRE bit set, VDD = 3.3 V"
+basis = "Table 13 p.25, heater control setting 1111, typical current draw"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 12-bit RH"
+typ = 10.0
+max = 12.0
+unit = "ms"
+conditions = "default conversion time"
+basis = "Table 2 p.5, tCONV 12-bit RH, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 11-bit RH"
+typ = 5.8
+max = 7.0
+unit = "ms"
+conditions = "11-bit resolution"
+basis = "Table 2 p.5, tCONV 11-bit RH, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 10-bit RH"
+typ = 3.7
+max = 4.5
+unit = "ms"
+conditions = "10-bit resolution"
+basis = "Table 2 p.5, tCONV 10-bit RH, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 8-bit RH"
+typ = 2.6
+max = 3.1
+unit = "ms"
+conditions = "8-bit resolution"
+basis = "Table 2 p.5, tCONV 8-bit RH, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 14-bit temperature"
+typ = 7.0
+max = 10.8
+unit = "ms"
+conditions = "default conversion time"
+basis = "Table 2 p.5, tCONV 14-bit temperature, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 13-bit temperature"
+typ = 4.0
+max = 6.2
+unit = "ms"
+conditions = "13-bit resolution"
+basis = "Table 2 p.5, tCONV 13-bit temperature, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 12-bit temperature"
+typ = 2.4
+max = 3.8
+unit = "ms"
+conditions = "12-bit resolution"
+basis = "Table 2 p.5, tCONV 12-bit temperature, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Conversion time, 11-bit temperature"
+typ = 1.5
+max = 2.4
+unit = "ms"
+conditions = "11-bit resolution"
+basis = "Table 2 p.5, tCONV 11-bit temperature, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Powerup time at 25 C"
+typ = 18.0
+max = 25.0
+unit = "ms"
+conditions = "from VDD at or above 1.9 V to ready for a conversion, 25 C"
+basis = "Table 2 p.5, tPU, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Powerup time, full temperature range"
+max = 80.0
+unit = "ms"
+conditions = "from VDD at or above 1.9 V to ready for a conversion"
+basis = "Table 2 p.5, tPU, max column"
+
+[[models.source.characteristic]]
+parameter = "Time after a reset command"
+typ = 5.0
+max = 15.0
+unit = "ms"
+conditions = "after issuing a software reset command"
+basis = "Table 2 p.5, tPU after reset, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency"
+max = 400.0
+unit = "kHz"
+conditions = "I2C interface"
+basis = "Table 3 p.5, fSCL, max column"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-air thermal resistance, no airflow"
+typ = 256.0
+unit = "C/W"
+conditions = "JEDEC 2-layer board, no airflow"
+basis = "Table 6 p.10, theta JA, DFN-6 column (typ)"
+rating = "theta_ja_c_per_w"
+package = "DFN-6"
+mounting = "JEDEC 2-layer board, no airflow"
+
+[[models.source.characteristic]]
+parameter = "Voltage on I/O pins"
+min = -0.3
+unit = "V"
+conditions = "SCL and SDA relative to GND"
+basis = "Table 7 Absolute Maximum Ratings p.10, voltage on I/O pins, min column"
+
+
+# AHT10, AHT20 and AHT21: ASAIR (Aosong) humidity and temperature sensors on I2C address 0x38. Three cards because the three datasheets differ
+# in supply range (1.8-3.6 V, 2.0-5.5 V, 2.2-5.5 V), pin order, commands and the CRC. Sources: AHT10 Technical Manual V1.1 (unofficial English
+# translation, 2019/05), sha256 561ebe07d1c0fb2112cf893d0a229a77ba6196d733f9078468aaeb40f4f5a4f8; AHT20 Product manuals V1.1 (2020/04), sha256
+# 203939610747f0432625a535925288a4f846feeb6a1ceb4310a0880120b1e529; AHT21 Data Sheet V1.0 (May 2021), sha256
+# a7650b0d22ef8ee64edcd53282ec60c4771f18ddbe42f2e7d3d82fb6ac5ec9a6. The tables of the AHT10, AHT20 and AHT21 PDFs are images, read from page
+# renders; page numbers are the printed ones except the AHT10, whose PDF has no printed numbers (PDF page numbers). AHT21B and other suffixed
+# or numbered siblings are NOT matched.
+# BEHAVIOUR. The write 0xAC 0x33 0x00 latches a measurement from the sensor inputs temperature_c and humidity_pct; the next read returns the
+# status byte, five data bytes (humidity [19:0] then temperature [19:0], the shared byte holding humidity [3:0] in its high nibble) and, for
+# AHT20 and AHT21, a CRC-8 (polynomial 0x31, initial 0xFF) over the six bytes before it. RH = S / 2^20 x 100 %, T = S / 2^20 x 200 - 50 (all
+# three datasheets, signal conversion). The split of the 20-bit words over the bytes follows the datasheets' read figures, whose third byte is
+# labelled humidity | temperature. Before the first trigger the data bytes read zero (not specified). The measurement completes instantly: the
+# busy bit is never set.
+# STATUS. The datasheets give the meaning of the bits (7 busy, 3 CAL enable) but no power-on value. The AHT10 and AHT20 cards start at 0x08
+# (only the CAL bit set); the AHT21 card starts at 0x18, the value its own check mask (status AND 0x18 = 0x18) tests for. Both are assumptions
+# recorded as uncertainty records.
+# ADR. The AHT10 pin table prints 'Power ground' against pad 1 (ADR), a copy of the GND row; the figures label the pad ADR and no text says
+# what it does or which address it selects, so the card keeps role adr, claims only address 0x38 (the datasheet's one address) and lists the
+# function as missing.
+# Cross-check: Renode (MIT, Antmicro) has no AHT model; nothing was borrowed.
+[[models]]
+id = "aht10"
+kind = "digital"
+description = "ASAIR (Aosong) AHT10 humidity and temperature sensor, 6-pad DFN, I2C address 0x38: VDD supply draw, logic levels and the command-framed measurement (status byte plus 20-bit humidity and temperature)"
+
+[models.match]
+value_re = "(?i)^AHT10$"
+
+[models.params]
+warning = "source-bound: the sleep VDD current (0.25 uA, a maximum, no typical is printed), the logic levels (evaluated at the printed VDD = 3.3 V) and the I2C measurement protocol (trigger 0xAC, status byte, 20-bit conversions, initialization and soft reset accepted) are executable; the measurement time and the busy bit, the status bits at power-on, the function of the ADR pad (the pin table does not describe it) and the accuracy are not represented"
+vih = 2.31      # derived: 70 % x VDD (Table 7, PDF p.9) at VDD = 3.3 V, the typical supply of Table 2
+vil = 0.99      # derived: 30 % x VDD at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA", basis = "Table 7 PDF p.9, output low voltage VOL, max column" }
+supply_static_ua = 0.25   # Table 2 PDF p.3, supply current IDD sleep, max column (no typical is printed)
+supply_pin = "4"
+gnd_pin = "5"
+
+[models.pins]
+"1" = "adr"   # ADR (the pin table prints 'Power ground' for it, a copy of pin 5; the figures label the pad ADR; its function is not described)
+"2" = "sda"   # SDA, serial data
+"3" = "scl"   # SCL, serial clock
+"4" = "vdd"   # VDD, supply voltage
+"5" = "gnd"   # GND, power ground
+"6" = "nc"   # NC, stay vacant
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 3.6
+abs_max_v = 3.6
+basis = "AHT10 V1.1 Table 2 PDF p.3, supply voltage 1.8 V min / 3.3 V typ / 3.6 V max"
+abs_max_basis = "Table 6 Electrical Absolute Maximum Ratings PDF p.8, VDD to GND -0.3 V to 3.6 V"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "AHT10"
+bus = "i2c"
+i2c_address = 0x38
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# st: the status byte, first byte of every read. Bit 7 busy (never set: a measurement completes at once),
+# bit 3 CAL enable. The power-on value is not printed in the datasheet; see the card comment.
+[[sensor.state]]
+name = "st"
+default = 8.0
+
+# r1: data byte 1 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r1"
+default = 0.0
+
+# r2: data byte 2 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r2"
+default = 0.0
+
+# r3: data byte 3 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r3"
+default = 0.0
+
+# r4: data byte 4 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r4"
+default = 0.0
+
+# r5: data byte 5 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r5"
+default = 0.0
+
+[[sensor.write_command]]
+name = "trigger_measurement"
+match_mask = 0xFF
+match_value = 0xAC
+prefix = true
+group_bytes = 2
+
+[sensor.write_command.update]
+r1 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 4096.0)"
+r2 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 16.0) % 256.0"
+r3 = "((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) % 16.0) * 16.0 + floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 65536.0)"
+r4 = "floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 256.0) % 256.0"
+r5 = "(max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "initialization"
+match_mask = 0xFF
+match_value = 0xE1
+prefix = true
+group_bytes = 1
+
+[sensor.write_command.update]
+st = "8.0"
+
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0xBA
+group_bytes = 1
+
+[sensor.write_command.update]
+st = "8.0"
+r1 = "0.0"
+r2 = "0.0"
+r3 = "0.0"
+r4 = "0.0"
+r5 = "0.0"
+
+[sensor.read_frame]
+bytes = [
+  "st",
+  "r1",
+  "r2",
+  "r3",
+  "r4",
+  "r5",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.8   # Table 2 PDF p.3, supply voltage min
+idle_a = 2.5e-07             # Table 2 PDF p.3, IDD sleep max (no typical printed)
+read_a = 2.3e-05             # Table 2 PDF p.3, IDD measuring typ
+write_a = 2.3e-05
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x38", "trigger_measurement_0xAC_0x33_0x00", "status_byte_first_byte_of_read", "temperature_conversion_formula", "humidity_conversion_formula", "sensor_input_temperature_c", "sensor_input_humidity_pct", "initialization_0xE1_accepted", "soft_reset_0xBA"]
+missing = ["measurement_duration_and_busy_bit_7", "power_on_status_value", "status_mode_bits_6_5", "accuracy_hysteresis_and_noise", "pullup_resistor_requirement", "thermal_resistance_not_published", "calibration_state_machine", "adr_pin_function_not_described", "crc_not_provided_by_this_part"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://narodmon.ru/img/sens/AHT10.pdf"
+title = "ASAIR AHT10 Technical Manual, V1.1 (2018/12), unofficial English translation dated 2019/05"
+locator = "Table 2 electrical characteristics and Table 4 package p.3 (PDF page numbers); Table 5 pin distribution and Table 6 absolute maximum ratings p.8; Table 7 DC characteristics, Table 8 timing, section 5.1 p.9; section 5.3 Tables 9 and 10, measurement and read sequence, section 5.4 soft reset p.10; section 6 signal conversion p.11"
+sha256 = "561ebe07d1c0fb2112cf893d0a229a77ba6196d733f9078468aaeb40f4f5a4f8"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy graphs"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 2 prints only the sleep maximum (0.25 uA), so the maximum is used as the static draw"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measuring current typ (23 uA at VDD = 3.3 V, below 60 C); the datasheet gives no per-transaction bus current"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "status_at_power_on"
+reason = "the datasheet gives the meaning of the status bits (Table 10) but no power-on value; the card starts with bit 3 (calibrated) set, mode NOR (00), not busy, which is 0x08, so firmware that checks the CAL bit proceeds"
+[[models.source.pinout]]
+package = "DFN-6 (4 x 5 x 1.6 mm dual flat no-lead)"
+pins = { "1" = "ADR", "2" = "SDA", "3" = "SCL", "4" = "VDD", "5" = "GND", "6" = "NC" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage"
+min = 1.8
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "typical conditions"
+basis = "Table 2 PDF p.3, supply voltage, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode supply current"
+max = 0.25
+unit = "uA"
+conditions = "sleep, VDD = 3.3 V, below 60 C"
+basis = "Table 2 PDF p.3, supply current IDD sleep, max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring supply current"
+typ = 23.0
+unit = "uA"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 2 PDF p.3, supply current IDD measuring, typ column"
+
+[[models.source.characteristic]]
+parameter = "Sleep-mode power"
+max = 0.9
+unit = "uW"
+conditions = "sleep, VDD = 3.3 V, below 60 C"
+basis = "Table 2 PDF p.3, power sleep, max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring power"
+typ = 0.07
+unit = "mW"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 2 PDF p.3, power measuring, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average power"
+typ = 3.3
+unit = "uW"
+conditions = "one measurement every two seconds"
+basis = "Table 2 PDF p.3, power average, typ column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA"
+basis = "Table 7 PDF p.9, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 PDF p.9, VOH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 PDF p.9, VIL, max column (30 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 PDF p.9, VIH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "Input current"
+max = 1.0
+unit = "uA"
+conditions = "VDD = 3.6 V, VIN = 0 V to 3.6 V"
+basis = "Table 7 PDF p.9, input current, max column (plus or minus 1 uA)"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency, I2C typical mode"
+min = 0.0
+max = 100.0
+unit = "kHz"
+conditions = "I2C typical mode"
+basis = "Table 8 PDF p.9, fSCL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency, I2C high speed mode"
+min = 0.0
+max = 400.0
+unit = "kHz"
+conditions = "I2C high speed mode"
+basis = "Table 8 PDF p.9, fSCL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Start-up time to idle state"
+max = 20.0
+unit = "ms"
+conditions = "SCL high after power up"
+basis = "Section 5.1 PDF p.9, the sensor needs at most 20 ms to reach the idle state, max column"
+
+[[models.source.characteristic]]
+parameter = "Wait after a measurement command"
+min = 75.0
+unit = "ms"
+conditions = "before reading the converted data"
+basis = "Section 5.3 note PDF p.10, the delay is over 75 ms, min column"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 20.0
+unit = "ms"
+conditions = "after the soft reset command"
+basis = "Section 5.4 PDF p.10, the soft reset takes less than 20 ms, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to VDD"
+min = -0.3
+unit = "V"
+conditions = "digital I/O pins SDA and SCL to GND"
+basis = "Table 6 PDF p.8, digital I/O pins to GND, -0.3 V lower limit, min column"
+
+
+[[models]]
+id = "aht20"
+kind = "digital"
+description = "ASAIR (Aosong) AHT20 humidity and temperature sensor, 6-pad DFN, I2C address 0x38: VDD supply draw, logic levels and the command-framed measurement (status byte, 20-bit humidity and temperature, CRC-8)"
+
+[models.match]
+value_re = "(?i)^AHT20$"
+
+[models.params]
+warning = "source-bound: the sleep VDD current (0.25 uA, a maximum, no typical is printed), the logic levels (evaluated at the printed VDD = 3.3 V) and the I2C measurement protocol (trigger 0xAC, status byte, 20-bit conversions, CRC-8, initialization and soft reset) are executable; the measurement time and the busy bit, the status bits at power-on and the accuracy are not represented"
+vih = 2.31      # derived: 70 % x VDD (Table 7 p.7) at VDD = 3.3 V, the typical supply of Table 2
+vil = 0.99      # derived: 30 % x VDD at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA", basis = "Table 7 p.7, output low voltage VOL, max column" }
+supply_static_ua = 0.25   # Table 2 p.2, current IDD dormant, max column (no typical is printed)
+supply_pin = "2"
+gnd_pin = "5"
+
+[models.pins]
+"1" = "nc"   # NC, remain suspended
+"2" = "vdd"   # VDD, power supply voltage
+"3" = "scl"   # SCL, serial clock
+"4" = "sda"   # SDA, serial data, bidirectional
+"5" = "gnd"   # GND, power ground
+"6" = "nc"   # NC, remain suspended
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 5.5
+basis = "AHT20 V1.1 Table 2 p.2, voltage 2.0 V min / 3.3 V typ / 5.5 V max"
+abs_max_basis = "Table 6 Absolute maximum electric rating p.6, VDD to GND -0.3 V to 5.5 V"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "AHT20"
+bus = "i2c"
+i2c_address = 0x38
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# st: the status byte, first byte of every read. Bit 7 busy (never set: a measurement completes at once),
+# bit 3 CAL enable. The power-on value is not printed in the datasheet; see the card comment.
+[[sensor.state]]
+name = "st"
+default = 8.0
+
+# r1: data byte 1 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r1"
+default = 0.0
+
+# r2: data byte 2 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r2"
+default = 0.0
+
+# r3: data byte 3 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r3"
+default = 0.0
+
+# r4: data byte 4 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r4"
+default = 0.0
+
+# r5: data byte 5 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r5"
+default = 0.0
+
+[[sensor.write_command]]
+name = "trigger_measurement"
+match_mask = 0xFF
+match_value = 0xAC
+prefix = true
+group_bytes = 2
+
+[sensor.write_command.update]
+r1 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 4096.0)"
+r2 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 16.0) % 256.0"
+r3 = "((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) % 16.0) * 16.0 + floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 65536.0)"
+r4 = "floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 256.0) % 256.0"
+r5 = "(max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "initialization"
+match_mask = 0xFF
+match_value = 0xBE
+prefix = true
+group_bytes = 2
+
+[sensor.write_command.update]
+st = "8.0"
+
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0xBA
+group_bytes = 1
+
+[sensor.write_command.update]
+st = "8.0"
+r1 = "0.0"
+r2 = "0.0"
+r3 = "0.0"
+r4 = "0.0"
+r5 = "0.0"
+
+[sensor.read_frame]
+bytes = [
+  "st",
+  "r1",
+  "r2",
+  "r3",
+  "r4",
+  "r5",
+  "(((0.0 + (floor(st/32.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/4.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/2.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r4/2.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/8.0)%2.0) + (r5%2.0))%2.0)*1.0 + ((1.0 + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/2.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/4.0)%2.0) + (floor(r2/2.0)%2.0) + (r2%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/8.0)%2.0) + (r3%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (st%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (floor(r2/8.0)%2.0) + (floor(r2/4.0)%2.0) + (floor(r2/2.0)%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/2.0)%2.0) + (r3%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (r4%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/4.0)%2.0))%2.0)*4.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r2/8.0)%2.0) + (floor(r2/4.0)%2.0) + (r2%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r3/2.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/2.0)%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r2/8.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/8.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0) + (r5%2.0))%2.0)*16.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0) + (floor(r5/2.0)%2.0) + (r5%2.0))%2.0)*32.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/4.0)%2.0) + (st%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/8.0)%2.0) + (r3%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/4.0)%2.0) + (floor(r5/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(st/128.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/2.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/8.0)%2.0) + (floor(r5/4.0)%2.0))%2.0)*128.0)",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0   # Table 2 p.2, voltage min
+idle_a = 2.5e-07             # Table 2 p.2, IDD dormant max (no typical printed)
+read_a = 2.3e-05             # Table 2 p.2, IDD measure typ
+write_a = 2.3e-05
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x38", "trigger_measurement_0xAC_0x33_0x00", "status_byte_first_byte_of_read", "temperature_conversion_formula", "humidity_conversion_formula", "sensor_input_temperature_c", "sensor_input_humidity_pct", "initialization_0xBE_0x08_0x00", "soft_reset_0xBA", "crc8_poly_0x31_init_0xFF_over_six_bytes"]
+missing = ["measurement_duration_and_busy_bit_7", "power_on_status_value", "status_mode_bits_6_5", "accuracy_hysteresis_and_noise", "pullup_resistor_requirement", "thermal_resistance_not_published", "calibration_state_machine"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.makerguides.com/wp-content/uploads/2026/02/AHT20-datasheet.pdf"
+title = "ASAIR AHT20 Product manuals, V1.1 (2020/04)"
+locator = "Tables 1 to 3 sensor performance and Table 2 electric specification, Table 4 package p.2; Table 5 pin distribution and Table 6 absolute maximum rating p.6; Table 7 DC characteristics, Table 8 timing, section 5.1 p.7; section 5.3 Tables 9 and 10, section 5.4 reading process and CRC p.8; section 5.5 soft reset, section 6 signal transformation p.9"
+sha256 = "203939610747f0432625a535925288a4f846feeb6a1ceb4310a0880120b1e529"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy graphs"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 2 prints only the dormant maximum (0.25 uA), so the maximum is used as the static draw"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measuring current typ (23 uA at VDD = 3.3 V, below 60 C); the datasheet gives no per-transaction bus current"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "status_at_power_on"
+reason = "the datasheet gives the meaning of the status bits (Table 10) but no power-on value; the card starts with bit 3 (calibrated) set, not busy, which is 0x08, so firmware that checks the CAL bit proceeds"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "crc_coverage"
+reason = "section 5.4 says the CRC byte follows the six received bytes; the card computes it over those six bytes (status and the five data bytes)"
+[[models.source.pinout]]
+package = "DFN-6 (3 x 3 x 1.0 mm dual flat no-lead)"
+pins = { "1" = "NC", "2" = "VDD", "3" = "SCL", "4" = "SDA", "5" = "GND", "6" = "NC" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage"
+min = 2.0
+typ = 3.3
+max = 5.5
+unit = "V"
+conditions = "typical conditions"
+basis = "Table 2 p.2, voltage, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Dormant supply current"
+max = 0.25
+unit = "uA"
+conditions = "dormant, VDD = 3.3 V, below 60 C"
+basis = "Table 2 p.2, current IDD dormant, max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring supply current"
+typ = 23.0
+unit = "uA"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 2 p.2, current IDD measure, typ column"
+
+[[models.source.characteristic]]
+parameter = "Dormant power"
+max = 0.9
+unit = "uW"
+conditions = "dormant, VDD = 3.3 V, below 60 C"
+basis = "Table 2 p.2, power consumption dormant, max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring power"
+typ = 0.07
+unit = "mW"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 2 p.2, power consumption measure, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average power"
+typ = 3.3
+unit = "uW"
+conditions = "one measurement every two seconds"
+basis = "Table 2 p.2, power consumption average, typ column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA"
+basis = "Table 7 p.7, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.7, VOH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.7, VIL, max column (30 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.7, VIH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "Input current"
+max = 1.0
+unit = "uA"
+conditions = "VDD = 5.5 V, VIN = 0 V to 5.5 V"
+basis = "Table 7 p.7, input current, max column (plus or minus 1 uA)"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency, I2C typical mode"
+min = 0.0
+max = 100.0
+unit = "kHz"
+conditions = "I2C typical mode"
+basis = "Table 8 p.7, fSCL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "SCL frequency, I2C high speed mode"
+min = 0.0
+max = 400.0
+unit = "kHz"
+conditions = "I2C high speed mode"
+basis = "Table 8 p.7, fSCL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Start-up time to idle state"
+max = 20.0
+unit = "ms"
+conditions = "SCL high after power up"
+basis = "Section 5.1 p.7, the sensor takes 20 ms at most to enter the idle state, max column"
+
+[[models.source.characteristic]]
+parameter = "Wait after power-on before the status check"
+min = 40.0
+unit = "ms"
+conditions = "reading process step 1"
+basis = "Section 5.4 p.8, wait 40 ms after power-on, min column"
+
+[[models.source.characteristic]]
+parameter = "Wait after a measurement command"
+min = 80.0
+unit = "ms"
+conditions = "before reading the converted data"
+basis = "Section 5.4 p.8, wait for 80 ms for the measurement to be completed, min column"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 20.0
+unit = "ms"
+conditions = "after the soft reset command"
+basis = "Section 5.5 p.9, the time for soft reset does not exceed 20 ms, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to GND"
+min = -0.3
+unit = "V"
+conditions = "digital I/O pins SDA and SCL to GND"
+basis = "Table 6 p.6, digital I/O pins to GND, -0.3 V lower limit, min column"
+
+
+[[models]]
+id = "aht21"
+kind = "digital"
+description = "ASAIR (Aosong) AHT21 humidity and temperature sensor, 6-pad DFN, I2C address 0x38: VDD supply draw, logic levels and the command-framed measurement (status byte, 20-bit humidity and temperature, CRC-8)"
+
+[models.match]
+value_re = "(?i)^AHT21$"
+
+[models.params]
+warning = "source-bound: the dormant VDD current (250 nA, a maximum, no typical is printed), the logic levels (evaluated at the printed VDD = 3.3 V) and the I2C measurement protocol (trigger 0xAC, status byte, 20-bit conversions, CRC-8) are executable; the calibration register initialization (0x1B, 0x1C, 0x1E, not printed), the measurement time and the busy bit, the status bits at power-on and the accuracy are not represented"
+vih = 2.31      # derived: 70 % x VDD (Table 7 p.10) at VDD = 3.3 V, the typical supply of Table 3
+vil = 0.99      # derived: 30 % x VDD at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA", basis = "Table 7 p.10, low output voltage VOL, max column" }
+supply_static_ua = 0.25   # Table 3 p.3, current IDD dormant, max column (250 nA, no typical is printed)
+supply_pin = "2"
+gnd_pin = "5"
+
+[models.pins]
+"1" = "nc"   # NC, remain suspended
+"2" = "vdd"   # VDD, power supply voltage
+"3" = "scl"   # SCL, serial clock
+"4" = "sda"   # SDA, serial data, bidirectional
+"5" = "gnd"   # GND, power ground
+"6" = "nc"   # NC, remain suspended
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.2
+max_v = 5.5
+abs_max_v = 5.5
+basis = "AHT21 V1.0 Table 3 p.3, voltage 2.2 V min / 3.3 V typ / 5.5 V max"
+abs_max_basis = "Table 6 Absolute maximum electrical ratings p.10, VDD to GND -0.3 V to 5.5 V"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "AHT21"
+bus = "i2c"
+i2c_address = 0x38
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# st: the status byte, first byte of every read. Bit 7 busy (never set: a measurement completes at once),
+# bit 3 CAL enable. The power-on value is not printed in the datasheet; see the card comment.
+[[sensor.state]]
+name = "st"
+default = 24.0
+
+# r1: data byte 1 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r1"
+default = 0.0
+
+# r2: data byte 2 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r2"
+default = 0.0
+
+# r3: data byte 3 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r3"
+default = 0.0
+
+# r4: data byte 4 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r4"
+default = 0.0
+
+# r5: data byte 5 of the read (humidity [19:12], [11:4], humidity [3:0] + temperature [19:16], temperature [15:8], [7:0]).
+[[sensor.state]]
+name = "r5"
+default = 0.0
+
+[[sensor.write_command]]
+name = "trigger_measurement"
+match_mask = 0xFF
+match_value = 0xAC
+prefix = true
+group_bytes = 2
+
+[sensor.write_command.update]
+r1 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 4096.0)"
+r2 = "floor((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) / 16.0) % 256.0"
+r3 = "((max(0.0, min(1048575.0, round(humidity_pct / 100.0 * 1048576.0)))) % 16.0) * 16.0 + floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 65536.0)"
+r4 = "floor((max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) / 256.0) % 256.0"
+r5 = "(max(0.0, min(1048575.0, round((temperature_c + 50.0) / 200.0 * 1048576.0)))) % 256.0"
+
+[sensor.read_frame]
+bytes = [
+  "st",
+  "r1",
+  "r2",
+  "r3",
+  "r4",
+  "r5",
+  "(((0.0 + (floor(st/32.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/4.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/2.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r4/2.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/8.0)%2.0) + (r5%2.0))%2.0)*1.0 + ((1.0 + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/2.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/4.0)%2.0) + (floor(r2/2.0)%2.0) + (r2%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/8.0)%2.0) + (r3%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (st%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (floor(r2/8.0)%2.0) + (floor(r2/4.0)%2.0) + (floor(r2/2.0)%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/2.0)%2.0) + (r3%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (r4%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/4.0)%2.0))%2.0)*4.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r2/8.0)%2.0) + (floor(r2/4.0)%2.0) + (r2%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r3/2.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/2.0)%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/8.0)%2.0) + (st%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r1/4.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r2/8.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/8.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/8.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0) + (r5%2.0))%2.0)*16.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/32.0)%2.0) + (floor(st/4.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (floor(r1/8.0)%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r2/16.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/4.0)%2.0) + (floor(r4/128.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/8.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/64.0)%2.0) + (floor(r5/8.0)%2.0) + (floor(r5/2.0)%2.0) + (r5%2.0))%2.0)*32.0 + ((1.0 + (floor(st/128.0)%2.0) + (floor(st/64.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/4.0)%2.0) + (st%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/16.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (floor(r2/32.0)%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/32.0)%2.0) + (floor(r3/8.0)%2.0) + (r3%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/16.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/128.0)%2.0) + (floor(r5/16.0)%2.0) + (floor(r5/4.0)%2.0) + (floor(r5/2.0)%2.0))%2.0)*64.0 + ((0.0 + (floor(st/128.0)%2.0) + (floor(st/16.0)%2.0) + (floor(st/8.0)%2.0) + (floor(st/2.0)%2.0) + (floor(r1/128.0)%2.0) + (floor(r1/64.0)%2.0) + (floor(r1/32.0)%2.0) + (floor(r1/2.0)%2.0) + (r1%2.0) + (floor(r2/128.0)%2.0) + (floor(r2/64.0)%2.0) + (r2%2.0) + (floor(r3/128.0)%2.0) + (floor(r3/64.0)%2.0) + (floor(r3/16.0)%2.0) + (floor(r3/2.0)%2.0) + (floor(r4/64.0)%2.0) + (floor(r4/32.0)%2.0) + (floor(r4/4.0)%2.0) + (floor(r4/2.0)%2.0) + (r4%2.0) + (floor(r5/32.0)%2.0) + (floor(r5/8.0)%2.0) + (floor(r5/4.0)%2.0))%2.0)*128.0)",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.2   # Table 3 p.3, voltage min
+idle_a = 2.5e-07             # Table 3 p.3, IDD dormant max (no typical printed)
+read_a = 0.00098             # Table 3 p.3, IDD measure typ
+write_a = 0.00098
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x38", "trigger_measurement_0xAC_0x33_0x00", "status_byte_first_byte_of_read", "temperature_conversion_formula", "humidity_conversion_formula", "sensor_input_temperature_c", "sensor_input_humidity_pct", "status_check_mask_0x18", "crc8_poly_0x31_init_0xFF_over_six_bytes"]
+missing = ["measurement_duration_and_busy_bit_7", "power_on_status_value", "status_mode_bits_6_5", "accuracy_hysteresis_and_noise", "pullup_resistor_requirement", "thermal_resistance_not_published", "calibration_state_machine", "initialization_register_sequence_0x1B_0x1C_0x1E_not_printed", "soft_reset_not_printed"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://cdn.shopify.com/s/files/1/0943/8168/files/aht21_a3.pdf"
+title = "ASAIR AHT21 Data Sheet, V1.0 (May 2021)"
+locator = "Table 3 electrical characteristics and Table 4 package p.3; Table 5 pin distribution and section 5 p.9; Table 6 absolute maximum ratings and Table 7 DC characteristics p.10; section 7.1 start p.11; section 7.3 Table 9 status bits and section 7.4 reading process p.12; read and trigger sequences and section 8 signal conversion p.13"
+sha256 = "a7650b0d22ef8ee64edcd53282ec60c4771f18ddbe42f2e7d3d82fb6ac5ec9a6"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy graphs"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 3 prints only the dormant maximum (250 nA), so the maximum is used as the static draw"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measuring current typ (980 uA at VDD = 3.3 V, below 60 C); the datasheet gives no per-transaction bus current"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "status_at_power_on"
+reason = "the datasheet prints the check mask 0x18 (status AND 0x18 must equal 0x18) but no power-on status value; the card starts with that mask satisfied (0x18), not busy, so firmware skips the register initialization it does not describe"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "crc_coverage"
+reason = "section 7.4 says the CRC byte follows the six received bytes; the card computes it over those six bytes (status and the five data bytes)"
+[[models.source.pinout]]
+package = "DFN-6 (3 x 3 x 0.8 mm two-row flat pin-less SMD)"
+pins = { "1" = "NC", "2" = "VDD", "3" = "SCL", "4" = "SDA", "5" = "GND", "6" = "NC" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage"
+min = 2.2
+typ = 3.3
+max = 5.5
+unit = "V"
+conditions = "typical conditions"
+basis = "Table 3 p.3, voltage, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Dormant supply current"
+max = 0.25
+unit = "uA"
+conditions = "dormant, VDD = 3.3 V, below 60 C"
+basis = "Table 3 p.3, current IDD dormant (250 nA), max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring supply current"
+typ = 980.0
+unit = "uA"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 3 p.3, current IDD measure, typ column"
+
+[[models.source.characteristic]]
+parameter = "Dormant power"
+max = 0.8
+unit = "uW"
+conditions = "dormant, VDD = 3.3 V, below 60 C"
+basis = "Table 3 p.3, power consumption dormant, max column"
+
+[[models.source.characteristic]]
+parameter = "Measuring power"
+typ = 3.2
+unit = "mW"
+conditions = "measuring, VDD = 3.3 V, below 60 C"
+basis = "Table 3 p.3, power consumption measure, typ column"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.3 V, -4 mA < IOL < 0 mA"
+basis = "Table 7 p.10, VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.10, VOH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.10, VIL, max column (30 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply"
+basis = "Table 7 p.10, VIH, min column (70 % VDD)"
+
+[[models.source.characteristic]]
+parameter = "Input current"
+max = 1.0
+unit = "uA"
+conditions = "VDD = 5.5 V, VIN = 0 V to 5.5 V"
+basis = "Table 7 p.10, input current, max column (plus or minus 1 uA)"
+
+[[models.source.characteristic]]
+parameter = "Wait after power-on"
+min = 100.0
+unit = "ms"
+conditions = "SCL high, to reach the idle state"
+basis = "Section 7.1 p.11, the sensor needs 100 ms or more to reach the idle state, min column"
+
+[[models.source.characteristic]]
+parameter = "Wait after a measurement command"
+min = 80.0
+unit = "ms"
+conditions = "before reading the converted data"
+basis = "Section 7.4 p.12, wait 80 ms for the measurement to be completed, min column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to GND"
+min = -0.3
+unit = "V"
+conditions = "digital I/O pins SDA and SCL to GND"
+basis = "Table 6 p.10, digital I/O pins to GND, -0.3 V lower limit, min column"
+
+
+# VL53L0X: STMicroelectronics time-of-flight ranging module (optical LGA12). Source: DS11555 Rev 6 (footer June 2024), sha256
+# f0ae51414474d311bc24c60cd77bfff968ea5c2b3765b2fb2a390b3078dd49be, https://www.st.com/resource/en/datasheet/vl53l0x.pdf. Printed page numbers
+# (page N/38).
+# ADDRESS. The datasheet prints the default device address as 0x52 for the write byte (section 4, Figure 14: 0101001 then R/W), which is the
+# 7-bit address 0x29 used by the card.
+# BEHAVIOUR. Only the registers the datasheet publishes are modelled: Table 5 'Reference registers' (0xC0 = 0xEE, 0xC1 = 0xAA, 0xC2 = 0x10,
+# 0x51 = 0x0099, 0x61 = 0x0000, 'after fresh reset, without the API loaded'). The distance, range status and configuration registers are only
+# in the API manual UM2039, which this batch did not read, so there is no ranging output; the coverage list says so.
+# PINS. 1 AVDDVCSEL, 2 AVSSVCSEL, 3 GND, 4 GND2, 5 XSHUT, 6 GND3, 7 GPIO1, 8 DNC, 9 SDA, 10 SCL, 11 AVDD, 12 GND4 (Table 3, bottom view). The
+# GPIO1 high level VOH = IOVDD - 0.4 V is an expression of the I/O supply, not a number, and is not carried as a characteristic row.
+# ORDER CODES. VL53L0CXV0DH/1 (with liner) and VL53L0CXV9DH/1 (without liner) per Table 18; the part is also sold under the bare name VL53L0X.
+# VL53L1X, VL53L0CXV0DH without the /1 suffix and other ST ToF parts are NOT matched.
+# Cross-check: Renode (MIT, Antmicro) has no VL53L0X model; nothing was borrowed.
+[[models]]
+id = "vl53l0x"
+kind = "digital"
+description = "STMicroelectronics VL53L0X time-of-flight ranging sensor, optical LGA12, I2C address 0x29: AVDD supply draw, I2C logic levels and the identity and reference registers the datasheet publishes (the ranging engine is not modelled)"
+
+[models.match]
+value_re = "(?i)^(?:VL53L0X|VL53L0CXV[09]DH/1)$"
+
+[models.params]
+warning = "source-bound: the standby supply current, the I2C logic levels and the reference registers of Table 5 (0xC0 = 0xEE, 0xC1 = 0xAA, 0xC2 = 0x10, 0x51 = 0x0099, 0x61 = 0x0000, the fresh-reset values without the API loaded) are executable; the ranging engine, the distance and status registers (only in the API manual UM2039), XSHUT hardware standby, the GPIO1 interrupt, the programmable I2C address, the 1V8 / 2V8 I/O mode and the accuracy are not represented, so a driver that ranges will not get a distance"
+vih = 1.12      # Table 11 p.20, I2C interface VIH, min column
+vil = 0.6       # Table 11 p.20, I2C interface VIL, max column
+vol = { max = 0.4, unit = "V", conditions = "IOUT = 4 mA in standard and fast modes, SDA", basis = "Table 11 p.20, I2C interface VOL, max column" }
+supply_static_ua = 6.0    # Table 10 p.20, SW STANDBY (2V8 mode), typ column; includes AVDD and AVDDVCSEL
+supply_pin = "11"
+gnd_pin = "3"
+
+[models.pins]
+"1" = "avddvcsel"   # AVDDVCSEL, VCSEL supply, connected to the main supply
+"2" = "avssvcsel"   # AVSSVCSEL, VCSEL ground, connected to the main ground
+"3" = "gnd"   # GND, main ground
+"4" = "gnd"   # GND2, to the main ground
+"5" = "xshut"   # XSHUT, active-low shutdown input (always drive it; high only when AVDD is on)
+"6" = "gnd"   # GND3, to the main ground
+"7" = "gpio1"   # GPIO1, open-drain interrupt output (leave unconnected if unused)
+"8" = "dnc"   # DNC, must be left floating
+"9" = "sda"   # SDA, I2C data
+"10" = "scl"   # SCL, I2C clock
+"11" = "vdd"   # AVDD, supply, connected to the main supply
+"12" = "gnd"   # GND4, to the main ground
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.6
+max_v = 3.5
+abs_max_v = 3.6
+basis = "VL53L0X DS11555 Rev 6 Table 8 Recommended operating conditions p.19, voltage (AVDD) 2.6 V min / 2.8 V typ / 3.5 V max"
+abs_max_basis = "Table 7 Absolute maximum ratings p.19, AVDD and SCL, SDA, XSHUT, GPIO1: -0.5 V to 3.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avddvcsel"
+min_v = 2.6
+max_v = 3.5
+abs_max_v = 3.6
+basis = "Derived: Table 3 p.4 says AVDDVCSEL is 'to be connected to main supply' (AVDD), so the AVDD range of Table 8 p.19 applies, 2.6 V min / 3.5 V max"
+abs_max_basis = "Table 7 Absolute maximum ratings p.19, AVDD: -0.5 V to 3.6 V (derived for the VCSEL supply pin, which Table 3 says is tied to the main supply)"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "VL53L0X"
+bus = "i2c"
+i2c_address = 0x29
+
+# Table 5 (p.18), "Reference registers": the values read after a fresh reset, without the API loaded. 0xC0 / 0xC1 / 0xC2
+# are the identity bytes ST's driver reads; 0x51 and 0x61 are 16-bit registers (multibyte accesses are MSB first, Table 6).
+[[sensor.register]]
+addr = 0xC0
+const = [0xEE]
+
+[[sensor.register]]
+addr = 0xC1
+const = [0xAA]
+
+[[sensor.register]]
+addr = 0xC2
+const = [0x10]
+
+[[sensor.register]]
+addr = 0x51
+const = [0x00, 0x99]
+
+[[sensor.register]]
+addr = 0x61
+const = [0x00, 0x00]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.6   # Table 8 p.19, AVDD min
+idle_a = 6e-06               # Table 10 p.20, SW STANDBY typ
+read_a = 0.019               # Table 10 p.20, active ranging average consumption typ (assumed while the host talks to the device)
+write_a = 0.019
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "avddvcsel_supply_range", "i2c_logic_levels", "standby_supply_current", "supply_voltage_gating", "i2c_address_0x29_7bit", "reference_registers_0xC0_0xC1_0xC2_0x51_0x61_after_fresh_reset", "multibyte_registers_msb_first"]
+missing = ["ranging_engine_and_distance_output", "range_status_and_result_registers_not_in_datasheet_see_UM2039", "device_settings_loaded_by_the_api", "register_map_beyond_table_5", "xshut_hardware_standby_and_boot_sequence", "gpio1_interrupt_output", "programmable_i2c_address", "io_voltage_mode_1v8_2v8", "ranging_modes_timing_budget_and_inter_measurement_period", "calibration_spad_temperature_offset_crosstalk", "ranging_accuracy_and_maximum_distance", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/vl53l0x.pdf"
+title = "STMicroelectronics VL53L0X Time-of-Flight ranging sensor datasheet, DS11555 Rev 6 (June 2024)"
+locator = "Table 2 technical specification p.3; Table 3 pin description p.4; section 2.4 application schematic notes p.5; section 3.6.2 ranging phase p.11; section 3.9 power sequence p.13; section 4 control interface and Figure 14 device address p.15; Table 4 I2C timing p.17; Table 5 reference registers p.18; Table 7 absolute maximum ratings and Table 8 recommended operating conditions p.19; Table 10 consumption and Table 11 digital I/O p.20; Table 17 storage p.32; Table 18 order codes p.34"
+sha256 = "f0ae51414474d311bc24c60cd77bfff968ea5c2b3765b2fb2a390b3078dd49be"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card models only the published reference registers"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 10 prints HW STANDBY 5 uA typ and SW STANDBY (2V8 mode) 6 uA typ; the software-standby value is used because the device boots into it when XSHUT is high; in standard (1V8) mode the SW STANDBY value rises by 0.6 uA (note 1)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the active-ranging average (19 mA typ, peak up to 40 mA) as an assumption for a driver that is talking to the part; the datasheet gives no per-transaction bus current and the card does not range"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "avddvcsel_range"
+reason = "the AVDDVCSEL supply envelope is derived from the statement that the pin is connected to the main supply; the datasheet prints no separate rating for it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "reference_registers_after_api"
+reason = "Table 5 values are those 'after fresh reset, without the API loaded'; registers 0x51 and 0x61 change once the API loads its settings, so only the fresh-reset state is modelled"
+[[models.source.pinout]]
+package = "Optical LGA12 (4.4 x 2.4 x 1.0 mm), bottom view numbering"
+pins = { "1" = "AVDDVCSEL", "2" = "AVSSVCSEL", "3" = "GND", "4" = "GND2", "5" = "XSHUT", "6" = "GND3", "7" = "GPIO1", "8" = "DNC", "9" = "SDA", "10" = "SCL", "11" = "AVDD", "12" = "GND4" }
+
+[[models.source.characteristic]]
+parameter = "Voltage AVDD"
+min = 2.6
+typ = 2.8
+max = 3.5
+unit = "V"
+conditions = "recommended operating conditions"
+basis = "Table 8 p.19, voltage (AVDD), min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "IO voltage IOVDD, standard mode"
+min = 1.6
+typ = 1.8
+max = 1.9
+unit = "V"
+conditions = "standard (1V8) mode"
+basis = "Table 8 p.19, IO (IOVDD) standard mode, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "IO voltage IOVDD, 2V8 mode"
+min = 2.6
+typ = 2.8
+max = 3.5
+unit = "V"
+conditions = "2V8 mode, SDA, SCL, XSHUT and GPIO1 high levels equal to AVDD"
+basis = "Table 8 p.19, IO (IOVDD) 2V8 mode, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Normal operating temperature"
+min = -20.0
+max = 70.0
+unit = "C"
+conditions = "recommended operating conditions"
+basis = "Table 8 p.19, normal operating temperature, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Voltage on AVDD and on SCL, SDA, XSHUT, GPIO1"
+min = -0.5
+max = 3.6
+unit = "V"
+conditions = "absolute maximum ratings"
+basis = "Table 7 p.19, AVDD and SCL, SDA, XSHUT, GPIO1, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "HW STANDBY supply current"
+min = 3.0
+typ = 5.0
+max = 7.0
+unit = "uA"
+conditions = "23 C, 2.8 V, AVDD and AVDDVCSEL"
+basis = "Table 10 p.20, HW STANDBY, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "SW STANDBY supply current (2V8 mode)"
+min = 4.0
+typ = 6.0
+max = 9.0
+unit = "uA"
+conditions = "23 C, 2.8 V, AVDD and AVDDVCSEL"
+basis = "Table 10 p.20, SW STANDBY (2V8 mode), min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Timed ranging inter-measurement supply current"
+typ = 16.0
+unit = "uA"
+conditions = "23 C, 2.8 V"
+basis = "Table 10 p.20, timed ranging intermeasurement, typ column"
+
+[[models.source.characteristic]]
+parameter = "Active ranging average supply current"
+typ = 19.0
+unit = "mA"
+conditions = "23 C, 2.8 V, default API settings, 33 ms timing budget, including VCSEL"
+basis = "Table 10 p.20, active ranging average consumption, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current at 10 Hz"
+max = 20.0
+unit = "mA"
+conditions = "33 ms ranging sequence"
+basis = "Table 10 p.20, average power consumption at 10 Hz, max column"
+
+[[models.source.characteristic]]
+parameter = "I2C interface VIL low-level input voltage"
+min = -0.5
+max = 0.6
+unit = "V"
+conditions = "SDA, SCL"
+basis = "Table 11 p.20, I2C interface VIL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "I2C interface VIH high-level input voltage"
+min = 1.12
+max = 3.5
+unit = "V"
+conditions = "SDA, SCL"
+basis = "Table 11 p.20, I2C interface VIH, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "I2C interface VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOUT = 4 mA in standard and fast modes"
+basis = "Table 11 p.20, I2C interface VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "I2C leakage current, AVDD = 0 V"
+max = 10.0
+unit = "uA"
+conditions = "AVDD = 0 V"
+basis = "Table 11 p.20, I2C interface IIL/IH leakage current note 1, max column"
+
+[[models.source.characteristic]]
+parameter = "I2C leakage current, AVDD = 2.85 V"
+max = 0.15
+unit = "uA"
+conditions = "AVDD = 2.85 V, I/O voltage = 1.8 V"
+basis = "Table 11 p.20, I2C interface IIL/IH leakage current note 2, max column"
+
+[[models.source.characteristic]]
+parameter = "GPIO1 VIL low-level input voltage"
+max = 0.3
+unit = "IOVDD"
+conditions = "interrupt pin, ratio of IOVDD"
+basis = "Table 11 p.20, interrupt pin VIL, max column (0.3 IOVDD)"
+
+[[models.source.characteristic]]
+parameter = "GPIO1 VIH high-level input voltage"
+min = 0.7
+unit = "IOVDD"
+conditions = "interrupt pin, ratio of IOVDD"
+basis = "Table 11 p.20, interrupt pin VIH, min column (0.7 IOVDD)"
+
+[[models.source.characteristic]]
+parameter = "GPIO1 VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOUT = 4 mA"
+basis = "Table 11 p.20, interrupt pin VOL, max column"
+
+[[models.source.characteristic]]
+parameter = "GPIO1 operating frequency"
+min = 0.0
+max = 108.0
+unit = "MHz"
+conditions = "CLOAD = 20 pF"
+basis = "Table 11 p.20, interrupt pin FGPIO, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "I2C operating frequency"
+min = 0.0
+max = 400.0
+unit = "kHz"
+conditions = "standard and fast mode"
+basis = "Table 4 p.17, FI2C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "SDA input/output capacitance"
+max = 10.0
+unit = "pF"
+conditions = "I2C interface"
+basis = "Table 4 p.17, Ci/o, max column"
+
+[[models.source.characteristic]]
+parameter = "SCL input capacitance"
+max = 4.0
+unit = "pF"
+conditions = "I2C interface"
+basis = "Table 4 p.17, Cin, max column"
+
+[[models.source.characteristic]]
+parameter = "Load capacitance"
+typ = 125.0
+max = 400.0
+unit = "pF"
+conditions = "I2C interface"
+basis = "Table 4 p.17, CL, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Firmware boot time"
+max = 1.2
+unit = "ms"
+conditions = "after XSHUT is raised"
+basis = "Section 3.9 p.13, tBOOT is 1.2 ms maximum, max column"
+
+
+# DS18B20: Maxim (now Analog Devices) 1-Wire digital thermometer. Source: datasheet 19-7487 Rev 6 (7/19), sha256
+# 066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76. Page numbers are the printed 'Maxim Integrated | N' numbers.
+# THREE PACKAGE CARDS, one family (variant_of = ds18b20): the pin order differs by package, so each package has its own card, told apart by
+# the ordering code (DS18B20 / DS18B20+ ... = 3-pin TO-92; DS18B20U... = 8-pin uSOP, listed as 8 FSOP in the ordering table; DS18B20Z... =
+# 8-pin SO 150 mils) and by the footprint. The bare code DS18B20 is the TO-92 order code. DS18B20-PAR, DS18S20, DS1822 and the other 1-Wire
+# thermometers are NOT matched (different datasheets).
+# PINS. TO-92 (bottom view) 1 GND, 2 DQ, 3 VDD; SO 3 VDD, 4 DQ, 5 GND, 1 2 6 7 8 N.C.; uSOP 1 DQ, 4 GND, 8 VDD, 2 3 5 6 7 N.C. (Pin
+# Description table p.4).
+# SCHEMA GAP. The sensor-spec format has no 1-Wire bus style (it knows I2C and SPI), so there is no behavioural model: the card carries the
+# electrical interface only, and coverage.missing says the 1-Wire protocol and the temperature output are absent.
+# VOL. The datasheet prints no VOL voltage; the DQ sink-current row (at least 4 mA at 0.4 V) is the nearest printed fact, and the 0.4 V at 4
+# mA value is marked derived.
+# Cross-check: Renode (MIT, Antmicro) has no DS18B20 model; nothing was borrowed.
+[[models]]
+id = "ds18b20_to92"
+kind = "digital"
+description = "Maxim DS18B20 1-Wire digital thermometer in the TO-92 package: VDD supply draw, DQ logic levels and the pin map (the 1-Wire protocol and the temperature output are not modelled)"
+variant_of = "ds18b20"
+
+[models.match]
+value_re = "(?i)^DS18B20(?:(?:\\+|/T&R|\\+T&R|-SL/T&R|-SL\\+T&R)|[UZ](?:\\+|/T&R|\\+T&R)?)?$"
+
+[models.variant]
+orderable_re = "(?i)^DS18B20(?:\\+|/T&R|\\+T&R|-SL/T&R|-SL\\+T&R)?$"
+orderable = ["DS18B20", "DS18B20+", "DS18B20/T&R", "DS18B20+T&R", "DS18B20-SL/T&R", "DS18B20-SL+T&R"]
+package = "TO-92"
+basis = "Ordering Information p.19: DS18B20 in the 3 TO-92 package; Pin Description table p.4"
+
+[models.params]
+warning = "source-bound: the standby VDD current (750 nA typ), the DQ logic levels (local power) and the pin map of the TO-92 package are carried; the 1-Wire protocol and the temperature output are NOT modelled (the sensor-spec format has no 1-Wire bus), so a board's firmware cannot read a temperature from this card; parasite power (VDD grounded, power from the DQ pull-up) is not represented and a grounded VDD pin will look unpowered"
+vih = 2.2       # DC Electrical Characteristics p.2, input logic-high VIH, local power, min column
+vil = 0.8       # DC Electrical Characteristics p.2, input logic-low VIL, max column
+vol = { max = 0.4, unit = "V", conditions = "DQ sinks at least 4 mA at 0.4 V (open drain)", basis = "Derived from the DC Electrical Characteristics p.2 sink current IL, min 4.0 mA at VI/O = 0.4 V (note 4: logic-low voltages are specified at a sink current of 4 mA)" }
+supply_static_ua = 0.75   # DC Electrical Characteristics p.2, standby current IDDS, typ column (750 nA; 1000 nA max; note 7: specified up to +70 C)
+supply_pin = "3"
+gnd_pin = "1"
+
+[models.pins]
+"1" = "gnd"   # GND
+"2" = "dq"   # DQ
+"3" = "vdd"   # VDD
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 5.5
+abs_max_v = 6.0
+basis = "DS18B20 19-7487 Rev 6 DC Electrical Characteristics p.2, supply voltage VDD local power 3.0 V min / 5.5 V max"
+abs_max_basis = "Absolute Maximum Ratings p.2, voltage range on any pin relative to ground -0.5 V to +6.0 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels", "standby_supply_current", "package_pin_maps_to_92_so8_usop8"]
+missing = ["one_wire_bus_protocol_and_rom_commands", "scratchpad_and_temperature_register", "temperature_output_follows_sensor_input", "alarm_search_and_th_tl_registers", "configuration_register_resolution", "parasite_power_mode_vdd_grounded", "conversion_timing", "unique_64_bit_serial_code", "thermometer_error_curve", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf"
+title = "Maxim Integrated DS18B20 Programmable Resolution 1-Wire Digital Thermometer datasheet, 19-7487 Rev 6 (7/19)"
+locator = "Pin configurations p.1; Absolute Maximum Ratings and DC Electrical Characteristics with notes p.2; AC Electrical Characteristics NV memory and AC Electrical Characteristics p.3; Pin Description table p.4; Overview and Operation-Measuring Temperature p.5; Ordering Information p.19 (page numbers are the printed Maxim Integrated page numbers)"
+sha256 = "066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the electrical interface is carried"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "p.2 prints standby current typ 750 nA and max 1000 nA, specified up to +70 C (about 3 uA typ at +125 C); the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "the datasheet prints no VOL voltage, only a sink current of at least 4 mA at 0.4 V; the 0.4 V figure at 4 mA is derived from that row"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "parasite_power"
+reason = "with parasite power VDD must be grounded and the part draws from DQ; the card assumes local power (VDD at 3.0 V to 5.5 V)"
+[[models.source.pinout]]
+package = "3-pin TO-92, bottom view (DS18B20)"
+pins = { "1" = "GND", "2" = "DQ", "3" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD, local power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C"
+basis = "DC Electrical Characteristics p.2, supply voltage local power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Pullup supply voltage, parasite power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C, parasite power"
+basis = "DC Electrical Characteristics p.2, pullup supply voltage VPU parasite power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to ground"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "absolute maximum ratings"
+basis = "Absolute Maximum Ratings p.2, voltage range on any pin, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -10 to +85 C"
+min = -0.5
+max = 0.5
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 0.5 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -30 to +100 C"
+min = -1.0
+max = 1.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 1 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -55 to +125 C"
+min = -2.0
+max = 2.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 2 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-low VIL"
+min = -0.3
+max = 0.8
+unit = "V"
+conditions = "logic-low specified at a sink current of 4 mA"
+basis = "DC Electrical Characteristics p.2, VIL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, local power"
+min = 2.2
+unit = "V"
+conditions = "local power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH local power, min column"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, parasite power"
+min = 3.0
+unit = "V"
+conditions = "parasite power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH parasite power, min column"
+
+[[models.source.characteristic]]
+parameter = "Sink current"
+min = 4.0
+unit = "mA"
+conditions = "VI/O = 0.4 V"
+basis = "DC Electrical Characteristics p.2, IL, min column"
+
+[[models.source.characteristic]]
+parameter = "Standby current"
+typ = 0.75
+max = 1.0
+unit = "uA"
+conditions = "up to +70 C"
+basis = "DC Electrical Characteristics p.2, IDDS 750 nA typ / 1000 nA max, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Active current"
+typ = 1.0
+max = 1.5
+unit = "mA"
+conditions = "VDD = 5 V, during temperature conversions or EEPROM writes"
+basis = "DC Electrical Characteristics p.2, IDD, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ input current"
+typ = 5.0
+unit = "uA"
+conditions = "DQ line high (high-Z)"
+basis = "DC Electrical Characteristics p.2, IDQ, typ column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 12-bit"
+max = 750.0
+unit = "ms"
+conditions = "12-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 9-bit"
+max = 93.75
+unit = "ms"
+conditions = "9-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "NV write cycle time"
+typ = 2.0
+max = 10.0
+unit = "ms"
+conditions = "EEPROM copy"
+basis = "AC Electrical Characteristics NV memory p.3, tWR, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Reset time low"
+min = 480.0
+unit = "us"
+conditions = "1-Wire reset pulse from the host"
+basis = "AC Electrical Characteristics p.3, tRSTL, min column"
+
+[[models.source.characteristic]]
+parameter = "Presence-detect low"
+min = 60.0
+max = 240.0
+unit = "us"
+conditions = "1-Wire presence pulse"
+basis = "AC Electrical Characteristics p.3, tPDLOW, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ pin capacitance"
+max = 25.0
+unit = "pF"
+conditions = "input/output"
+basis = "AC Electrical Characteristics p.3, CIN/OUT, max column"
+
+
+[[models]]
+id = "ds18b20_so8"
+kind = "digital"
+description = "Maxim DS18B20 1-Wire digital thermometer in the SO-8 package: VDD supply draw, DQ logic levels and the pin map (the 1-Wire protocol and the temperature output are not modelled)"
+variant_of = "ds18b20"
+
+[models.match]
+value_re = "(?i)^DS18B20(?:(?:\\+|/T&R|\\+T&R|-SL/T&R|-SL\\+T&R)|[UZ](?:\\+|/T&R|\\+T&R)?)?$"
+
+[models.variant]
+orderable_re = "(?i)^DS18B20Z(?:\\+|/T&R|\\+T&R)?$"
+orderable = ["DS18B20Z", "DS18B20Z+", "DS18B20Z/T&R", "DS18B20Z+T&R"]
+package = "SO-8"
+basis = "Ordering Information p.19: DS18B20Z in the 8 SO package; Pin Description table p.4"
+
+[models.params]
+warning = "source-bound: the standby VDD current (750 nA typ), the DQ logic levels (local power) and the pin map of the SO-8 package are carried; the 1-Wire protocol and the temperature output are NOT modelled (the sensor-spec format has no 1-Wire bus), so a board's firmware cannot read a temperature from this card; parasite power (VDD grounded, power from the DQ pull-up) is not represented and a grounded VDD pin will look unpowered"
+vih = 2.2       # DC Electrical Characteristics p.2, input logic-high VIH, local power, min column
+vil = 0.8       # DC Electrical Characteristics p.2, input logic-low VIL, max column
+vol = { max = 0.4, unit = "V", conditions = "DQ sinks at least 4 mA at 0.4 V (open drain)", basis = "Derived from the DC Electrical Characteristics p.2 sink current IL, min 4.0 mA at VI/O = 0.4 V (note 4: logic-low voltages are specified at a sink current of 4 mA)" }
+supply_static_ua = 0.75   # DC Electrical Characteristics p.2, standby current IDDS, typ column (750 nA; 1000 nA max; note 7: specified up to +70 C)
+supply_pin = "3"
+gnd_pin = "5"
+
+[models.pins]
+"1" = "nc"   # N.C.
+"2" = "nc"   # N.C.
+"3" = "vdd"   # VDD
+"4" = "dq"   # DQ
+"5" = "gnd"   # GND
+"6" = "nc"   # N.C.
+"7" = "nc"   # N.C.
+"8" = "nc"   # N.C.
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 5.5
+abs_max_v = 6.0
+basis = "DS18B20 19-7487 Rev 6 DC Electrical Characteristics p.2, supply voltage VDD local power 3.0 V min / 5.5 V max"
+abs_max_basis = "Absolute Maximum Ratings p.2, voltage range on any pin relative to ground -0.5 V to +6.0 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels", "standby_supply_current", "package_pin_maps_to_92_so8_usop8"]
+missing = ["one_wire_bus_protocol_and_rom_commands", "scratchpad_and_temperature_register", "temperature_output_follows_sensor_input", "alarm_search_and_th_tl_registers", "configuration_register_resolution", "parasite_power_mode_vdd_grounded", "conversion_timing", "unique_64_bit_serial_code", "thermometer_error_curve", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf"
+title = "Maxim Integrated DS18B20 Programmable Resolution 1-Wire Digital Thermometer datasheet, 19-7487 Rev 6 (7/19)"
+locator = "Pin configurations p.1; Absolute Maximum Ratings and DC Electrical Characteristics with notes p.2; AC Electrical Characteristics NV memory and AC Electrical Characteristics p.3; Pin Description table p.4; Overview and Operation-Measuring Temperature p.5; Ordering Information p.19 (page numbers are the printed Maxim Integrated page numbers)"
+sha256 = "066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the electrical interface is carried"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "p.2 prints standby current typ 750 nA and max 1000 nA, specified up to +70 C (about 3 uA typ at +125 C); the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "the datasheet prints no VOL voltage, only a sink current of at least 4 mA at 0.4 V; the 0.4 V figure at 4 mA is derived from that row"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "parasite_power"
+reason = "with parasite power VDD must be grounded and the part draws from DQ; the card assumes local power (VDD at 3.0 V to 5.5 V)"
+[[models.source.pinout]]
+package = "8-pin SO (150 mils, DS18B20Z), top view"
+pins = { "1" = "N.C.", "2" = "N.C.", "3" = "VDD", "4" = "DQ", "5" = "GND", "6" = "N.C.", "7" = "N.C.", "8" = "N.C." }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD, local power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C"
+basis = "DC Electrical Characteristics p.2, supply voltage local power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Pullup supply voltage, parasite power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C, parasite power"
+basis = "DC Electrical Characteristics p.2, pullup supply voltage VPU parasite power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to ground"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "absolute maximum ratings"
+basis = "Absolute Maximum Ratings p.2, voltage range on any pin, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -10 to +85 C"
+min = -0.5
+max = 0.5
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 0.5 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -30 to +100 C"
+min = -1.0
+max = 1.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 1 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -55 to +125 C"
+min = -2.0
+max = 2.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 2 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-low VIL"
+min = -0.3
+max = 0.8
+unit = "V"
+conditions = "logic-low specified at a sink current of 4 mA"
+basis = "DC Electrical Characteristics p.2, VIL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, local power"
+min = 2.2
+unit = "V"
+conditions = "local power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH local power, min column"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, parasite power"
+min = 3.0
+unit = "V"
+conditions = "parasite power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH parasite power, min column"
+
+[[models.source.characteristic]]
+parameter = "Sink current"
+min = 4.0
+unit = "mA"
+conditions = "VI/O = 0.4 V"
+basis = "DC Electrical Characteristics p.2, IL, min column"
+
+[[models.source.characteristic]]
+parameter = "Standby current"
+typ = 0.75
+max = 1.0
+unit = "uA"
+conditions = "up to +70 C"
+basis = "DC Electrical Characteristics p.2, IDDS 750 nA typ / 1000 nA max, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Active current"
+typ = 1.0
+max = 1.5
+unit = "mA"
+conditions = "VDD = 5 V, during temperature conversions or EEPROM writes"
+basis = "DC Electrical Characteristics p.2, IDD, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ input current"
+typ = 5.0
+unit = "uA"
+conditions = "DQ line high (high-Z)"
+basis = "DC Electrical Characteristics p.2, IDQ, typ column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 12-bit"
+max = 750.0
+unit = "ms"
+conditions = "12-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 9-bit"
+max = 93.75
+unit = "ms"
+conditions = "9-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "NV write cycle time"
+typ = 2.0
+max = 10.0
+unit = "ms"
+conditions = "EEPROM copy"
+basis = "AC Electrical Characteristics NV memory p.3, tWR, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Reset time low"
+min = 480.0
+unit = "us"
+conditions = "1-Wire reset pulse from the host"
+basis = "AC Electrical Characteristics p.3, tRSTL, min column"
+
+[[models.source.characteristic]]
+parameter = "Presence-detect low"
+min = 60.0
+max = 240.0
+unit = "us"
+conditions = "1-Wire presence pulse"
+basis = "AC Electrical Characteristics p.3, tPDLOW, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ pin capacitance"
+max = 25.0
+unit = "pF"
+conditions = "input/output"
+basis = "AC Electrical Characteristics p.3, CIN/OUT, max column"
+
+
+[[models]]
+id = "ds18b20_usop8"
+kind = "digital"
+description = "Maxim DS18B20 1-Wire digital thermometer in the uSOP-8 package: VDD supply draw, DQ logic levels and the pin map (the 1-Wire protocol and the temperature output are not modelled)"
+variant_of = "ds18b20"
+
+[models.match]
+value_re = "(?i)^DS18B20(?:(?:\\+|/T&R|\\+T&R|-SL/T&R|-SL\\+T&R)|[UZ](?:\\+|/T&R|\\+T&R)?)?$"
+
+[models.variant]
+orderable_re = "(?i)^DS18B20U(?:\\+|/T&R|\\+T&R)?$"
+orderable = ["DS18B20U", "DS18B20U+", "DS18B20U/T&R", "DS18B20U+T&R"]
+package = "uSOP-8"
+basis = "Ordering Information p.19: DS18B20U in the 8 FSOP package (the Pin Configurations call it uSOP); Pin Description table p.4"
+
+[models.params]
+warning = "source-bound: the standby VDD current (750 nA typ), the DQ logic levels (local power) and the pin map of the uSOP-8 package are carried; the 1-Wire protocol and the temperature output are NOT modelled (the sensor-spec format has no 1-Wire bus), so a board's firmware cannot read a temperature from this card; parasite power (VDD grounded, power from the DQ pull-up) is not represented and a grounded VDD pin will look unpowered"
+vih = 2.2       # DC Electrical Characteristics p.2, input logic-high VIH, local power, min column
+vil = 0.8       # DC Electrical Characteristics p.2, input logic-low VIL, max column
+vol = { max = 0.4, unit = "V", conditions = "DQ sinks at least 4 mA at 0.4 V (open drain)", basis = "Derived from the DC Electrical Characteristics p.2 sink current IL, min 4.0 mA at VI/O = 0.4 V (note 4: logic-low voltages are specified at a sink current of 4 mA)" }
+supply_static_ua = 0.75   # DC Electrical Characteristics p.2, standby current IDDS, typ column (750 nA; 1000 nA max; note 7: specified up to +70 C)
+supply_pin = "8"
+gnd_pin = "4"
+
+[models.pins]
+"1" = "dq"   # DQ
+"2" = "nc"   # N.C.
+"3" = "nc"   # N.C.
+"4" = "gnd"   # GND
+"5" = "nc"   # N.C.
+"6" = "nc"   # N.C.
+"7" = "nc"   # N.C.
+"8" = "vdd"   # VDD
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 5.5
+abs_max_v = 6.0
+basis = "DS18B20 19-7487 Rev 6 DC Electrical Characteristics p.2, supply voltage VDD local power 3.0 V min / 5.5 V max"
+abs_max_basis = "Absolute Maximum Ratings p.2, voltage range on any pin relative to ground -0.5 V to +6.0 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels", "standby_supply_current", "package_pin_maps_to_92_so8_usop8"]
+missing = ["one_wire_bus_protocol_and_rom_commands", "scratchpad_and_temperature_register", "temperature_output_follows_sensor_input", "alarm_search_and_th_tl_registers", "configuration_register_resolution", "parasite_power_mode_vdd_grounded", "conversion_timing", "unique_64_bit_serial_code", "thermometer_error_curve", "thermal_resistance_not_published"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf"
+title = "Maxim Integrated DS18B20 Programmable Resolution 1-Wire Digital Thermometer datasheet, 19-7487 Rev 6 (7/19)"
+locator = "Pin configurations p.1; Absolute Maximum Ratings and DC Electrical Characteristics with notes p.2; AC Electrical Characteristics NV memory and AC Electrical Characteristics p.3; Pin Description table p.4; Overview and Operation-Measuring Temperature p.5; Ordering Information p.19 (page numbers are the printed Maxim Integrated page numbers)"
+sha256 = "066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the electrical interface is carried"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "p.2 prints standby current typ 750 nA and max 1000 nA, specified up to +70 C (about 3 uA typ at +125 C); the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "the datasheet prints no VOL voltage, only a sink current of at least 4 mA at 0.4 V; the 0.4 V figure at 4 mA is derived from that row"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "parasite_power"
+reason = "with parasite power VDD must be grounded and the part draws from DQ; the card assumes local power (VDD at 3.0 V to 5.5 V)"
+[[models.source.pinout]]
+package = "8-pin uSOP (DS18B20U, listed as 8 FSOP in the ordering table), top view"
+pins = { "1" = "DQ", "2" = "N.C.", "3" = "N.C.", "4" = "GND", "5" = "N.C.", "6" = "N.C.", "7" = "N.C.", "8" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD, local power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C"
+basis = "DC Electrical Characteristics p.2, supply voltage local power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Pullup supply voltage, parasite power"
+min = 3.0
+max = 5.5
+unit = "V"
+conditions = "-55 to +125 C, parasite power"
+basis = "DC Electrical Characteristics p.2, pullup supply voltage VPU parasite power, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin relative to ground"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "absolute maximum ratings"
+basis = "Absolute Maximum Ratings p.2, voltage range on any pin, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -10 to +85 C"
+min = -0.5
+max = 0.5
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 0.5 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -30 to +100 C"
+min = -1.0
+max = 1.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 1 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Thermometer error, -55 to +125 C"
+min = -2.0
+max = 2.0
+unit = "C"
+conditions = "3-sigma limits"
+basis = "DC Electrical Characteristics p.2, thermometer error, plus or minus 2 C, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-low VIL"
+min = -0.3
+max = 0.8
+unit = "V"
+conditions = "logic-low specified at a sink current of 4 mA"
+basis = "DC Electrical Characteristics p.2, VIL, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, local power"
+min = 2.2
+unit = "V"
+conditions = "local power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH local power, min column"
+
+[[models.source.characteristic]]
+parameter = "Input logic-high VIH, parasite power"
+min = 3.0
+unit = "V"
+conditions = "parasite power, source current 1 mA"
+basis = "DC Electrical Characteristics p.2, VIH parasite power, min column"
+
+[[models.source.characteristic]]
+parameter = "Sink current"
+min = 4.0
+unit = "mA"
+conditions = "VI/O = 0.4 V"
+basis = "DC Electrical Characteristics p.2, IL, min column"
+
+[[models.source.characteristic]]
+parameter = "Standby current"
+typ = 0.75
+max = 1.0
+unit = "uA"
+conditions = "up to +70 C"
+basis = "DC Electrical Characteristics p.2, IDDS 750 nA typ / 1000 nA max, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Active current"
+typ = 1.0
+max = 1.5
+unit = "mA"
+conditions = "VDD = 5 V, during temperature conversions or EEPROM writes"
+basis = "DC Electrical Characteristics p.2, IDD, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ input current"
+typ = 5.0
+unit = "uA"
+conditions = "DQ line high (high-Z)"
+basis = "DC Electrical Characteristics p.2, IDQ, typ column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 12-bit"
+max = 750.0
+unit = "ms"
+conditions = "12-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "Temperature conversion time, 9-bit"
+max = 93.75
+unit = "ms"
+conditions = "9-bit resolution"
+basis = "AC Electrical Characteristics p.3, tCONV, max column"
+
+[[models.source.characteristic]]
+parameter = "NV write cycle time"
+typ = 2.0
+max = 10.0
+unit = "ms"
+conditions = "EEPROM copy"
+basis = "AC Electrical Characteristics NV memory p.3, tWR, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Reset time low"
+min = 480.0
+unit = "us"
+conditions = "1-Wire reset pulse from the host"
+basis = "AC Electrical Characteristics p.3, tRSTL, min column"
+
+[[models.source.characteristic]]
+parameter = "Presence-detect low"
+min = 60.0
+max = 240.0
+unit = "us"
+conditions = "1-Wire presence pulse"
+basis = "AC Electrical Characteristics p.3, tPDLOW, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "DQ pin capacitance"
+max = 25.0
+unit = "pF"
+conditions = "input/output"
+basis = "AC Electrical Characteristics p.3, CIN/OUT, max column"
+
+
