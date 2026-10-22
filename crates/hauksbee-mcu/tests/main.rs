@@ -50,6 +50,8 @@ mod renode_rp2040;
 mod renode_rp2040_adc;
 #[path = "renode_rp2040_bus.rs"]
 mod renode_rp2040_bus;
+#[path = "renode_rp2040_drive.rs"]
+mod renode_rp2040_drive;
 #[path = "renode_stm32.rs"]
 mod renode_stm32;
 #[path = "renode_stm32_families.rs"]

@@ -1,7 +1,8 @@
-//! An MCU's electrical behaviour as its card states it: the output resistance
-//! of each pin per drive-strength setting, where the firmware's drive-strength
-//! field lives, and the supply and reset-pin thresholds at which the part holds
-//! itself in reset.
+//! An MCU's electrical behaviour as its card states it.
+//!
+//! That is the output resistance of each pin per drive-strength setting, where
+//! the firmware's drive-strength field lives, and the supply and reset-pin
+//! thresholds at which the part holds itself in reset.
 //!
 //! Everything here is datasheet-derived card data. A part whose card states
 //! nothing keeps [`crate::drivers::DEFAULT_RO`] and enforces no reset: the

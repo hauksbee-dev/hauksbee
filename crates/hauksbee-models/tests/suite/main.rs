@@ -34,6 +34,7 @@ mod ina18x_pinouts;
 mod layer_docs;
 mod ldo_logic_cards;
 mod lm1117_cards;
+mod mcu_electrical_cards;
 mod mito_open_part_noise;
 mod module_carrier_resolve;
 mod negative_rail_validation;

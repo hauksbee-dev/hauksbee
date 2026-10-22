@@ -380,14 +380,16 @@ impl OutputDrive {
 }
 
 /// Where the firmware's drive-strength field lives (see
-/// [`ModelEntry::drive_select`]): the field for pin `n` of port `P` is
+/// [`ModelEntry::drive_select`]).
+///
+/// The field for pin `n` of port `P` is
 /// `width` bits at bit `lsb + (n % pins_per_register) * field_pitch_bits` of
 /// the 32-bit word at
 /// `port_bases[P] + (n / pins_per_register) * register_stride`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DriveSelect {
-    /// Port letter (the port letters the SoC descriptor uses) to the address
+    /// Port letter (the port letters the `SoC` descriptor uses) to the address
     /// of the register holding pin 0's field.
     pub port_bases: BTreeMap<String, u32>,
     /// Bytes between consecutive registers of one port.

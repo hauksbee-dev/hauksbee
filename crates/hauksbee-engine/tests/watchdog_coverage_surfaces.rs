@@ -3,11 +3,11 @@
 //!
 //! Two findings, mirroring `adc_dropped` exactly:
 //!
-//!   1. **A watchdog that cannot bite** (`Mcu::watchdog_limitation`). On
-//!      `renode:nrf52840` the watchdog arms, reads back as running with a
-//!      correct 32768 Hz reload, and never fires; on the ESP32 family the
+//!   1. **A watchdog that cannot bite** (`Mcu::watchdog_limitation`). On the
+//!      RP2040 the watchdog is unmeasured; on the ESP32 family the
 //!      timer-group watchdogs are disabled at launch on purpose, because a
-//!      paused guest would trip them. Either way firmware that HANGS runs
+//!      paused guest would trip them. (The nRF52840 and STM32F103 watchdogs
+//!      bite under Renode and carry no limitation.) Either way firmware that HANGS runs
 //!      forever here, so every assertion about behaviour after a hang is
 //!      fiction and a green run vouches for nothing on the recovery path.
 //!
@@ -191,16 +191,20 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
     assert!(v["cosim"]["timing_limitations"].is_null());
 }
 
-/// Two live-backend findings against the same `renode:stm32_bluepill_demo`
-/// (an F103), each proven byte-for-byte identical across all four surfaces
-/// (JSON note, `CosimJson` field, the default text summary, and `--plain`);
-/// two surfaces wording the same gap differently is the failure this
-/// mirroring exists to avoid.
+/// A live-backend limitation against `renode:stm32_bluepill_demo` (an F103),
+/// proven byte-for-byte identical across all four surfaces (JSON note,
+/// `CosimJson` field, the default text summary, and `--plain`); two surfaces
+/// wording the same gap differently is the failure this mirroring exists to
+/// avoid.
 ///
-/// 1. **A watchdog that cannot bite** (`watchdog_limitations`): the board's
-///    watchdog arms and never fires under Renode.
-/// 2. **A known timing bias** (`timing_limitations`): the F103's `TIMx` blocks
-///    run at the post-PLL 72 MHz against the 8 MHz reset-default core.
+/// **A known timing bias** (`timing_limitations`): the F103's `TIMx` blocks run
+/// at the post-PLL 72 MHz against the 8 MHz reset-default core.
+///
+/// The F103's independent watchdog used to be the other case here ("arms and
+/// never fires"); it bites now (`renode_watchdog.rs`), so the same run must carry
+/// NO watchdog limitation. A part that still cannot bite, such as the RP2040 or
+/// the ESP32 family, reaches the same surfaces through the shared formatter,
+/// which `scheduler.rs` covers in-crate.
 ///
 /// Skips without Renode or the STM32 firmware, like every other `renode_*` test.
 #[cfg(feature = "renode")]
@@ -229,18 +233,22 @@ fn known_backend_limitations_reach_all_four_surfaces() {
     };
 
     // (field, "no limitation found" message, substring the sentence must carry)
-    let cases = [
-        (
-            "watchdog_limitations",
-            "this backend's watchdog cannot bite, so it must state the limitation",
-            "watchdog",
-        ),
-        (
-            "timing_limitations",
-            "the F103 declares a TIMx timing limitation, so it must be stated",
-            "TIMx",
-        ),
-    ];
+    let cases = [(
+        "timing_limitations",
+        "the F103 declares a TIMx timing limitation, so it must be stated",
+        "TIMx",
+    )];
+
+    let out = args(&["--json"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("--json object");
+    assert!(
+        v["cosim"]["watchdog_limitations"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "the F103 watchdog bites, so no limitation may be claimed: {}",
+        v["cosim"]["watchdog_limitations"]
+    );
 
     for (field, missing_msg, needle) in cases {
         let out = args(&["--json"]);

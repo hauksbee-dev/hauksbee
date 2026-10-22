@@ -27,13 +27,23 @@
 //! is a boot: the first is the power-on boot, the host's own resets are
 //! counted as they are asked for, and every other entry is a reboot the
 //! firmware earned (a starved watchdog, or any reset source Renode models).
-//! A software reset the firmware requested itself (`SYSRESETREQ`) is told
-//! apart by a watchpoint on `AIRCR` and not counted as a watchdog bite.
+//!
+//! Known limit: a software reset the firmware requests itself
+//! (`NVIC_SystemReset`, `AIRCR.SYSRESETREQ`) is indistinguishable from a
+//! watchdog bite here and is counted with them. A Renode watchpoint on `AIRCR`
+//! installs without error but never fires for core accesses (measured on the
+//! STM32F103: 129 reboots, 0 watchpoint hits), so the two cannot be told apart.
 
 use super::{parse_u64, RenodeBackend};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Distinct file names for the generated macro scripts of one process.
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The CPU-name placeholder descriptor commands carry.
+const CPU_PLACEHOLDER: &str = "{cpu}";
 
 /// Names a firmware's reset entry goes by, strongest first.
 const RESET_ENTRY_SYMBOLS: [&str; 5] = [
@@ -44,15 +54,9 @@ const RESET_ENTRY_SYMBOLS: [&str; 5] = [
     "_start",
 ];
 
-/// Cortex-M `SCB->AIRCR`: a write with the key `0x05FA` and `SYSRESETREQ`
-/// (bit 2) is the firmware asking for a reset.
-const AIRCR: u32 = 0xE000_ED0C;
-
 /// Python counter of reset-entry executions, shared through `__builtin__`
 /// between the CPU hook and the Monitor's `python` command.
 const BOOT_KEY: &str = "hkb_boots";
-/// Python counter of `SYSRESETREQ` writes.
-const SWRESET_KEY: &str = "hkb_swresets";
 
 /// Reboot bookkeeping for one Renode machine.
 #[derive(Debug, Default)]
@@ -64,20 +68,17 @@ pub(super) struct RebootWatch {
     counting: bool,
     /// Reset-entry executions seen at the last read.
     boots: u64,
-    /// `SYSRESETREQ` writes seen at the last read.
-    software_resets: u64,
     /// Resets the host asked for through [`RenodeBackend::reset_core`].
     host_resets: u64,
 }
 
 impl RebootWatch {
     /// Reboots nobody asked for: reset-entry executions beyond the power-on
-    /// boot, less the host's own resets and the firmware's own software resets.
+    /// boot, less the host's own resets.
     pub(super) const fn unrequested(&self) -> u64 {
         self.boots
             .saturating_sub(1)
             .saturating_sub(self.host_resets)
-            .saturating_sub(self.software_resets)
     }
 
     /// Whether this backend can say how many reboots happened.
@@ -109,7 +110,6 @@ impl RenodeBackend {
             );
             if self.monitor.run(&hook).is_ok() {
                 self.reboots.counting = true;
-                self.install_software_reset_watch();
             }
         }
     }
@@ -132,11 +132,10 @@ impl RenodeBackend {
         let cpu = self.config.cpu.clone();
         let mut body = format!("sysbus {loader} @{abs}\n");
         for cmd in &self.config.post_load_setup {
-            body.push_str(&cmd.replace("{cpu}", &cpu));
+            body.push_str(&cmd.replace(CPU_PLACEHOLDER, &cpu));
             body.push('\n');
         }
         let script = format!("macro reset\n\"\"\"\n{body}\"\"\"\n");
-        static SEQ: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "hauksbee-renode-reset-{}-{}.resc",
             std::process::id(),
@@ -167,22 +166,7 @@ impl RenodeBackend {
         (word != 0).then_some(word & !1)
     }
 
-    /// Count writes that ask the core for a software reset (Cortex-M only), so
-    /// a firmware's own `NVIC_SystemReset` is not reported as a watchdog bite.
-    fn install_software_reset_watch(&mut self) {
-        if self.config.expected_e_machine != crate::elf::EM_ARM {
-            return;
-        }
-        let hook = format!(
-            "sysbus AddWatchpointHook 0x{AIRCR:X} Word Write \"import __builtin__; \
-             __builtin__.{SWRESET_KEY} = getattr(__builtin__, '{SWRESET_KEY}', 0) + \
-             (1 if (value >> 16) == 0x05FA and (value & 4) else 0)\""
-        );
-        // A part with no watchpoint support simply cannot tell the two apart.
-        let _ = self.monitor.run(&hook);
-    }
-
-    /// Read both counters after a run. Cheap when counting is not installed.
+    /// Read the boot counter after a run. Cheap when counting is not installed.
     pub(super) fn poll_reboots(&mut self) {
         if !self.reboots.counting {
             return;
@@ -197,9 +181,6 @@ impl RenodeBackend {
         };
         if let Some(n) = read(&mut self.monitor, BOOT_KEY) {
             self.reboots.boots = n;
-        }
-        if let Some(n) = read(&mut self.monitor, SWRESET_KEY) {
-            self.reboots.software_resets = n;
         }
     }
 

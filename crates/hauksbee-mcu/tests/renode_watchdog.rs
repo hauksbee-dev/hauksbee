@@ -15,8 +15,9 @@ use std::sync::{Arc, Mutex};
 const CHUNK_US: u32 = 1_000;
 const WINDOW_MS: u32 = 400;
 
-/// Rising edges of `pin` seen over `WINDOW_MS`, with the chunk index of each.
-fn rising_edges(cfg: RenodeConfig, elf: &str, pin: PinId) -> Option<Vec<u32>> {
+/// Rising edges of `pin` seen over `WINDOW_MS` (the chunk index of each), plus
+/// the backend's count of reboots nobody asked for.
+fn run_window(cfg: RenodeConfig, elf: &str, pin: PinId) -> Option<(Vec<u32>, u64)> {
     if !crate::support::renode_or_skip() {
         return None;
     }
@@ -37,48 +38,56 @@ fn rising_edges(cfg: RenodeConfig, elf: &str, pin: PinId) -> Option<Vec<u32>> {
         *chunk.lock().unwrap() = i;
     }
     let seen = edges.lock().unwrap().clone();
-    println!("{elf}: rising edges at chunks {seen:?}");
-    Some(seen)
+    let bites = mcu.watchdog_resets();
+    println!("{elf}: rising edges at chunks {seen:?}, watchdog resets {bites}");
+    Some((seen, bites))
 }
 
 #[test]
 fn nrf52840_starved_watchdog_reboots_the_core() {
     let pin = PinId { port: '0', bit: 13 };
-    let Some(seen) = rising_edges(RenodeConfig::nrf52840(), "nrf52840_wdt.elf", pin) else {
+    let Some((seen, bites)) = run_window(RenodeConfig::nrf52840(), "nrf52840_wdt.elf", pin) else {
         return;
     };
     assert!(
         seen.len() >= 4,
         "a starved 50 ms nRF52840 WDT must reboot the core repeatedly in {WINDOW_MS} ms: {seen:?}"
     );
+    assert!(bites >= 4, "the backend counts the bites: {bites}");
 }
 
 #[test]
 fn nrf52840_fed_watchdog_does_not_reboot() {
     let pin = PinId { port: '0', bit: 13 };
-    let Some(seen) = rising_edges(RenodeConfig::nrf52840(), "nrf52840_wdt_fed.elf", pin) else {
+    let Some((seen, bites)) = run_window(RenodeConfig::nrf52840(), "nrf52840_wdt_fed.elf", pin)
+    else {
         return;
     };
     assert_eq!(seen.len(), 1, "a fed watchdog must not reboot: {seen:?}");
+    assert_eq!(bites, 0, "a fed watchdog is not counted as a bite");
 }
 
 #[test]
 fn stm32f103_starved_watchdog_reboots_the_core() {
     let pin = PinId { port: 'C', bit: 13 };
-    let Some(seen) = rising_edges(RenodeConfig::stm32f103(), "stm32f103_wdt.elf", pin) else {
+    let Some((seen, bites)) = run_window(RenodeConfig::stm32f103(), "stm32f103_wdt.elf", pin)
+    else {
         return;
     };
     assert!(
         seen.len() >= 4,
         "a starved 50 ms IWDG must reboot the core repeatedly in {WINDOW_MS} ms: {seen:?}"
     );
+    assert!(bites >= 4, "the backend counts the bites: {bites}");
 }
 
 #[test]
 fn stm32f103_fed_watchdog_does_not_reboot() {
     let pin = PinId { port: 'C', bit: 13 };
-    let Some(seen) = rising_edges(RenodeConfig::stm32f103(), "stm32f103_wdt_fed.elf", pin) else {
+    let Some((seen, bites)) = run_window(RenodeConfig::stm32f103(), "stm32f103_wdt_fed.elf", pin)
+    else {
         return;
     };
     assert_eq!(seen.len(), 1, "a fed watchdog must not reboot: {seen:?}");
+    assert_eq!(bites, 0, "a fed watchdog is not counted as a bite");
 }

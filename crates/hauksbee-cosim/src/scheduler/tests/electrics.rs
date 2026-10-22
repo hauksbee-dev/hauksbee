@@ -80,7 +80,13 @@ fn sched_with(
     for &(name, node) in nets {
         add_res(&mut circuit, &format!("Rleak_{name}"), node, GND, 1e9);
     }
-    let bound = bound_board("electrics", circuit, net_nodes.clone(), Vec::new(), Vec::new());
+    let bound = bound_board(
+        "electrics",
+        circuit,
+        net_nodes.clone(),
+        Vec::new(),
+        Vec::new(),
+    );
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
     let nodes: Vec<_> = pins
         .iter()
@@ -157,7 +163,10 @@ fn drive_strength_follows_the_setting_the_firmware_programmed() {
     fire_edge(&sched, ('A', 0), false);
     sched.step(1e-3);
     let low = sched.net_voltage("LED").expect("LED solved");
-    assert!(low < 0.05, "driving low into a load to ground is ~0 V, got {low}");
+    assert!(
+        low < 0.05,
+        "driving low into a load to ground is ~0 V, got {low}"
+    );
 }
 
 #[test]
@@ -195,7 +204,10 @@ fn an_open_drain_setting_floats_the_high_level() {
     fire_edge(&sched, ('A', 0), true);
     sched.step(1e-3);
     let high = sched.net_voltage("BUS").expect("BUS solved");
-    assert!(high > 3.0, "an open-drain high is released to the pull-up, got {high} V");
+    assert!(
+        high > 3.0,
+        "an open-drain high is released to the pull-up, got {high} V"
+    );
     fire_edge(&sched, ('A', 0), false);
     sched.step(1e-3);
     let low = sched.net_voltage("BUS").expect("BUS solved");
@@ -249,7 +261,10 @@ fn a_supply_dip_below_the_brownout_threshold_resets_the_core() {
         ..McuElectrical::default()
     };
     let (mut sched, h) = sched_with(c, &[("VDD", vdd)], &[], &[("vdd", "VDD")], electrical);
-    assert!(sched.chunk_s <= 1.0e-3 + 1e-12, "the test steps 1 ms chunks");
+    assert!(
+        sched.chunk_s <= 1.0e-3 + 1e-12,
+        "the test steps 1 ms chunks"
+    );
     // 3.3 V, dipping to 1.0 V from 3.5 ms to 7.5 ms.
     let runs = run_scripted(&mut sched, &h, 20, src, |t| {
         if (0.0035..0.0075).contains(&t) {
@@ -272,7 +287,10 @@ fn a_supply_dip_below_the_brownout_threshold_resets_the_core() {
     );
     // The supply is back at 7.6 ms and the part stays in reset for the
     // 2.5 ms power-on temporization on top of that.
-    assert!(end >= 0.0075 + 0.0025 - 1e-9, "temporization honoured: {ep:?}");
+    assert!(
+        end >= 0.0075 + 0.0025 - 1e-9,
+        "temporization honoured: {ep:?}"
+    );
     assert!(ep.rebooted, "the core is rebooted on release: {ep:?}");
     assert!(*h.was_reset.lock().unwrap(), "Mcu::reset was called");
 
@@ -282,7 +300,10 @@ fn a_supply_dip_below_the_brownout_threshold_resets_the_core() {
         "the core does not advance while held ({held_chunks} held chunks of {runs:?})"
     );
     assert!(runs.iter().take(3).all(|&us| us > 0), "runs before the dip");
-    assert!(runs.last().is_some_and(|&us| us > 0), "runs again after release");
+    assert!(
+        runs.last().is_some_and(|&us| us > 0),
+        "runs again after release"
+    );
 
     let messages = coverage_limitation_messages(&sched);
     assert!(
@@ -343,7 +364,7 @@ fn a_slow_rc_on_the_reset_pin_holds_the_core_until_it_rises_past_vih() {
         "releases only after the RC has climbed past VIH, later than the button: {ep:?}"
     );
     assert!(ep.rebooted && *h.was_reset.lock().unwrap());
-    assert!(runs.iter().any(|&us| us == 0), "{runs:?}");
+    assert!(runs.contains(&0), "{runs:?}");
 }
 
 #[test]

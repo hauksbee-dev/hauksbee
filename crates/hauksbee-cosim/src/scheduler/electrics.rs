@@ -71,6 +71,10 @@ pub struct ResetEpisode {
 }
 
 /// Hysteretic reset state for one MCU.
+// Five independent latches (pin, supply, supply-seen-up, core-ran, reboot
+// refused) that change on different events; an enum of their 32 combinations
+// would be harder to read than the flags.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Default)]
 pub(super) struct ResetGate {
     pin_low: bool,
@@ -126,7 +130,7 @@ impl ResetGate {
                 if self.supply_low {
                     let deadline = *self
                         .release_deadline
-                        .get_or_insert(t + spec.release_delay_s.unwrap_or(0.0));
+                        .get_or_insert_with(|| t + spec.release_delay_s.unwrap_or(0.0));
                     if t >= deadline {
                         self.supply_low = false;
                         self.release_deadline = None;
@@ -196,9 +200,7 @@ impl LiveMcu {
     /// resistance of the selected setting at that level, and a floating pin on
     /// a level the setting does not drive (an open-drain mode's high).
     pub(super) fn drive_pin(&mut self, circuit: &mut Circuit, pin: (char, u8), level: bool) {
-        let stage = self
-            .drive_row(pin)
-            .map(|row| row.drive(level, DEFAULT_RO));
+        let stage = self.drive_row(pin).map(|row| row.drive(level, DEFAULT_RO));
         let high_v = self.logic_high_v;
         let Some(drv) = self.binding.gpio_drivers.get_mut(&pin) else {
             return;

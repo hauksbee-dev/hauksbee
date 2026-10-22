@@ -1559,7 +1559,7 @@ mod tests {
             supply_stand_in: None,
             min_supply_v: None,
             supply_floors: HashMap::new(),
-            electrical: Default::default(),
+            electrical: crate::mcu_electrical::McuElectrical::default(),
         };
         let dac = DacBinding {
             reference: "U9".to_string(),
