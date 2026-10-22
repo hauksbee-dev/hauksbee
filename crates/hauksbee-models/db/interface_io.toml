@@ -44,7 +44,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "3"   # VCCA
 gnd_pin = "2"
 
@@ -155,7 +155,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "3"   # VCCA
 gnd_pin = "2"
 
@@ -266,7 +266,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "3"   # VCCA
 gnd_pin = "2"
 
@@ -377,7 +377,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "1"   # VCCA
 gnd_pin = "4"
 
@@ -488,7 +488,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "1"   # VCCA
 gnd_pin = "4"
 
@@ -599,7 +599,7 @@ vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 ro = 10000.0       # internal 10 kOhm pull-up to the port's VCC, the DC source impedance (Feature Description, Pullup or Pulldown Resistors on I/O Lines); no tolerance printed
 ro_strong = 10000.0  # same resistor: the datasheet prints no separate strong corner
-supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VO = open, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
+supply_static_ua = 2.4   # ICCA max, VCCA 1.65 V to VCCB, VCCB 2.3 V to 5.5 V, VI = VCCI or GND, IO = 0, 5.5 Electrical Characteristics ICCA; ICCB (12 uA max) is not stamped
 supply_pin = "C1"   # VCCA
 gnd_pin = "B1"
 
