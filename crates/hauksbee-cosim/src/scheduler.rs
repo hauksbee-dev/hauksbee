@@ -3665,11 +3665,9 @@ impl Scheduler {
                     f64::from(u32::try_from(micros).unwrap_or(u32::MAX)) * 1e-6,
                 )
             });
-            let run = if held || boot_held {
-                Ok(())
-            } else {
-                m.core.run_micros(micros)
-            };
+            let run = m
+                .core
+                .run_micros(if held || boot_held { 0 } else { micros });
             if let Err(e) = run {
                 // The MCU backend refused to advance (a crashed core, a
                 // transport error, a HALT). The firmware side of this chunk did

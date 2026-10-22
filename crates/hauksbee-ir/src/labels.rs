@@ -844,21 +844,9 @@ fn run_setup_rows() -> Vec<Label> {
     out
 }
 
-/// Every row in precedence order, duplicates included.
-fn raw_entries() -> Vec<Label> {
+/// The model tier, validation, layer and kind rows.
+fn model_rows() -> Vec<Label> {
     let mut out = Vec::new();
-    for &(id, label, explain) in CAPABILITIES {
-        out.push(row(id, GROUP_CAPABILITY, label, Some(explain)));
-    }
-    for &(id, term, label, explain) in COVERAGE_STAGES {
-        match term {
-            Some(term) => {
-                let e = term.entry();
-                out.push(row(id, GROUP_COVERAGE_STAGE, e.label, Some(e.short)));
-            }
-            None => out.push(row(id, GROUP_COVERAGE_STAGE, label, Some(explain))),
-        }
-    }
     for &(tier, label, explain) in MODEL_TIERS {
         out.push(row(tier.as_str(), GROUP_MODEL_TIER, label, Some(explain)));
     }
@@ -886,6 +874,25 @@ fn raw_entries() -> Vec<Label> {
             out.push(row(&compact, GROUP_MODEL_KIND, label, Some(explain)));
         }
     }
+    out
+}
+
+/// Every row in precedence order, duplicates included.
+fn raw_entries() -> Vec<Label> {
+    let mut out = Vec::new();
+    for &(id, label, explain) in CAPABILITIES {
+        out.push(row(id, GROUP_CAPABILITY, label, Some(explain)));
+    }
+    for &(id, term, label, explain) in COVERAGE_STAGES {
+        match term {
+            Some(term) => {
+                let e = term.entry();
+                out.push(row(id, GROUP_COVERAGE_STAGE, e.label, Some(e.short)));
+            }
+            None => out.push(row(id, GROUP_COVERAGE_STAGE, label, Some(explain))),
+        }
+    }
+    out.extend(model_rows());
     out.extend(run_setup_rows());
     for (id, label, explain) in crate::boot::outcome_rows() {
         out.push(row(id, GROUP_BOOT_OUTCOME, label, Some(explain)));

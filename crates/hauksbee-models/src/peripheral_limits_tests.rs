@@ -1,5 +1,7 @@
-//! Tests for [`super`]: the limit tables on the built-in cards, and the
-//! arithmetic read from them.
+//! Tests for [`super`]: the bus and peripheral limit tables carried on the
+//! built-in cards, read back from the shipped TOML exactly as the binder sees
+//! them, and the arithmetic built on them (baud error against a clock, the
+//! fastest rate a peripheral accepts) so a wrong row fails here first.
 
 use super::*;
 use crate::schema::{ComponentKind, DbFile, ModelEntry, ParamValue};
