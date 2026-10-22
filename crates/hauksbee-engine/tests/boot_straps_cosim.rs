@@ -374,6 +374,9 @@ mod rp2040 {
         } else {
             (2, "+3V3")
         };
+        // The 12 MHz crystal the SDK's start-up waits for: without it the
+        // firmware stalls before `main`, as on silicon.
+        let (xtal_pads, xtal_parts) = crate::support::rp2040_crystal(1, 6, 7, 8);
         format!(
             r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -382,6 +385,9 @@ mod rp2040 {
   (net 3 "LED")
   (net 4 "UART_TX")
   (net 5 "RUN")
+  (net 6 "XIN")
+  (net 7 "XOUT")
+  (net 8 "XTAL_B")
 
   (module Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm (layer F.Cu)
     (at 100 100)
@@ -390,6 +396,7 @@ mod rp2040 {
     (pad 1 smd rect (at -3 0) (net 2 "+3V3"))
     (pad 2 smd rect (at -3 1) (net 4 "UART_TX"))
     (pad 10 smd rect (at -3 2) (net 2 "+3V3"))
+    {xtal_pads}
     (pad 22 smd rect (at -3 3) (net 2 "+3V3"))
     (pad 26 smd rect (at -3 4) (net 5 "RUN"))
     (pad 33 smd rect (at -3 5) (net 2 "+3V3"))
@@ -420,6 +427,7 @@ mod rp2040 {
     (pad 1 thru_hole circle (at 0 0) (net 5 "RUN"))
     (pad 2 thru_hole circle (at 2 0) (net {run_pull_net} "{run_pull_name}"))
   )
+{xtal_parts}
 )"#
         )
     }
@@ -503,5 +511,8 @@ mod rp2040 {
         let boot = r.evidence.boot.as_ref().unwrap();
         assert_eq!(boot.outcome, BootOutcome::UserFlash, "{}", boot.summary);
         assert!(boot.user_firmware_runs);
+        // The board carries the reference-design crystal, so the SDK's wait for
+        // the oscillator ends and the firmware really runs.
+        assert!(r.evidence.executed, "{:?}", r.evidence);
     }
 }

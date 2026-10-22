@@ -86,14 +86,30 @@ fn bench_stm32_blinky_reports_pc13_toggling() {
     );
 }
 
-/// The RP2040 on a bare QFN-56 board: UART0 TX on GP0 (pad 2), the on-board LED
-/// on GP25 (pad 37), every supply on one 3.3 V rail.
-const RP2040_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+/// The RP2040 on a minimal QFN-56 board: UART0 TX on GP0 (pad 2), the on-board
+/// LED on GP25 (pad 37), every supply on one 3.3 V rail.
+///
+/// `crystal` fits the 12 MHz crystal the RP2040 hardware design guide's minimal
+/// design puts on XIN/XOUT (pads 20 and 21): 15 pF load capacitors to ground and
+/// a 1 kOhm series resistor on XOUT. The Pico SDK's start-up code enables the
+/// crystal oscillator and waits for it to report stable, which on silicon never
+/// happens when nothing is fitted, so the firmware only runs on a board with it.
+fn rp2040_board(crystal: bool) -> String {
+    let (xtal_pads, crystal_parts) = if crystal {
+        crate::support::rp2040_crystal(1, 5, 6, 7)
+    } else {
+        (String::new(), String::new())
+    };
+    format!(
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 2 "+3V3")
   (net 3 "UART_TX")
   (net 4 "LED")
+  (net 5 "XIN")
+  (net 6 "XOUT")
+  (net 7 "XTAL_B")
 
   (module Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm (layer F.Cu)
     (at 100 100)
@@ -103,6 +119,7 @@ const RP2040_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
     (pad 2  smd rect (at -3 1) (net 3 "UART_TX"))
     (pad 10 smd rect (at -3 2) (net 2 "+3V3"))
     (pad 19 smd rect (at -3 3) (net 1 "GND"))
+    {xtal_pads}
     (pad 22 smd rect (at -3 4) (net 2 "+3V3"))
     (pad 23 smd rect (at -3 5) (net 2 "+3V3"))
     (pad 26 smd rect (at -3 6) (net 2 "+3V3"))
@@ -126,8 +143,11 @@ const RP2040_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
     (pad 1 smd rect (at 0 0) (net 4 "LED"))
     (pad 2 smd rect (at 2 0) (net 1 "GND"))
   )
+{crystal_parts}
 )
-"#;
+"#
+    )
+}
 
 #[test]
 fn bench_rp2040_blink_uart_reports_its_first_uart_line() {
@@ -138,7 +158,7 @@ fn bench_rp2040_blink_uart_reports_its_first_uart_line() {
     );
 
     // 1.5 s: the boot ROM, the SDK runtime and the first banner.
-    let engine = run(RP2040_BOARD, &fw, 150);
+    let engine = run(&rp2040_board(true), &fw, 150);
     let bench = engine.scheduler().bench_report();
     dump("bench-rp2040-blink-uart", &bench);
 
@@ -177,6 +197,52 @@ fn bench_rp2040_blink_uart_reports_its_first_uart_line() {
         "{:?}",
         bench.bus_log
     );
+}
+
+/// The same firmware on the same board with no crystal on XIN/XOUT: the SDK's
+/// wait for the crystal oscillator never ends, as on silicon, and the run must
+/// say so rather than show a silent core.
+#[test]
+fn bench_rp2040_without_a_crystal_says_the_oscillator_never_became_ready() {
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
+    let fw = hauksbee_testkit::skip_none!(
+        crate::support::testdata("firmware/rp2040_blink_uart/blink_uart.elf"),
+        "blink_uart.elf not built"
+    );
+
+    // 0.2 s is long past the start-up wait on a board that has the crystal.
+    let engine = run(&rp2040_board(false), &fw, 20);
+    let bench = engine.scheduler().bench_report();
+    dump("bench-rp2040-no-crystal", &bench);
+
+    let mcu = bench.mcus.first().expect("the MCU has a bench row");
+    assert!(
+        mcu.uarts.iter().all(|u| u.bytes == 0),
+        "no banner can print while the oscillator is not ready: {:?}",
+        mcu.uarts
+    );
+    assert!(
+        mcu.headline.contains("no crystal or oscillator fitted"),
+        "the headline names the missing crystal: {}",
+        mcu.headline
+    );
+    let evidence = engine
+        .scheduler()
+        .execution_evidence()
+        .first()
+        .expect("the MCU has execution evidence");
+    assert!(!evidence.executed, "{evidence:?}");
+    assert!(!evidence.firmware_pass_eligible, "{evidence:?}");
+    assert!(
+        evidence
+            .blockers
+            .iter()
+            .any(|b| b.contains("fits no crystal or oscillator")),
+        "the blocker names the cause: {:?}",
+        evidence.blockers
+    );
+    let text = hauksbee_cosim::observe::bench::render_text(&bench);
+    assert!(text.contains("no crystal or oscillator fitted"), "{text}");
 }
 
 #[test]

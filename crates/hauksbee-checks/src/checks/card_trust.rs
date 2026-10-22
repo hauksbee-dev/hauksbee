@@ -47,8 +47,6 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::RequiredPinBias
         | LintCheck::SupplyCapacitance
         | LintCheck::HoldUpDroop
-        | LintCheck::SignalDirection
-        | LintCheck::SwitchShort
         | LintCheck::PinMuxCapability => Some(Basis::Card),
         // Read from the schematic, the layout or the netlist alone.
         LintCheck::MissingI2cPullup
@@ -67,7 +65,6 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::MissingDecoupling
         | LintCheck::GroundIsland
         | LintCheck::UnwiredConnector
-        | LintCheck::DebugHeaderPinout
         | LintCheck::LedReversed
         | LintCheck::SiblingMismatch
         | LintCheck::UnlimitedBaseDrive
@@ -77,7 +74,10 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::DiodeReversed
         | LintCheck::PolarisedCapReversed
         | LintCheck::RailUnpowered
-        | LintCheck::DatasheetMismatch => None,
+        | LintCheck::DatasheetMismatch
+        | LintCheck::SignalDirection
+        | LintCheck::DebugHeaderPinout
+        | LintCheck::SwitchShort => None,
     }
 }
 

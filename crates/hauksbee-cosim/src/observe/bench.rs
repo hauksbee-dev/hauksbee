@@ -22,6 +22,12 @@ use crate::execution::{ExecutionEvidence, PARK_MAX_DISTINCT_PCS, PARK_MIN_SAMPLE
 /// run (and at least two chunks).
 const QUIET_FRACTION: f64 = 0.25;
 
+/// The headline words for a core that never started because the firmware is
+/// waiting for an external oscillator the board does not fit (the full sentence
+/// is the execution evidence's blocker).
+const STALLED_ON_CLOCK: &str =
+    "no sign the firmware ran: no crystal or oscillator fitted, so the wait for the external oscillator never ends";
+
 /// What the scheduler knows about one MCU that the recorder does not.
 #[derive(Debug, Clone, Default)]
 pub struct McuContext {
@@ -205,6 +211,8 @@ fn core_state(
     let Some(pc) = ev.last_pc else {
         let words = if ev.executed {
             "running"
+        } else if ev.stalled_on_external_clock {
+            STALLED_ON_CLOCK
         } else {
             "no sign the firmware ran"
         };
@@ -249,14 +257,21 @@ fn core_state(
             || "never produced output".to_string(),
             |t| format!("quiet since {}", fmt_duration(t)),
         );
+        let why = if !ev.executed && ev.stalled_on_external_clock {
+            format!("; {STALLED_ON_CLOCK}")
+        } else {
+            String::new()
+        };
         return (
             CoreState::Parked,
             Some(site()),
-            format!("parked at {at} ({since})"),
+            format!("parked at {at} ({since}){why}"),
         );
     }
     if ev.executed {
         (CoreState::Running, None, "running".into())
+    } else if ev.stalled_on_external_clock {
+        (CoreState::Unknown, None, STALLED_ON_CLOCK.into())
     } else {
         (CoreState::Unknown, None, "no sign the firmware ran".into())
     }
@@ -601,6 +616,7 @@ mod tests {
             supply_valid: crate::execution::Observed::Yes,
             supply_v: Some(3.3),
             clock: hauksbee_bind::mcu_clock::McuClock::default(),
+            external_clock_modelled: false,
         };
         ExecutionEvidence::new(
             "U1",

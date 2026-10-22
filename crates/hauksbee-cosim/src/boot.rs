@@ -443,8 +443,10 @@ pub fn annotate(evidence: &mut crate::execution::ExecutionEvidence, state: &Boot
     evidence.blockers.retain(|b| {
         !(b.starts_with("the core never reached")
             || b.starts_with("no evidence the firmware executed")
-            || b.starts_with("the board held the reset line"))
+            || b.starts_with("the board held the reset line")
+            || b.starts_with(crate::execution::EXTERNAL_CLOCK_STALL_PREFIX))
     });
+    evidence.stalled_on_external_clock = false;
     evidence
         .blockers
         .insert(0, format!("boot straps: {}.", decision.summary));
