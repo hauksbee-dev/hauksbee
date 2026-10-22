@@ -315,7 +315,7 @@ describe("table completions", () => {
     expect(items.find((i) => i.label === "[[assert]]")?.insertText).toBe(
       '[[assert]]\nkind = "${1|voltage,uart,toggle,no_faults,max_current,max_temp,peripheral,' +
         'rail_window,protection_trip,boot_coverage,phase_margin,ac_gain,hwtrace,' +
-        'model_coverage,pulse_width,logic_level,fires,increases,decreases|}"'
+        'model_coverage,pulse_width,logic_level,fires,increases,decreases,bus,resets,reaches,uart_baud|}"'
     );
     // ...and the scaffold is the table's REQUIRED keys, in Rust field order, so
     // choosing `[[supply]]` leaves a block to fill in rather than three field

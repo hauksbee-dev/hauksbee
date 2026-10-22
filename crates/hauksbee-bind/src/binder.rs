@@ -2817,7 +2817,7 @@ fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
 /// The names a pad's printed function lists, whole string first. A GPIO name
 /// that follows an underscore (`RTC_GPIO4`, `LP_GPIO4`, `RTC_IO4`) is the
 /// low-power domain's numbering, which matches the pad's GPIO on some chips
-/// (ESP32-S3 RTC_GPIO4 is GPIO4, ESP32-C6 LP_GPIO4 is GPIO4) and not on others
+/// (ESP32-S3 `RTC_GPIO4` is GPIO4, ESP32-C6 `LP_GPIO4` is GPIO4) and not on others
 /// (the ESP32 pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34). The name alone can't
 /// tell which, so it is never offered as a bare `GPIOn`; those chips also print
 /// the plain `GPIOn` on the pad. `ADC1_CHn` and `TOUCHn` name no GPIO.
