@@ -60,6 +60,7 @@ pub mod elf;
 #[cfg(any(feature = "renode", feature = "qemu"))]
 mod external;
 pub mod hostserial;
+pub mod periph_snapshot;
 pub mod traits;
 
 #[cfg(feature = "renode")]
@@ -173,7 +174,7 @@ pub fn validate_firmware_format(path: &Path) -> anyhow::Result<()> {
 pub use avr::AvrMcu;
 
 #[cfg(feature = "renode")]
-pub use renode::{AdcChannelMap, AdcInject, ClockControl, PullMap, RenodeBackend, RenodeConfig};
+pub use renode::{AdcChannelMap, AdcInject, PullMap, RenodeBackend, RenodeConfig};
 
 #[cfg(feature = "qemu")]
 pub use qemu::{QemuBackend, QemuConfig};

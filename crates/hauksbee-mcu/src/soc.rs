@@ -177,15 +177,16 @@ pub enum SocError {
     )]
     SupportTokenWithoutBundle { field: &'static str },
 
-    /// A descriptor clock-control command omitted the value the backend must
-    /// substitute per board or per virtual-time slice.
-    #[error(
-        "soc.clock_control.{field} must contain {placeholder}: without it the clock model cannot vary with board presence or virtual time"
-    )]
-    ClockControlTemplate {
-        field: &'static str,
-        placeholder: &'static str,
-    },
+    /// A `[[soc.decode]]` block that cannot be evaluated: a bad name, a
+    /// duplicate, or an expression that does not parse or names an unknown
+    /// register or variable.
+    #[error("soc.decode: {0}")]
+    Decode(#[from] crate::periph_snapshot::DecodeError),
+
+    /// A `[[soc.clock_targets]]` or `[[soc.clock_ready]]` entry that does not
+    /// match the decode blocks or each other.
+    #[error("soc.clock_targets / soc.clock_ready: {0}")]
+    ClockTable(#[from] crate::periph_snapshot::ClockTableError),
 
     /// A 16-pin direction encoding on a port wider than 16 bits. `moder` and
     /// `stm32f1_crl_crh` decode 16 pins by construction, so the top pins read
@@ -393,9 +394,8 @@ pub fn peek_backend(src: &str) -> Result<Backend, SocError> {
 #[cfg(feature = "renode")]
 mod renode_schema {
     use super::SocError;
-    use crate::renode::{
-        AdcChannelMap, AdcInject, ClockControl, DirEncoding, PortMap, RenodeConfig,
-    };
+    use crate::periph_snapshot::{ClockReady, ClockTarget, DecodeBlock};
+    use crate::renode::{AdcChannelMap, AdcInject, DirEncoding, PortMap, RenodeConfig};
 
     /// TOML root: `[soc]`.
     #[derive(Debug, serde::Deserialize)]
@@ -443,8 +443,18 @@ mod renode_schema {
         pub extra_setup: Vec<String>,
         #[serde(default)]
         pub post_load_setup: Vec<String>,
+        /// Register decode blocks (`[[soc.decode]]`): how to read the clock
+        /// tree and each peripheral's configuration back out of the live
+        /// registers. The first `clock` block drives the retune loop.
         #[serde(default)]
-        pub clock_control: Option<ClockControl>,
+        pub decode: Vec<DecodeBlock>,
+        /// Monitor commands that retune the emulated machine to a decoded
+        /// clock variable (`[[soc.clock_targets]]`).
+        #[serde(default)]
+        pub clock_targets: Vec<ClockTarget>,
+        /// Oscillator and PLL readiness gating (`[[soc.clock_ready]]`).
+        #[serde(default)]
+        pub clock_ready: Vec<ClockReady>,
         // `PortMap` (letter/peripheral/odr_offset/width) already derives
         // Deserialize, so `[[soc.ports]]` maps straight onto it; the existing
         // derive does the mechanical parsing.
@@ -631,20 +641,12 @@ mod renode_schema {
             super::validate_controllers("i2c", &self.i2c.controllers)?;
             super::validate_controllers("spi", &self.spi.controllers)?;
 
-            if let Some(clock) = &self.clock_control {
-                super::validate_non_empty(&[
-                    ("clock_control.presence_command", &clock.presence_command),
-                    ("clock_control.tick_command", &clock.tick_command),
-                ])?;
-                for (field, command, placeholder) in [
-                    ("presence_command", &clock.presence_command, "{present}"),
-                    ("tick_command", &clock.tick_command, "{micros}"),
-                ] {
-                    if !command.contains(placeholder) {
-                        return Err(SocError::ClockControlTemplate { field, placeholder });
-                    }
-                }
-            }
+            crate::periph_snapshot::validate_blocks(&self.decode)?;
+            crate::periph_snapshot::validate_clock_tables(
+                &self.decode,
+                &self.clock_targets,
+                &self.clock_ready,
+            )?;
 
             if let Some(channel) = super::first_duplicate(self.adc.iter().map(|e| e.channel)) {
                 return Err(SocError::DuplicateAdcChannel { channel });
@@ -665,7 +667,10 @@ mod renode_schema {
                 frequency_hz: self.frequency_hz,
                 extra_setup: self.extra_setup,
                 post_load_setup: self.post_load_setup,
-                clock_control: self.clock_control,
+                decode: self.decode,
+                clock_targets: self.clock_targets,
+                clock_ready: self.clock_ready,
+                external_clock: None,
                 i2c_controllers: self.i2c.controllers,
                 spi_controllers: self.spi.controllers,
                 spi_extra_repl: self.spi.extra_repl,

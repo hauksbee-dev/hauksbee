@@ -26,6 +26,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
+mod clock;
 mod monitor;
 mod process;
 pub mod support;
@@ -38,6 +39,7 @@ pub use process::{find_renode, is_available, RenodeProcess};
 use crate::external::{
     adc_count, builtin_configs, free_ports, poll_state_mcu_methods, I2cTxn, PollState, UartSocket,
 };
+use crate::periph_snapshot::{ClockReady, ClockTarget, DecodeBlock};
 use crate::traits::{I2cCb, I2cEvent, Mcu, McuState, PinId, SpiCb, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
@@ -246,24 +248,6 @@ pub struct AdcChannelMap {
     pub max_count: u32,
 }
 
-/// Descriptor-provided bridge between board clock evidence and a Renode clock
-/// peripheral whose readiness state advances at co-simulation chunk boundaries.
-///
-/// The backend does not know RCC register layouts. A part descriptor supplies
-/// one command that declares whether the board has an external clock source and
-/// one command that advances the peripheral state machine by virtual
-/// microseconds. This keeps part-specific offsets and masks in the platform
-/// model while making readiness depend on board truth and simulated time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClockControl {
-    /// Monitor command with `{present}` replaced by `1` or `0` before firmware
-    /// starts.
-    pub presence_command: String,
-    /// Monitor command with `{micros}` replaced by elapsed virtual microseconds
-    /// after every `RunFor` slice.
-    pub tick_command: String,
-}
-
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
 ///
 /// The whole per-part surface is plain data, with no part-specific branching
@@ -325,10 +309,29 @@ pub struct RenodeConfig {
     /// common case where the ELF entry is correct. The literal `{cpu}` token is
     /// substituted with this config's `cpu` path so commands can be SoC-generic.
     pub post_load_setup: Vec<String>,
-    /// Optional descriptor-owned clock-readiness bridge. `None` means the
-    /// platform has no host-advanced external-clock state machine.
+    /// `[[soc.decode]]`: the configuration registers the firmware writes and how
+    /// to read a clock tree, UART baud, SPI mode, ... back out of them. Drives
+    /// [`Mcu::peripheral_config`] and the clock retune. Empty means the part's
+    /// configuration is not decoded and every field reads `Unknown`.
     #[serde(default)]
-    pub clock_control: Option<ClockControl>,
+    pub decode: Vec<DecodeBlock>,
+    /// `[[soc.clock_targets]]`: the Monitor commands that apply a decoded clock
+    /// variable to the emulator (`cpu PerformanceInMips`, `nvic Frequency`, a
+    /// timer's `Frequency`). Re-run whenever the decoded value changes, so the
+    /// machine follows the clock tree the firmware configured.
+    #[serde(default)]
+    pub clock_targets: Vec<ClockTarget>,
+    /// `[[soc.clock_ready]]`: oscillators and PLLs whose ready bit rises only
+    /// after the startup time and, for a crystal, only when the board has one.
+    #[serde(default)]
+    pub clock_ready: Vec<ClockReady>,
+    /// Whether the bound board has an external clock source (crystal or
+    /// oscillator) at the part's clock pins: `Some` once the binder has said so
+    /// ([`Self::with_external_clock_present`]), `None` when no board is bound,
+    /// in which case the crystal is assumed fitted rather than inventing a
+    /// fault.
+    #[serde(default)]
+    pub external_clock: Option<bool>,
     /// Renode I2C controller names that can host engine-provided I2C slaves.
     /// The STM32F103 thermostat firmware uses `i2c1`.
     pub i2c_controllers: Vec<String>,
@@ -426,19 +429,13 @@ impl RenodeConfig {
 
     /// Declare whether the bound board supplies this MCU's external clock.
     ///
-    /// A descriptor without a clock-control recipe is left unchanged. For a
-    /// descriptor that has one, the rendered command runs during machine setup,
-    /// before the first firmware instruction.
+    /// A descriptor without `[[soc.clock_ready]]` entries is unaffected (see
+    /// [`Mcu::external_clock_modelled`]). For one that has them, the crystal-
+    /// dependent entries (`requires_external`) never report ready on a board
+    /// without one, and the firmware's wait loop stalls as it does on silicon.
     #[must_use]
-    #[allow(clippy::literal_string_with_formatting_args)] // `{present}` is a template placeholder
-    pub fn with_external_clock_present(mut self, present: bool) -> Self {
-        if let Some(clock) = &self.clock_control {
-            self.extra_setup.push(
-                clock
-                    .presence_command
-                    .replace("{present}", if present { "1" } else { "0" }),
-            );
-        }
+    pub const fn with_external_clock_present(mut self, present: bool) -> Self {
+        self.external_clock = Some(present);
         self
     }
 }
@@ -940,6 +937,8 @@ pub struct RenodeBackend {
     external_inputs: HashMap<char, u32>,
     /// Execution-evidence hooks and PC samples (see [`Mcu::execution_probe`]).
     probe: RenodeProbe,
+    /// Clock-tree following and oscillator-readiness state.
+    clock: clock::ClockState,
 }
 
 /// Execution-evidence state for one Renode machine: which symbols are hooked
@@ -1137,6 +1136,16 @@ impl RenodeBackend {
             monitor.run(cmd)?;
         }
 
+        // Descriptor-driven clock model: readiness gating and clock-tree
+        // following. Its script file rides the bridge-source cleanup list.
+        let mut bridge_files: Vec<PathBuf> = platform_file.into_iter().collect();
+        let model_loaded = if let Some(path) = clock::install_readiness(&mut monitor, &config)? {
+            bridge_files.push(path);
+            true
+        } else {
+            false
+        };
+
         // Setup is the cold path. Runtime register polls must keep the tighter
         // bound so a stalled emulator cannot freeze each port read for a full
         // minute while the backend silently reuses cached GPIO state.
@@ -1144,7 +1153,7 @@ impl RenodeBackend {
 
         let last_odr = config.ports.iter().map(|p| (p.letter, 0u32)).collect();
 
-        Ok(Self {
+        let mut backend = Self {
             config,
             monitor,
             core: PollState::new("Renode", uart),
@@ -1156,7 +1165,7 @@ impl RenodeBackend {
             spi_bridges: Vec::new(),
             // The materialized platform file (if any) rides the same cleanup
             // list as the bridge sources: deleted on Drop, kept on failure.
-            bridge_source_files: platform_file.into_iter().collect(),
+            bridge_source_files: bridge_files,
             support_dir,
             spi_extra_repl_loaded: false,
             spi_cycle: Arc::new(AtomicU64::new(0)),
@@ -1164,7 +1173,15 @@ impl RenodeBackend {
             adc_unmapped_warned: std::collections::HashSet::new(),
             external_inputs: HashMap::new(),
             probe: RenodeProbe::default(),
-        })
+            clock: clock::ClockState {
+                model_loaded,
+                ..clock::ClockState::default()
+            },
+        };
+        // Tune the machine to the clock tree the reset registers describe, so
+        // the first slice already runs at the part's real reset-default rates.
+        backend.follow_clock(0.0)?;
+        Ok(backend)
     }
 
     /// Convenience constructor for the STM32F103 blue pill.
@@ -2168,9 +2185,17 @@ impl Mcu for RenodeBackend {
 
     fn timing_limitation(&self) -> Option<String> {
         // Per-part descriptor data for the same reason as the watchdog
-        // statement: the F103's TIMx-at-72MHz divergence is that part's, not
+        // statement: a part's remaining timing divergence is that part's, not
         // the backend's.
         self.config.timing_limitation.clone()
+    }
+
+    fn peripheral_config(&mut self) -> Option<crate::periph_snapshot::PeripheralConfig> {
+        self.read_peripheral_config()
+    }
+
+    fn external_clock_modelled(&self) -> bool {
+        self.config.clock_ready.iter().any(|e| e.requires_external)
     }
 
     fn execution_probe(&mut self) -> crate::traits::ExecutionProbe {
@@ -2230,10 +2255,6 @@ impl RenodeBackend {
     }
 
     /// Advance virtual time by `seconds`, then exchange GPIO/UART state.
-    // A positive sub-minute chunk rounds to whole microseconds; `{micros}` is a
-    // template placeholder.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    #[allow(clippy::literal_string_with_formatting_args)]
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.core.firmware_loaded {
             bail!("no firmware loaded into the Renode machine");
@@ -2257,17 +2278,10 @@ impl RenodeBackend {
 
         self.core.credit(seconds, self.config.frequency_hz);
 
-        // Advance a descriptor-owned oscillator/PLL state machine while the
-        // machine is paused. Readiness injected here becomes visible on the
-        // next slice, so chunk quantization can delay a transition by at most
-        // one slice but can never make it early.
-        if let Some(clock) = &self.config.clock_control {
-            let micros = (seconds * 1_000_000.0).round() as u64;
-            if micros > 0 {
-                self.monitor
-                    .run(&clock.tick_command.replace("{micros}", &micros.to_string()))?;
-            }
-        }
+        // Follow the clock tree the firmware configured and refresh the
+        // readiness model's time base. A retune takes effect from the next
+        // slice, so it lags a firmware write by at most one slice.
+        self.follow_clock(seconds)?;
 
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();

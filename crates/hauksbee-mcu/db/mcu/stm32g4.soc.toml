@@ -15,16 +15,19 @@
 #   USART1-3, UART4-5, LPUART1  STM32F7_USART (the G4 USART is the F7/L4 IP)
 #   I2C1-3    STM32F7_I2C (same IP)
 #   SPI1-3    STM32SPI
-#   TIM1-8, TIM15-17  STM32_Timer, clocked at the 16 MHz reset-default rate
+#   TIM1-8, TIM15-17  STM32_Timer, retuned to the decoded timer clock
 #   LPTIM1    STM32L0_LpTimer (same IP; firmware polls ARROK, which it models)
 #   IWDG      STM32_IndependentWatchdog at the 32 kHz LSI
 #   CRC       STM32_CRC
 #
 # WHAT IS APPROXIMATED (stated, not hidden):
-#   RCC       Python model: HSI16 always ready, HSE ready 2 ms after enable only
-#             when the board supplies a clock (clock_control below), PLL lock
-#             after 40 us, SWS mirrors SW, LSE/LSI/HSI48 ready mirror their
-#             enables. No clock tree: no bus or kernel clock reaches any model.
+#   RCC       Python register storage: HSIRDY follows HSION, SWS mirrors SW,
+#             LSE/LSI/HSI48 ready mirror their enables. HSERDY and PLLRDY come
+#             from the generic [[soc.clock_ready]] model (HSE needs the board's
+#             crystal; PLL lock after the programmed delay). The clock tree is
+#             DECODED from RCC_CR/CFGR/PLLCFGR after every slice and the core,
+#             SysTick and TIMx blocks retuned to it ([[soc.clock_targets]]);
+#             the bus and kernel clocks of USART/I2C/SPI models are not.
 #   ADC1-5    Python register model: ADEN/ADRDY, ADCAL, ADSTART/EOC/EOS and
 #             JADSTART/JEOC/JEOS handshake instantly; DR returns the injected
 #             count for the regular-sequence channel (SQR1/SQR2) in turn. No
@@ -276,55 +279,18 @@ if request.IsInit:
     rccregs[2] = 0x5
     rccregs[3] = 0x1000
     rccregs[0x94 >> 2] = 0x0C000000
-    hse_present = False
-    hse_elapsed_us = 0
-    pll_elapsed_us = 0
 elif request.IsRead:
     request.Value = rccregs[request.Offset >> 2]
 elif request.IsWrite:
     rccoff = request.Offset >> 2
     rccval = request.Value
-    if rccoff == 0xFF:
-        hse_present = bool(rccval & 0x1)
-        if not hse_present:
-            rccregs[0] = rccregs[0] & ~0x20000
-            hse_elapsed_us = 0
-            if (rccregs[3] & 0x3) == 0x3:
-                rccregs[0] = rccregs[0] & ~0x2000000
-                pll_elapsed_us = 0
-    elif rccoff == 0xFE:
-        delta_us = rccval
-        hse_was_ready = bool(rccregs[0] & 0x20000)
-        if hse_present and (rccregs[0] & 0x10000):
-            hse_elapsed_us = hse_elapsed_us + delta_us
-            if hse_elapsed_us >= 2000:
-                rccregs[0] = rccregs[0] | 0x20000
-        else:
-            hse_elapsed_us = 0
-            rccregs[0] = rccregs[0] & ~0x20000
-        pll_source_ready = bool(rccregs[0] & 0x400)
-        if (rccregs[3] & 0x3) == 0x3:
-            pll_source_ready = hse_was_ready
-        if (rccregs[0] & 0x1000000) and pll_source_ready:
-            pll_elapsed_us = pll_elapsed_us + delta_us
-            if pll_elapsed_us >= 40:
-                rccregs[0] = rccregs[0] | 0x2000000
-        else:
-            pll_elapsed_us = 0
-            rccregs[0] = rccregs[0] & ~0x2000000
-    elif rccoff == 0:
-        ready = rccregs[0] & 0x2020400
-        rccval = (rccval & ~0x2020400) | ready
+    if rccoff == 0:
+        # HSERDY (bit 17) and PLLRDY (bit 25) are read-only (RM0440 Rev 9
+        # s7.4.1, RCC_CR p.287) and supplied on read by the readiness model.
+        # HSIRDY (bit 10) follows HSION (bit 8).
+        rccval = rccval & ~0x2020400
         if rccval & 0x100:
             rccval = rccval | 0x400
-        else:
-            rccval = rccval & ~0x400
-        if not (rccval & 0x10000):
-            rccval = rccval & ~0x20000
-            hse_elapsed_us = 0
-        if not (rccval & 0x1000000):
-            rccval = rccval & ~0x2000000
-            pll_elapsed_us = 0
         rccregs[rccoff] = rccval
     elif rccoff == 2:
         rccval = (rccval & 0xFFFFFFF3) | ((rccval & 0x3) << 2)
@@ -550,18 +516,11 @@ on this run.\
 """
 
 timing_limitation = """\
-The STM32G474 core, SysTick and TIMx blocks run at the 16 MHz HSI16 reset \
-default in this co-simulator and no clock tree follows the firmware's PLL \
-setup, so firmware that clocks itself at 170 MHz sees its delays and timer \
-periods run up to 10.6x slow; its DMA moves no data and its FDCAN carries no \
-frames on this run.\
+The STM32G474 core, SysTick and TIMx blocks follow the clock tree the \
+firmware configures in this co-simulator, but the USART, I2C and SPI models \
+keep their reset-default kernel clock, its DMA moves no data and its FDCAN \
+carries no frames on this run.\
 """
-
-# Board clock evidence into the RCC model, as on the F103: presence once before
-# boot, elapsed virtual microseconds after every slice.
-[soc.clock_control]
-presence_command = "sysbus.rcc WriteDoubleWord 0x3FC {present}"
-tick_command = "sysbus.rcc WriteDoubleWord 0x3F8 {micros}"
 
 [[soc.ports]]
 letter = "A"
@@ -764,3 +723,105 @@ controllers = []
 
 [soc.spi]
 controllers = []
+
+# ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
+# RM0440 Rev 9 s7.4: RCC_CR @ +0x00 (p.287), RCC_CFGR @ +0x08 (pp.289-291),
+# RCC_PLLCFGR @ +0x0C (pp.291-293).
+#   SWS (3:2): 01 HSI16, 10 HSE, 11 PLL (00 reserved).
+#   PLLSRC (1:0): 10 HSI16, 11 HSE (00 no clock). PLLM (7:4): value + 1.
+#   PLLN (14:8): VCO multiplier. PLLR (26:25): 00 /2, 01 /4, 10 /6, 11 /8.
+#   f(VCO) = f(in) x PLLN / PLLM, f(PLL_R) = f(VCO) / PLLR (p.291).
+#   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512.
+#   PPRE1 (10:8), PPRE2 (13:11): 0xx /1, 100 /2 ... 111 /16.
+# Timer clock = APB clock if its prescaler is 1, otherwise x2 (s7.2.13, p.281).
+# HSI16 is 16 MHz (s7.2.2). The HSE value is an 8 MHz crystal; a board with
+# another crystal needs that value passed in.
+[[soc.decode]]
+kind = "clock"
+name = "rcc"
+registers = { cr = 0x40021000, cfgr = 0x40021008, pllcfgr = 0x4002100C }
+vars = [
+    ["hsi", "16000000"],
+    ["hse", "8000000"],
+    ["pll_in", "pick(bits(pllcfgr, 1, 0), 0, 0, hsi, hse)"],
+    ["pll_out", "pll_in / (bits(pllcfgr, 7, 4) + 1) * bits(pllcfgr, 14, 8) / pick(bits(pllcfgr, 26, 25), 2, 4, 6, 8)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2) - 1, hsi, hse, pll_out)"],
+    ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
+    ["pclk1_div", "pick(bits(cfgr, 10, 8), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk1", "hclk / pclk1_div"],
+    ["pclk2_div", "pick(bits(cfgr, 13, 11), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk2", "hclk / pclk2_div"],
+    ["tim_apb1", "if(pclk1_div == 1, pclk1, pclk1 * 2)"],
+    ["tim_apb2", "if(pclk2_div == 1, pclk2, pclk2 * 2)"],
+    ["core_hz", "hclk"],
+]
+
+# Retune targets. Cortex-M4F: about one instruction per cycle (MIPS = MHz);
+# SysTick counts HCLK (CLKSOURCE = 1). APB1: TIM2-7; APB2: TIM1, TIM8,
+# TIM15-17. LPTIM1 and the USART/I2C kernel clocks have their own mux in
+# RCC_CCIPR and are not followed.
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.cpu PerformanceInMips {mhz}"
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.nvic Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer2 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer3 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer4 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer5 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer6 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer7 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer1 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer8 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer15 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer16 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer17 Frequency {hz}"
+
+# ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
+# RCC_CR (RM0440 s7.4.1, p.287): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
+# PLLRDY bit 25. HSE startup is 2 ms typical (DS12288, p.117, tSU(HSE)); PLL
+# lock is 15 us typical and 40 us maximum (DS12288, p.123, tLOCK), the maximum
+# modelled. The PLL waits for HSE only while
+# RCC_PLLCFGR.PLLSRC selects it (0b11); HSI16 is the always-available default.
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "hse"
+enable_register = 0x00
+enable_mask = 0x10000
+ready_register = 0x00
+ready_mask = 0x20000
+requires_external = true
+startup_us = 2000.0
+
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "pll"
+enable_register = 0x00
+enable_mask = 0x1000000
+ready_register = 0x00
+ready_mask = 0x2000000
+startup_us = 40.0
+needs = [{ entry = "hse", when = { register = 0x0C, mask = 0x3, value = 0x3 } }]

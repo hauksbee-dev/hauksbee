@@ -24,15 +24,13 @@ platform_repl = """
 // at a rate no F4 Discovery can hit.
 //
 // 16 MHz is the F407's RESET DEFAULT: after reset the HSI is the system clock
-// (RM0090 §6.2). Firmware that brings up the 8 MHz HSE and the PLL for 168 MHz
-// is the common case on this board, but Renode's F4 platform models no clock
-// tree that would follow it, so a single fixed rate has to be declared and the
-// honest one is the rate the part runs at before firmware configures anything.
-// `frequency_hz` below declares the same 16 MHz and is cross-checked against
-// these two declarations at machine bring-up (renode::mod
-// `clock_declaration_mismatch`). A firmware that does configure the PLL to
-// 168 MHz sees its SysTick run 10.5x slow, which is a real limitation of this
-// backend and stated in docs/cosim/MCU.md rather than papered over.
+// (RM0090 §6.2). `frequency_hz` below declares the same 16 MHz and is
+// cross-checked against these two declarations at machine bring-up (renode::mod
+// `clock_declaration_mismatch`). Firmware that brings up the 8 MHz HSE and the
+// PLL for 168 MHz is the common case on this board: the backend decodes
+// RCC_CR/PLLCFGR/CFGR after every slice (see [[soc.decode]] below) and retunes
+// the core, SysTick and every TIMx block to the result, so a 168 MHz firmware
+// sees 168 MHz SysTick ticks.
 //
 // PerformanceInMips is Renode's instructions-per-second knob; a Cortex-M4
 // retires roughly one instruction per cycle, so the part's core clock in MHz is
@@ -106,3 +104,224 @@ controllers = ["i2c1"]
 # panics on the bridge registration that follows. So `extra_repl` is omitted and
 # the bridge is registered on the already-existing spi2/spi3 controllers.
 controllers = ["spi2", "spi3"]
+
+# ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
+# RM0090 Rev 22 s6.3: RCC_CR @ +0x00 (pp.162-163), RCC_PLLCFGR @ +0x04
+# (pp.164-165), RCC_CFGR @ +0x08 (pp.166-168).
+#   SWS (3:2): 00 HSI, 01 HSE, 10 PLL (11 not applicable).
+#   PLLSRC (PLLCFGR bit 22): 0 HSI, 1 HSE. PLLM (5:0), PLLN (14:6),
+#   PLLP (17:16): 00 /2, 01 /4, 10 /6, 11 /8.
+#   f(VCO) = f(in) x PLLN / PLLM, f(PLL out) = f(VCO) / PLLP.
+#   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512.
+#   PPRE1 (12:10), PPRE2 (15:13): 0xx /1, 100 /2 ... 111 /16.
+# Timer clock = APB clock if its prescaler is 1, otherwise x2 (RM0090 s6.2,
+# Figure 21 notes). HSI is 16 MHz (s6.2.2). The HSE value is the Discovery
+# board's 8 MHz crystal; a board with another crystal needs that value passed in.
+[[soc.decode]]
+kind = "clock"
+name = "rcc"
+registers = { cr = 0x40023800, pllcfgr = 0x40023804, cfgr = 0x40023808 }
+vars = [
+    ["hsi", "16000000"],
+    ["hse", "8000000"],
+    ["pll_in", "if(bit(pllcfgr, 22), hse, hsi)"],
+    ["pll_out", "pll_in / bits(pllcfgr, 5, 0) * bits(pllcfgr, 14, 6) / pick(bits(pllcfgr, 17, 16), 2, 4, 6, 8)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2), hsi, hse, pll_out)"],
+    ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
+    ["pclk1_div", "pick(bits(cfgr, 12, 10), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk1", "hclk / pclk1_div"],
+    ["pclk2_div", "pick(bits(cfgr, 15, 13), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk2", "hclk / pclk2_div"],
+    ["tim_apb1", "if(pclk1_div == 1, pclk1, pclk1 * 2)"],
+    ["tim_apb2", "if(pclk2_div == 1, pclk2, pclk2 * 2)"],
+    ["core_hz", "hclk"],
+]
+
+# Retune targets. Cortex-M4: about one instruction per cycle (MIPS = MHz);
+# SysTick counts HCLK (CLKSOURCE = 1). APB2 timers: TIM1, TIM8-11; APB1 timers:
+# TIM2-7, TIM12-14.
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.cpu PerformanceInMips {mhz}"
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.nvic Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer1 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer8 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer9 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer10 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer11 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer2 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer3 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer4 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer5 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer6 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer7 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer12 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer13 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer14 Frequency {hz}"
+
+# ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
+# RCC_CR (RM0090 s6.3.1, pp.162-163): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
+# PLLRDY bit 25. Renode's STM32F4_RCC raises HSERDY and PLLRDY the instant the
+# enable bit is set, crystal or not; this model replaces that. HSE startup is
+# 2 ms typical (DS8626 Rev 12, p.103, tSU(HSE)); PLL lock is 300 us maximum at a
+# 432 MHz VCO (DS8626 p.106, tLOCK; 200 us max at 100 MHz VCO), the conservative
+# end. The PLL waits for HSE only while PLLCFGR.PLLSRC selects it.
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "hse"
+enable_register = 0x00
+enable_mask = 0x10000
+ready_register = 0x00
+ready_mask = 0x20000
+requires_external = true
+startup_us = 2000.0
+
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "pll"
+enable_register = 0x00
+enable_mask = 0x1000000
+ready_register = 0x00
+ready_mask = 0x2000000
+startup_us = 300.0
+needs = [{ entry = "hse", when = { register = 0x04, mask = 0x400000, value = 0x400000 } }]
+
+# ── PERIPHERAL SNAPSHOT DECODE ────────────────────────────────────────────────
+# USART (RM0090 s30.3.4 Equation 1, p.973: baud = fCK / (8 x (2 - OVER8) x
+# USARTDIV); BRR @ +0x08 (p.1005: mantissa 15:4, fraction 3:0, with fraction
+# bit 3 unused when OVER8 = 1), CR1 @ +0x0C (p.1005: M bit 12, OVER8 bit 15),
+# CR2 @ +0x10 (p.1008: STOP 13:12). With OVER8 = 0 that is fCK / BRR; with
+# OVER8 = 1 it is fCK / (8 x mantissa + BRR[2:0]). Memory map: Table 1, pp.66-67.
+# USART1 and USART6 are on APB2, USART2/3 on APB1.
+[[soc.decode]]
+kind = "uart"
+name = "usart1"
+registers = { brr = 0x40011008, cr1 = 0x4001100C, cr2 = 0x40011010 }
+vars = [
+    ["baud", "clk_pclk2 / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+[[soc.decode]]
+kind = "uart"
+name = "usart2"
+registers = { brr = 0x40004408, cr1 = 0x4000440C, cr2 = 0x40004410 }
+vars = [
+    ["baud", "clk_pclk1 / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+[[soc.decode]]
+kind = "uart"
+name = "usart3"
+registers = { brr = 0x40004808, cr1 = 0x4000480C, cr2 = 0x40004810 }
+vars = [
+    ["baud", "clk_pclk1 / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+[[soc.decode]]
+kind = "uart"
+name = "usart6"
+registers = { brr = 0x40011408, cr1 = 0x4001140C, cr2 = 0x40011410 }
+vars = [
+    ["baud", "clk_pclk2 / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+
+# SPI (RM0090 s28.5.1 CR1, pp.911-912: CPHA bit 0, CPOL bit 1, BR 5:3 gives
+# fPCLK / 2^(BR+1)). SPI1 on APB2, SPI2/3 on APB1.
+[[soc.decode]]
+kind = "spi"
+name = "spi1"
+registers = { cr1 = 0x40013000 }
+vars = [
+    ["sck_hz", "clk_pclk2 / pick(bits(cr1, 5, 3), 2, 4, 8, 16, 32, 64, 128, 256)"],
+    ["cpol", "bit(cr1, 1)"],
+    ["cpha", "bit(cr1, 0)"],
+]
+[[soc.decode]]
+kind = "spi"
+name = "spi2"
+registers = { cr1 = 0x40003800 }
+vars = [
+    ["sck_hz", "clk_pclk1 / pick(bits(cr1, 5, 3), 2, 4, 8, 16, 32, 64, 128, 256)"],
+    ["cpol", "bit(cr1, 1)"],
+    ["cpha", "bit(cr1, 0)"],
+]
+[[soc.decode]]
+kind = "spi"
+name = "spi3"
+registers = { cr1 = 0x40003C00 }
+vars = [
+    ["sck_hz", "clk_pclk1 / pick(bits(cr1, 5, 3), 2, 4, 8, 16, 32, 64, 128, 256)"],
+    ["cpol", "bit(cr1, 1)"],
+    ["cpha", "bit(cr1, 0)"],
+]
+
+# I2C (RM0090 s27.6.8 CCR, p.865: Sm Thigh = Tlow = CCR x TPCLK1; Fm DUTY=0
+# Thigh = CCR, Tlow = 2 CCR; DUTY=1 Thigh = 9 CCR, Tlow = 16 CCR). CCR @ +0x1C.
+# All three controllers are on APB1.
+[[soc.decode]]
+kind = "i2c"
+name = "i2c1"
+registers = { ccr = 0x4000541C }
+vars = [
+    ["scl_hz", "clk_pclk1 / (bits(ccr, 11, 0) * if(bit(ccr, 15), if(bit(ccr, 14), 25, 3), 2))"],
+]
+[[soc.decode]]
+kind = "i2c"
+name = "i2c2"
+registers = { ccr = 0x4000581C }
+vars = [
+    ["scl_hz", "clk_pclk1 / (bits(ccr, 11, 0) * if(bit(ccr, 15), if(bit(ccr, 14), 25, 3), 2))"],
+]
+[[soc.decode]]
+kind = "i2c"
+name = "i2c3"
+registers = { ccr = 0x40005C1C }
+vars = [
+    ["scl_hz", "clk_pclk1 / (bits(ccr, 11, 0) * if(bit(ccr, 15), if(bit(ccr, 14), 25, 3), 2))"],
+]
+
+# TIM2 (32-bit general-purpose timer on APB1): PSC @ +0x28 (16-bit), ARR @ +0x2C
+# (32-bit); counter clock = TIMxCLK / (PSC + 1), update period = (ARR + 1) / that.
+[[soc.decode]]
+kind = "timer"
+name = "tim2"
+registers = { psc = 0x40000028, arr = 0x4000002C }
+vars = [
+    ["tick_hz", "clk_tim_apb1 / (bits(psc, 15, 0) + 1)"],
+    ["period_s", "(bits(arr, 31, 0) + 1) / tick_hz"],
+]
