@@ -138,7 +138,12 @@ fn the_stm32_f1_table_is_the_vendors_table_9() {
     let rows: Vec<(Vec<(String, PinLevel)>, BootOutcome)> = f1
         .boot_modes
         .iter()
-        .map(|m| (m.when.iter().map(|(k, v)| (k.clone(), *v)).collect(), m.outcome))
+        .map(|m| {
+            (
+                m.when.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                m.outcome,
+            )
+        })
         .collect();
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0].1, BootOutcome::UserFlash);
@@ -166,7 +171,10 @@ fn the_esp32_download_mode_needs_gpio0_and_gpio2_low() {
 
 #[test]
 fn rp2040_boots_the_usb_bootloader_when_qspi_ss_is_low() {
-    let card = cards().into_iter().find(|c| c.id == "rp2040_qfn56").unwrap();
+    let card = cards()
+        .into_iter()
+        .find(|c| c.id == "rp2040_qfn56")
+        .unwrap();
     let bootsel = card
         .boot_modes
         .iter()
@@ -177,5 +185,8 @@ fn rp2040_boots_the_usb_bootloader_when_qspi_ss_is_low() {
         card.rom_bootloader.as_ref().map(|r| r.protocol),
         Some(RomProtocol::UsbOnly)
     );
-    assert_eq!(card.reset_input.as_ref().map(|r| r.role.as_str()), Some("run"));
+    assert_eq!(
+        card.reset_input.as_ref().map(|r| r.role.as_str()),
+        Some("run")
+    );
 }

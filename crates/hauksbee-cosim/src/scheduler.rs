@@ -3580,9 +3580,17 @@ impl Scheduler {
                     net_name: &name,
                     driven: &driven,
                 };
-                b.hold_core(&snap, self.sim_time, f64::from(u32::try_from(micros).unwrap_or(u32::MAX)) * 1e-6)
+                b.hold_core(
+                    &snap,
+                    self.sim_time,
+                    f64::from(u32::try_from(micros).unwrap_or(u32::MAX)) * 1e-6,
+                )
             });
-            let run = if held { Ok(()) } else { m.core.run_micros(micros) };
+            let run = if held {
+                Ok(())
+            } else {
+                m.core.run_micros(micros)
+            };
             if let Err(e) = run {
                 // The MCU backend refused to advance (a crashed core, a
                 // transport error, a HALT). The firmware side of this chunk did
@@ -5543,11 +5551,22 @@ impl Scheduler {
     /// evidence (no MCU, never refreshed) the older net-toggle test stands.
     #[must_use]
     pub fn firmware_quiet(&self, total_toggles: u64, uart_seen: bool) -> bool {
+        // A ROM bootloader's own UART traffic is not the firmware running.
+        if crate::boot::all_stopped(&self.execution) {
+            return true;
+        }
         if uart_seen || self.any_gpio_driven() {
             return false;
         }
         self.firmware_executed()
             .map_or(total_toggles == 0, |ran| !ran)
+    }
+
+    /// Which MCUs the boot straps kept from the user firmware, one sentence
+    /// each (empty when every MCU boots its firmware).
+    #[must_use]
+    pub fn boot_stops(&self) -> Vec<String> {
+        crate::boot::stop_lines(&self.execution)
     }
 
     /// Why each MCU that DID execute still cannot count as a firmware pass (a
@@ -7566,7 +7585,7 @@ fn instantiate_qemu(
     _part: &str,
     _firmware: Option<&std::path::Path>,
     _strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
-) ->anyhow::Result<Box<dyn Mcu + Send>> {
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `qemu` feature; \
          rebuild with --features qemu to run ESP32 firmware"

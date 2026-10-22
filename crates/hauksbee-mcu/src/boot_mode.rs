@@ -34,9 +34,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::traits::{
-    ExecutionProbe, I2cCb, Mcu, McuState, PinChangeCb, PinId, SpiCb, UartCb,
-};
+use crate::traits::{ExecutionProbe, I2cCb, Mcu, McuState, PinChangeCb, PinId, SpiCb, UartCb};
 
 /// The bootloader's positive acknowledge.
 pub const ACK: u8 = 0x79;
@@ -59,11 +57,11 @@ pub struct StBootloaderInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// Waiting for `0x7F`.
-    AwaitSync,
+    Sync,
     /// Synchronised; waiting for a command byte.
-    AwaitCommand,
+    Command,
     /// Got a command byte; waiting for its complement.
-    AwaitComplement(u8),
+    Complement(u8),
 }
 
 /// The ST system-memory bootloader's serial side.
@@ -78,28 +76,28 @@ impl StUsartBootloader {
     pub const fn new(info: StBootloaderInfo) -> Self {
         Self {
             info,
-            phase: Phase::AwaitSync,
+            phase: Phase::Sync,
         }
     }
 
     /// Feed one received byte; the bytes to transmit in answer.
     pub fn receive(&mut self, byte: u8) -> Vec<u8> {
         match self.phase {
-            Phase::AwaitSync => {
+            Phase::Sync => {
                 if byte == SYNC {
-                    self.phase = Phase::AwaitCommand;
+                    self.phase = Phase::Command;
                     vec![ACK]
                 } else {
                     // Not the auto-baud frame: the ROM keeps scanning RX.
                     Vec::new()
                 }
             }
-            Phase::AwaitCommand => {
-                self.phase = Phase::AwaitComplement(byte);
+            Phase::Command => {
+                self.phase = Phase::Complement(byte);
                 Vec::new()
             }
-            Phase::AwaitComplement(cmd) => {
-                self.phase = Phase::AwaitCommand;
+            Phase::Complement(cmd) => {
+                self.phase = Phase::Command;
                 if byte != !cmd {
                     return vec![NACK];
                 }
@@ -180,7 +178,9 @@ impl Mcu for RomBootMcu {
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
         let n = u128::from(us) * u128::from(self.frequency_hz) / 1_000_000;
-        self.cycles = self.cycles.saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        self.cycles = self
+            .cycles
+            .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
         Ok(())
     }
 
@@ -265,7 +265,9 @@ mod tests {
         StUsartBootloader::new(StBootloaderInfo {
             version: 0x22,
             product_id: 0x0410,
-            commands: vec![0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92],
+            commands: vec![
+                0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92,
+            ],
         })
     }
 
@@ -290,7 +292,10 @@ mod tests {
     fn get_id_returns_the_product_id_msb_first() {
         let mut bl = bootloader();
         bl.receive(SYNC);
-        assert_eq!(feed(&mut bl, &[0x02, 0xFD]), vec![ACK, 0x01, 0x04, 0x10, ACK]);
+        assert_eq!(
+            feed(&mut bl, &[0x02, 0xFD]),
+            vec![ACK, 0x01, 0x04, 0x10, ACK]
+        );
     }
 
     #[test]
@@ -308,7 +313,10 @@ mod tests {
         assert_eq!(out[0], ACK);
         assert_eq!(out[1], 11, "N = the number of commands (version excluded)");
         assert_eq!(out[2], 0x22);
-        assert_eq!(&out[3..14], &[0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92]);
+        assert_eq!(
+            &out[3..14],
+            &[0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92]
+        );
         assert_eq!(out[14], ACK);
         assert_eq!(out.len(), 15);
     }
@@ -318,8 +326,15 @@ mod tests {
         let mut bl = bootloader();
         bl.receive(SYNC);
         assert_eq!(feed(&mut bl, &[0x02, 0x02]), vec![NACK]);
-        assert_eq!(feed(&mut bl, &[0x11, 0xEE]), vec![NACK], "memory commands are refused");
-        assert_eq!(feed(&mut bl, &[0x02, 0xFD]), vec![ACK, 0x01, 0x04, 0x10, ACK]);
+        assert_eq!(
+            feed(&mut bl, &[0x11, 0xEE]),
+            vec![NACK],
+            "memory commands are refused"
+        );
+        assert_eq!(
+            feed(&mut bl, &[0x02, 0xFD]),
+            vec![ACK, 0x01, 0x04, 0x10, ACK]
+        );
     }
 
     #[test]
@@ -344,6 +359,9 @@ mod tests {
             property: "strap_mode".into(),
             value: 0x0f,
         };
-        assert_eq!(m.global_arg(), "driver=esp32.gpio,property=strap_mode,value=0xf");
+        assert_eq!(
+            m.global_arg(),
+            "driver=esp32.gpio,property=strap_mode,value=0xf"
+        );
     }
 }

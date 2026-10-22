@@ -1498,6 +1498,36 @@
         "label": "Settings file"
       },
       {
+        "id": "user_flash",
+        "group": "boot_outcome",
+        "label": "Runs the user firmware",
+        "explain": "The chip starts the application stored in its normal flash memory."
+      },
+      {
+        "id": "rom_bootloader",
+        "group": "boot_outcome",
+        "label": "Enters the ROM bootloader",
+        "explain": "The chip runs the manufacturer's built-in loader or download mode instead of your firmware."
+      },
+      {
+        "id": "sram",
+        "group": "boot_outcome",
+        "label": "Boots from SRAM",
+        "explain": "The chip starts from its on-chip RAM, which holds code only if something loaded it."
+      },
+      {
+        "id": "held_in_reset",
+        "group": "boot_outcome",
+        "label": "Held in reset",
+        "explain": "The reset pin is held active, so the chip never starts running."
+      },
+      {
+        "id": "undefined",
+        "group": "boot_outcome",
+        "label": "Boot mode undefined",
+        "explain": "The boot pins are in a combination the manufacturer marks reserved, or are not at a defined level."
+      },
+      {
         "id": "exact",
         "group": "match_confidence",
         "label": "Exact match",

@@ -14,10 +14,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use hauksbee_ir::boot::{
-    BootDecision, BootOutcome, StrapReading, StrapReadingLevel,
-};
 use hauksbee_bind::binder::McuBinding;
+use hauksbee_ir::boot::{BootDecision, BootOutcome, StrapReading, StrapReadingLevel};
 use hauksbee_ir::NodeId;
 use hauksbee_models::boot_mode::{
     level_from_volts, pull_level, select_mode, BootInput, BootSpec, PinLevel, Selection,
@@ -267,14 +265,15 @@ fn supply_for(binding: &McuBinding, volts: &[f64], fallback: f64) -> f64 {
     }
 }
 
-/// Decide each firmware-bearing MCU's boot mode from the board's DC operating
-/// point (supplies standing at their start-up values, capacitors open), the
-/// state the straps are read in when nothing has yet ramped. Keyed by MCU
-/// reference; an MCU whose card has no boot table is absent.
+/// Decide each firmware-bearing MCU's boot mode from the board's DC operating point.
+///
+/// Supplies stand at their start-up values and capacitors are open, the state
+/// the straps are read in when nothing has yet ramped. Keyed by MCU reference;
+/// an MCU whose card has no boot table is absent.
 #[must_use]
-pub fn plan_boots(
+pub fn plan_boots<S: std::hash::BuildHasher>(
     mcus: &[McuBinding],
-    specs: &HashMap<String, BootSpec>,
+    specs: &HashMap<String, BootSpec, S>,
     circuit: &hauksbee_ir::Circuit,
     opts: &hauksbee_solve::SolverOptions,
 ) -> HashMap<String, Resolved> {
@@ -427,10 +426,11 @@ pub fn build_core(
     Ok((core, BootState::new(spec.clone(), resolved, rom_outcome)))
 }
 
-/// Fold the boot decision into an MCU's execution evidence. A chip that did
-/// not boot the user firmware (ROM bootloader, SRAM, held in reset) is not an
-/// execution, whatever its ROM or the stand-in said on the UART, and the
-/// boot-mode sentence is the reason a report shows.
+/// Fold the boot decision into an MCU's execution evidence.
+///
+/// A chip that did not boot the user firmware (ROM bootloader, SRAM, held in
+/// reset) is not an execution, whatever its ROM or the stand-in said on the
+/// UART, and the boot-mode sentence is the reason a report shows.
 pub fn annotate(evidence: &mut crate::execution::ExecutionEvidence, state: &BootState) {
     let decision = &state.decision;
     evidence.boot = Some(decision.clone());
@@ -445,7 +445,33 @@ pub fn annotate(evidence: &mut crate::execution::ExecutionEvidence, state: &Boot
             || b.starts_with("no evidence the firmware executed")
             || b.starts_with("the board held the reset line"))
     });
-    evidence.blockers.insert(0, format!("boot straps: {}.", decision.summary));
+    evidence
+        .blockers
+        .insert(0, format!("boot straps: {}.", decision.summary));
+}
+
+/// One line per MCU whose boot straps kept the user firmware from running
+/// (`U1: BOOT0 = 3.30 V at reset release -> ...; user firmware not run`).
+#[must_use]
+pub fn stop_lines(evidence: &[crate::execution::ExecutionEvidence]) -> Vec<String> {
+    evidence
+        .iter()
+        .filter_map(|e| {
+            let boot = e.boot.as_ref().filter(|b| !b.user_firmware_runs)?;
+            Some(format!("{}: {}", e.mcu_ref, boot.summary))
+        })
+        .collect()
+}
+
+/// Whether every MCU with execution evidence was kept from the user firmware
+/// by its boot straps: whatever its ROM then put on the UART is not the
+/// firmware's activity.
+#[must_use]
+pub fn all_stopped(evidence: &[crate::execution::ExecutionEvidence]) -> bool {
+    !evidence.is_empty()
+        && evidence
+            .iter()
+            .all(|e| e.boot.as_ref().is_some_and(|b| !b.user_firmware_runs))
 }
 
 /// One MCU's boot bookkeeping across the run.
@@ -553,7 +579,11 @@ mod tests {
             }),
             inputs: vec![input("boot0", "BOOT0"), input("pb2_boot1", "BOOT1")],
             modes: vec![
-                row("Main flash memory", &[("boot0", PinLevel::Low)], BootOutcome::UserFlash),
+                row(
+                    "Main flash memory",
+                    &[("boot0", PinLevel::Low)],
+                    BootOutcome::UserFlash,
+                ),
                 row(
                     "System memory",
                     &[("boot0", PinLevel::High), ("pb2_boot1", PinLevel::Low)],
@@ -599,7 +629,10 @@ mod tests {
         let mut driven = vec![true];
         for (role, v) in [("boot0", boot0), ("pb2_boot1", boot1)] {
             if let Some((volt, d)) = v {
-                role_nets.insert(role.to_string(), NodeId(volts.len() as u32));
+                role_nets.insert(
+                    role.to_string(),
+                    NodeId(u32::try_from(volts.len()).unwrap()),
+                );
                 volts.push(volt);
                 driven.push(d);
             }
@@ -648,7 +681,11 @@ mod tests {
         spec.inputs[0].internal_pull = StrapInternalPull::PullDown;
         let r = board(None, None).resolve(&spec).unwrap();
         assert_eq!(r.decision.outcome, BootOutcome::UserFlash);
-        assert!(r.decision.caveats.iter().any(|c| c.contains("internal pull-down")));
+        assert!(r
+            .decision
+            .caveats
+            .iter()
+            .any(|c| c.contains("internal pull-down")));
     }
 
     #[test]

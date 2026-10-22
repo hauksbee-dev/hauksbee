@@ -33,6 +33,8 @@ mod bitbang_spi_cosim;
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]
 mod bom_placement_cli;
+#[path = "boot_straps_cosim.rs"]
+mod boot_straps_cosim;
 #[path = "bug_hunt_physics.rs"]
 mod bug_hunt_physics;
 #[path = "bundled_sensor_catalog.rs"]
@@ -98,8 +100,6 @@ mod dc_overstress;
 mod deck_sim_http;
 #[path = "declarative_sensor_cosim.rs"]
 mod declarative_sensor_cosim;
-#[path = "boot_straps_cosim.rs"]
-mod boot_straps_cosim;
 #[path = "diode_fallback.rs"]
 mod diode_fallback;
 #[path = "dnp_processor.rs"]

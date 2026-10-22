@@ -2,7 +2,7 @@
 //!
 //! A microcontroller picks its boot source from a few pins sampled as reset is
 //! released (an STM32's BOOT0, an ESP32's GPIO0 and GPIO2, an RP2040's
-//! QSPI_SS). The model cards carry the vendor's table; the co-simulator
+//! `QSPI_SS`). The model cards carry the vendor's table; the co-simulator
 //! resolves it against the solved board and produces a [`BootDecision`]. This
 //! module is the vocabulary of that decision: the outcome words, the reading of
 //! each strap and the one sentence every surface (run JSON, CLI, app) shows, so

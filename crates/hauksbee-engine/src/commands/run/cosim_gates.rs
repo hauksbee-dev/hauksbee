@@ -45,6 +45,7 @@ pub(super) fn enforce_gates(
                 crate::execution::NO_EXECUTION_MESSAGE
             );
         }
+        warn_boot_stops(observations);
         if cfg.strict && !analog_abort {
             publish_refusal(cfg.json, strict_refusal.as_ref());
             // `fail` outranks `invalid`, the same precedence the verdict
@@ -170,6 +171,13 @@ pub(super) fn enforce_gates(
 /// out-of-range supply: silicon would not behave like this run, so it is never
 /// a firmware pass. Warn always; strict refuses (exit 3) unless the fault gate
 /// owns the exit, the same precedence as zero activity.
+/// Say why the chip did not run the firmware when its boot straps stopped it.
+fn warn_boot_stops(observations: &RunObservations) {
+    for stop in &observations.activity.boot_stops {
+        eprintln!("WARNING: boot straps: {stop}");
+    }
+}
+
 fn enforce_pass_blockers(cfg: &RunConfig, observations: &RunObservations, faults_gate: bool) {
     let activity = &observations.activity;
     if activity.zero || activity.pass_blockers.is_empty() {

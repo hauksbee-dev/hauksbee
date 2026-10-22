@@ -53,7 +53,7 @@ pub enum LatchEvent {
 }
 
 /// `[models.strap_latch]`: when the strap pins are sampled.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub struct StrapLatch {
     #[serde(default)]
     pub event: LatchEvent,
@@ -111,14 +111,12 @@ impl BootInput {
     /// The name shown for the pin.
     #[must_use]
     pub fn display_name(&self) -> String {
-        self.pin
-            .clone()
-            .unwrap_or_else(|| self.role.to_uppercase())
+        self.pin.clone().unwrap_or_else(|| self.role.to_uppercase())
     }
 }
 
 /// `[[models.boot_modes]]`: one row of the vendor's table.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct BootModeRow {
     /// The vendor's name for the mode.
     pub name: String,
@@ -145,7 +143,7 @@ pub enum RomProtocol {
 
 /// `[models.rom_bootloader]`: what answers when a boot mode runs the ROM
 /// bootloader instead of the user firmware.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RomBootloader {
     pub protocol: RomProtocol,
     /// The bootloader's protocol version byte (`0x31` for v3.1), when the
@@ -168,7 +166,7 @@ pub struct RomBootloader {
 
 /// `[models.qemu_boot]`: how the strap levels reach the QEMU machine that
 /// models this chip (Espressif's fork reads them as one register value).
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct QemuBoot {
     /// The GPIO device the `strap_mode` property belongs to (`esp32.gpio`).
     pub device: String,
@@ -221,7 +219,7 @@ pub struct BootTable<'a> {
 impl BootTable<'_> {
     /// Whether the card carries a boot table at all.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.modes.is_empty()
     }
 
@@ -299,7 +297,7 @@ impl crate::schema::ModelEntry {
 }
 
 /// The result of looking the levels up in the table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selection<'a> {
     /// The row the vendor's table selects.
     Row(&'a BootModeRow),
@@ -373,10 +371,8 @@ pub fn select_mode<'a>(
             }
         }
     }
-    let indeterminate = |roles: Vec<String>, rows: Vec<&'a BootModeRow>| Selection::Indeterminate {
-        roles,
-        rows,
-    };
+    let indeterminate =
+        |roles: Vec<String>, rows: Vec<&'a BootModeRow>| Selection::Indeterminate { roles, rows };
     if roles.len() > MAX_UNKNOWN_ROLES {
         return indeterminate(roles, possible);
     }
@@ -461,7 +457,11 @@ mod tests {
 
     fn stm32() -> Vec<BootModeRow> {
         vec![
-            row("Main flash", &[("boot0", PinLevel::Low)], BootOutcome::UserFlash),
+            row(
+                "Main flash",
+                &[("boot0", PinLevel::Low)],
+                BootOutcome::UserFlash,
+            ),
             row(
                 "System memory",
                 &[("boot0", PinLevel::High), ("boot1", PinLevel::Low)],
@@ -482,7 +482,10 @@ mod tests {
     #[test]
     fn boot0_low_selects_main_flash_whatever_boot1_does() {
         let modes = stm32();
-        let sel = select_mode(&modes, &lv(&[("boot0", Some(PinLevel::Low)), ("boot1", None)]));
+        let sel = select_mode(
+            &modes,
+            &lv(&[("boot0", Some(PinLevel::Low)), ("boot1", None)]),
+        );
         assert!(matches!(sel, Selection::Row(r) if r.outcome == BootOutcome::UserFlash));
     }
 
@@ -491,7 +494,10 @@ mod tests {
         let modes = stm32();
         let sel = select_mode(
             &modes,
-            &lv(&[("boot0", Some(PinLevel::High)), ("boot1", Some(PinLevel::Low))]),
+            &lv(&[
+                ("boot0", Some(PinLevel::High)),
+                ("boot1", Some(PinLevel::Low)),
+            ]),
         );
         assert!(matches!(sel, Selection::Row(r) if r.outcome == BootOutcome::RomBootloader));
     }
@@ -499,7 +505,10 @@ mod tests {
     #[test]
     fn an_undefined_boot0_is_indeterminate_because_the_outcomes_differ() {
         let modes = stm32();
-        let sel = select_mode(&modes, &lv(&[("boot0", None), ("boot1", Some(PinLevel::Low))]));
+        let sel = select_mode(
+            &modes,
+            &lv(&[("boot0", None), ("boot1", Some(PinLevel::Low))]),
+        );
         match sel {
             Selection::Indeterminate { roles, rows } => {
                 assert_eq!(roles, ["boot0"]);
@@ -518,7 +527,11 @@ mod tests {
 
     #[test]
     fn a_combination_the_table_omits_has_no_row() {
-        let modes = vec![row("flash", &[("gpio0", PinLevel::High)], BootOutcome::UserFlash)];
+        let modes = vec![row(
+            "flash",
+            &[("gpio0", PinLevel::High)],
+            BootOutcome::UserFlash,
+        )];
         let sel = select_mode(&modes, &lv(&[("gpio0", Some(PinLevel::Low))]));
         assert_eq!(sel, Selection::NoRow);
     }
@@ -527,14 +540,21 @@ mod tests {
     fn an_unread_pin_whose_other_state_has_no_row_is_indeterminate() {
         // Only one state of gpio1 selects a row; the other has none.
         let modes = vec![
-            row("flash", &[("gpio0", PinLevel::High)], BootOutcome::UserFlash),
+            row(
+                "flash",
+                &[("gpio0", PinLevel::High)],
+                BootOutcome::UserFlash,
+            ),
             row(
                 "spi download",
                 &[("gpio0", PinLevel::Low), ("gpio1", PinLevel::High)],
                 BootOutcome::RomBootloader,
             ),
         ];
-        let sel = select_mode(&modes, &lv(&[("gpio0", Some(PinLevel::Low)), ("gpio1", None)]));
+        let sel = select_mode(
+            &modes,
+            &lv(&[("gpio0", Some(PinLevel::Low)), ("gpio1", None)]),
+        );
         assert!(matches!(sel, Selection::Indeterminate { .. }), "{sel:?}");
     }
 

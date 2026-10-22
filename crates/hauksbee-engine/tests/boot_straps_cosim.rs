@@ -29,7 +29,11 @@ fn board_text(boot0: Boot0, boot1_rail: bool, nrst_grounded: bool) -> String {
         Boot0::Rail => "2 \"+3V3\"",
         Boot0::Floating => "7 \"BOOT0_NET\"",
     };
-    let boot1_net = if boot1_rail { "2 \"+3V3\"" } else { "1 \"GND\"" };
+    let boot1_net = if boot1_rail {
+        "2 \"+3V3\""
+    } else {
+        "1 \"GND\""
+    };
     let nrst_pull = if nrst_grounded { "GND" } else { "+3V3" };
     let nrst_pull_net = if nrst_grounded { 1 } else { 2 };
     format!(
@@ -101,6 +105,9 @@ struct Run {
     evidence: ExecutionEvidence,
     pll_high: bool,
     uart: Vec<u8>,
+    /// What every surface asks: did the firmware do nothing?
+    quiet: bool,
+    stops: Vec<String>,
 }
 
 fn run(boot0: Boot0, boot1_rail: bool, nrst_grounded: bool, send: &[u8]) -> Option<Run> {
@@ -124,10 +131,14 @@ fn run(boot0: Boot0, boot1_rail: bool, nrst_grounded: bool, send: &[u8]) -> Opti
     }
     engine.scheduler_mut().refresh_execution_evidence();
     let evidence = engine.scheduler().execution_evidence().first()?.clone();
+    let quiet = engine.scheduler().firmware_quiet(0, !uart.is_empty());
+    let stops = engine.scheduler().boot_stops();
     Some(Run {
         evidence,
         pll_high,
         uart,
+        quiet,
+        stops,
     })
 }
 
@@ -136,7 +147,11 @@ fn boot0_high_enters_the_system_bootloader_and_the_firmware_does_not_run() {
     let Some(r) = run(Boot0::Rail, false, false, &[0x7F, 0x02, 0xFD]) else {
         return;
     };
-    let boot = r.evidence.boot.as_ref().expect("a boot decision is reported");
+    let boot = r
+        .evidence
+        .boot
+        .as_ref()
+        .expect("a boot decision is reported");
     assert_eq!(boot.outcome, BootOutcome::RomBootloader);
     assert!(!boot.user_firmware_runs);
     assert!(
@@ -147,13 +162,24 @@ fn boot0_high_enters_the_system_bootloader_and_the_firmware_does_not_run() {
     assert!(!r.evidence.executed, "{:?}", r.evidence);
     assert!(!r.evidence.firmware_pass_eligible);
     assert!(
-        r.evidence.blockers.iter().any(|b| b.contains("boot straps")),
+        r.evidence
+            .blockers
+            .iter()
+            .any(|b| b.contains("boot straps")),
         "{:?}",
         r.evidence.blockers
     );
     assert!(!r.pll_high, "the firmware's marker pin must stay quiet");
     // AN3155: 0x7F -> ACK (0x79); Get ID -> ACK, 1, PID MSB, PID LSB, ACK.
     assert_eq!(r.uart, vec![0x79, 0x79, 0x01, 0x04, 0x10, 0x79]);
+    // The ROM's reply is UART traffic, but it is not the firmware running: every
+    // surface still reads the run as one that exercised no firmware, and says why.
+    assert!(
+        r.quiet,
+        "the bootloader's reply must not count as firmware activity"
+    );
+    assert_eq!(r.stops.len(), 1, "{:?}", r.stops);
+    assert!(r.stops[0].starts_with("U1: BOOT0"), "{:?}", r.stops);
 }
 
 #[test]
@@ -267,7 +293,12 @@ mod esp32 {
             for bytes in frame.uart.values() {
                 uart.extend_from_slice(bytes);
             }
-            let high = frame.net_voltages.get("GPIO4_BLINK").copied().unwrap_or(0.0) > 2.0;
+            let high = frame
+                .net_voltages
+                .get("GPIO4_BLINK")
+                .copied()
+                .unwrap_or(0.0)
+                > 2.0;
             if high != prev {
                 blink_edges += 1;
             }
@@ -286,7 +317,11 @@ mod esp32 {
     fn an_open_gpio0_boots_the_user_firmware() {
         let _guard = qemu_test_lock();
         let Some(r) = run(false) else { return };
-        let boot = r.evidence.boot.as_ref().expect("a boot decision is reported");
+        let boot = r
+            .evidence
+            .boot
+            .as_ref()
+            .expect("a boot decision is reported");
         assert_eq!(boot.outcome, BootOutcome::UserFlash, "{}", boot.summary);
         assert!(boot.user_firmware_runs);
         assert!(r.uart.contains("hello from esp32"), "{:?}", r.uart);
@@ -297,7 +332,11 @@ mod esp32 {
     fn gpio0_held_low_enters_the_rom_download_mode_and_the_firmware_does_not_run() {
         let _guard = qemu_test_lock();
         let Some(r) = run(true) else { return };
-        let boot = r.evidence.boot.as_ref().expect("a boot decision is reported");
+        let boot = r
+            .evidence
+            .boot
+            .as_ref()
+            .expect("a boot decision is reported");
         assert_eq!(boot.outcome, BootOutcome::RomBootloader, "{}", boot.summary);
         assert!(!boot.user_firmware_runs);
         assert!(boot.summary.contains("GPIO0 = 0.00 V"), "{}", boot.summary);
@@ -309,5 +348,160 @@ mod esp32 {
             r.uart
         );
         assert_eq!(r.blink_edges, 0, "the firmware's blink must not run");
+    }
+}
+
+// --- RP2040: QSPI_SS low at boot is BOOTSEL; RUN low holds the chip in reset ---
+
+mod rp2040 {
+    use super::*;
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum QspiSs {
+        Open,
+        Gnd,
+    }
+
+    fn board_text(qspi_ss: QspiSs, run_grounded: bool) -> String {
+        let ss_pad = match qspi_ss {
+            QspiSs::Open => "(pad 56 smd rect (at -3 9) (net 0 \"\"))",
+            QspiSs::Gnd => "(pad 56 smd rect (at -3 9) (net 1 \"GND\"))",
+        };
+        // RUN reaches a rail through 10k, the way a pull-up or a reset switch
+        // wires it (a pad tied straight to ground is refused outright).
+        let (run_pull_net, run_pull_name) = if run_grounded {
+            (1, "GND")
+        } else {
+            (2, "+3V3")
+        };
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "LED")
+  (net 4 "UART_TX")
+  (net 5 "RUN")
+
+  (module Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value RP2040 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at -3 0) (net 2 "+3V3"))
+    (pad 2 smd rect (at -3 1) (net 4 "UART_TX"))
+    (pad 10 smd rect (at -3 2) (net 2 "+3V3"))
+    (pad 22 smd rect (at -3 3) (net 2 "+3V3"))
+    (pad 26 smd rect (at -3 4) (net 5 "RUN"))
+    (pad 33 smd rect (at -3 5) (net 2 "+3V3"))
+    (pad 37 smd rect (at -3 6) (net 3 "LED"))
+    (pad 42 smd rect (at -3 7) (net 2 "+3V3"))
+    (pad 49 smd rect (at -3 8) (net 2 "+3V3"))
+    {ss_pad}
+    (pad 57 smd rect (at 3 0) (net 1 "GND"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 1k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "LED"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 105)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 4 "UART_TX"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 110)
+    (fp_text reference R3 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 5 "RUN"))
+    (pad 2 thru_hole circle (at 2 0) (net {run_pull_net} "{run_pull_name}"))
+  )
+)"#
+        )
+    }
+
+    struct Run {
+        evidence: ExecutionEvidence,
+        led_high: bool,
+        uart: Vec<u8>,
+    }
+
+    fn run(qspi_ss: QspiSs, run_grounded: bool) -> Option<Run> {
+        let fw = hauksbee_testkit::skip_none!(
+            crate::support::testdata("firmware/rp2040_blink_uart/blink_uart.elf") => None,
+            "blink_uart.elf not built"
+        );
+        let mut engine = HauksbeeEngine::from_board_file(
+            &board_text(qspi_ss, run_grounded),
+            Some(&fw),
+            "/boards/rp2040_boot_straps.kicad_pcb",
+        )
+        .expect("build the RP2040 boot-strap engine");
+        engine.scheduler_mut().chunk_s = 1e-3;
+        let mut led_high = false;
+        let mut uart = Vec::new();
+        for _ in 0..200 {
+            let frame = engine.step(1e-3);
+            led_high |= frame.net_voltages.get("LED").copied().unwrap_or(0.0) > 2.0;
+            for bytes in frame.uart.values() {
+                uart.extend_from_slice(bytes);
+            }
+        }
+        engine.scheduler_mut().refresh_execution_evidence();
+        let evidence = engine.scheduler().execution_evidence().first()?.clone();
+        Some(Run {
+            evidence,
+            led_high,
+            uart,
+        })
+    }
+
+    #[test]
+    fn qspi_ss_held_low_boots_the_usb_bootloader_and_the_flash_firmware_does_not_run() {
+        let Some(r) = run(QspiSs::Gnd, false) else {
+            return;
+        };
+        let boot = r
+            .evidence
+            .boot
+            .as_ref()
+            .expect("a boot decision is reported");
+        assert_eq!(boot.outcome, BootOutcome::RomBootloader, "{}", boot.summary);
+        assert!(!boot.user_firmware_runs);
+        assert!(boot.summary.contains("QSPI_SS"), "{}", boot.summary);
+        assert!(!r.evidence.executed);
+        assert!(!r.evidence.firmware_pass_eligible);
+        assert!(!r.led_high, "the firmware's LED pin must stay quiet");
+        assert!(r.uart.is_empty(), "{:?}", r.uart);
+    }
+
+    #[test]
+    fn run_held_low_keeps_the_chip_in_reset() {
+        let Some(r) = run(QspiSs::Open, true) else {
+            return;
+        };
+        let boot = r.evidence.boot.as_ref().unwrap();
+        assert_eq!(boot.outcome, BootOutcome::HeldInReset, "{}", boot.summary);
+        assert!(!r.evidence.executed);
+        assert!(!r.led_high);
+    }
+
+    #[cfg(feature = "renode")]
+    #[test]
+    fn an_open_qspi_ss_takes_its_pull_up_and_boots_the_flash_firmware() {
+        if !hauksbee_mcu::renode::is_available() {
+            eprintln!("skipping: Renode not installed");
+            return;
+        }
+        let Some(r) = run(QspiSs::Open, false) else {
+            return;
+        };
+        let boot = r.evidence.boot.as_ref().unwrap();
+        assert_eq!(boot.outcome, BootOutcome::UserFlash, "{}", boot.summary);
+        assert!(boot.user_firmware_runs);
     }
 }
