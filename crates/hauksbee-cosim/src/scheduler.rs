@@ -48,6 +48,9 @@ use crate::regulation;
 pub use crate::regulation::{open_driver_reason, RegulationTaint, OPEN_DRIVER};
 use crate::responders::{GpioPin, Hc595ChainPins};
 use crate::MutexExt;
+#[path = "scheduler/electrics.rs"]
+mod electrics;
+pub use electrics::{reset_episode_message, ResetCause, ResetEpisode};
 use hauksbee_bind::behavioral::BehavioralDevice;
 use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
@@ -373,6 +376,13 @@ struct LiveMcu {
     digital_in_levels: HashMap<(char, u8), bool>,
     /// UART bytes this core transmitted over the run (execution evidence).
     uart_bytes: u64,
+    /// The drive-strength row each pin's firmware selected (index into the
+    /// card's `output_drive`); a pin absent here runs the card's reset default.
+    drive_rows: HashMap<(char, u8), usize>,
+    /// Chunk counter for the periodic drive-select sweep.
+    drive_poll: u32,
+    /// Reset-pin / brown-out state (see `electrics`).
+    reset_gate: electrics::ResetGate,
     /// Hardware I2C events (start, address, byte, stop) this core's backend
     /// delivered to the bus handler over the run. Shared with the `on_i2c`
     /// closure, which counts every event whether or not a modelled slave
@@ -1075,6 +1085,12 @@ pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
         .iter()
         .map(|(mcu_ref, l)| watchdog_limitation_message(mcu_ref, l))
         .chain(resets.iter().map(|(m, r)| watchdog_reset_message(m, *r)))
+        .chain(
+            scheduler
+                .reset_episodes()
+                .iter()
+                .map(|(m, e)| reset_episode_message(m, e)),
+        )
         .chain(timing.iter().map(|(m, l)| timing_limitation_message(m, l)))
         .chain(
             scheduler
@@ -2742,6 +2758,26 @@ impl Scheduler {
         self.per_mcu(|core| Some(core.watchdog_resets()).filter(|&n| n > 0))
     }
 
+    /// Every stretch of time an MCU was held in reset (reset pin low, supply
+    /// below its brown-out threshold, or the supply still rising at power-up),
+    /// by MCU reference then time. A finding, not an error: a run that crossed
+    /// one measured a rebooted core.
+    #[must_use]
+    pub fn reset_episodes(&self) -> Vec<(String, ResetEpisode)> {
+        let mut out: Vec<(String, ResetEpisode)> = self
+            .mcus
+            .iter()
+            .flat_map(|m| {
+                m.reset_gate
+                    .episodes
+                    .iter()
+                    .map(|e| (m.binding.reference.clone(), e.clone()))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.start_s.total_cmp(&b.1.start_s)));
+        out
+    }
+
     /// `(MCU reference, value)` for every live MCU whose core yields a value,
     /// ordered by MCU reference: the shape every per-MCU finding above shares.
     fn per_mcu<T: Ord>(&self, value: impl Fn(&dyn Mcu) -> Option<T>) -> Vec<(String, T)> {
@@ -3565,10 +3601,25 @@ impl Scheduler {
             m.rails.observe(&self.node_volts);
         }
 
+        // Voltages the reset gate reads (the t = 0 DC solve before any chunk
+        // has solved); only taken when some part states reset thresholds.
+        let gate_volts = if self
+            .mcus
+            .iter()
+            .any(|m| m.binding.electrical.reset.is_some())
+        {
+            self.digital_view_volts()
+        } else {
+            Vec::new()
+        };
+
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
             self.inject_mcu_inputs(mi, &mcu_driven_nets);
             let m = &mut self.mcus[mi];
+            // Held in reset (reset pin low / brown-out): the core does not
+            // advance and its pins float; on release it is rebooted.
+            let held = m.reset_gate_hold(&mut self.circuit, self.sim_time, &gate_volts);
             // Cycle counter bracketing this run: the chunk's [start, end) span,
             // so the drained edge stamps normalize to a fraction of the chunk
             // for the analog PWL side. Exact on simavr, coarse on poll backends
@@ -3585,7 +3636,7 @@ impl Scheduler {
             self.observer.ensure_mcu(mi, &m.binding.reference);
             self.observer
                 .record_reset_level(mi, chunk_t0, reset_v, m.logic_high_v);
-            if let Err(e) = m.core.run_micros(micros) {
+            if let Err(e) = m.core.run_micros(if held { 0 } else { micros }) {
                 // The MCU backend refused to advance (a crashed core, a
                 // transport error, a HALT). The firmware side of this chunk did
                 // not run, so folding the subsequent solve as a normal quiet
@@ -3661,23 +3712,23 @@ impl Scheduler {
             let edge_pins: std::collections::HashSet<(char, u8)> = edges.keys().copied().collect();
             for ((port, bit), level) in edges {
                 m.last_levels.insert((port, bit), level);
-                if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
-                    drv.set_enabled(&mut self.circuit, true);
-                    let v = if level { m.logic_high_v } else { 0.0 };
-                    drv.set_volts(&mut self.circuit, v);
-                }
+                m.drive_pin(&mut self.circuit, (port, bit), level);
             }
             // 2b. Promotion AND release from the configured pin direction; see
             // `sync_configured_outputs`. On a direction-blind backend the set is
             // empty and the edge-evidence release arm is gated off, so nothing
             // is promoted or torn down there.
-            let configured: std::collections::HashSet<(char, u8)> = m
-                .core
-                .pins_configured_output()
-                .into_iter()
-                .map(|p| (p.port, p.bit))
-                .collect();
+            let configured: std::collections::HashSet<(char, u8)> = if held {
+                std::collections::HashSet::new()
+            } else {
+                m.core
+                    .pins_configured_output()
+                    .into_iter()
+                    .map(|p| (p.port, p.bit))
+                    .collect()
+            };
             self.sync_configured_outputs(mi, configured, &edge_pins);
+            self.mcus[mi].refresh_drive_select(&mut self.circuit, &edge_pins);
         }
 
         // Bench recorder: the bus transactions this chunk's firmware drove.
@@ -6157,13 +6208,14 @@ impl Scheduler {
     ) {
         let m = &mut self.mcus[mi];
         for &(port, bit) in &configured {
-            if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
-                if !drv.enabled {
-                    drv.set_enabled(&mut self.circuit, true);
-                    let level = m.last_levels.get(&(port, bit)).copied().unwrap_or(false);
-                    let v = if level { m.logic_high_v } else { 0.0 };
-                    drv.set_volts(&mut self.circuit, v);
-                }
+            let idle = m
+                .binding
+                .gpio_drivers
+                .get(&(port, bit))
+                .is_some_and(|drv| !drv.enabled);
+            if idle {
+                let level = m.last_levels.get(&(port, bit)).copied().unwrap_or(false);
+                m.drive_pin(&mut self.circuit, (port, bit), level);
             }
         }
         // Release: a pin is torn down when the direction report contradicts
@@ -8467,6 +8519,9 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         responder_input_pins: std::collections::HashSet::new(),
         digital_in_levels: HashMap::new(),
         uart_bytes: 0,
+        drive_rows: HashMap::new(),
+        drive_poll: 0,
+        reset_gate: electrics::ResetGate::default(),
         i2c_events: Arc::new(AtomicU64::new(0)),
         spi_events: Arc::new(AtomicU64::new(0)),
         pin_toggles: std::collections::BTreeMap::new(),
@@ -8751,6 +8806,9 @@ missing = ["measurement_registers"]
         )
     });
 
+    #[path = "electrics.rs"]
+    mod electrics_tests;
+
     // ── Shared fixtures ──────────────────────────────────────────────────────
 
     use hauksbee_mcu::traits::{
@@ -8801,6 +8859,9 @@ missing = ["measurement_registers"]
         responder_installs: Arc<std::sync::atomic::AtomicUsize>,
         responder: Arc<Mutex<Option<EdgeResponder>>>,
         direction_responder: Arc<Mutex<Option<DirectionResponder>>>,
+        /// Peripheral registers `read_register` answers from (drive-select
+        /// fields, by address).
+        registers: Arc<Mutex<HashMap<u32, u32>>>,
     }
 
     const WATCHDOG_LIMITATION: &str =
@@ -8824,6 +8885,7 @@ missing = ["measurement_registers"]
                 responder_installs: self.responder_installs.clone(),
                 responder: self.responder.clone(),
                 direction_responder: self.direction_responder.clone(),
+                registers: self.registers.clone(),
                 ..Default::default()
             }
         }
@@ -8896,6 +8958,9 @@ missing = ["measurement_registers"]
         }
         fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
             *self.i2c_addrs.lock_or_recover() = addresses.to_vec();
+        }
+        fn read_register(&mut self, addr: u32) -> Option<u32> {
+            self.registers.lock_or_recover().get(&addr).copied()
         }
         fn supports_reset(&self) -> bool {
             !self.reset_unsupported
@@ -8981,6 +9046,7 @@ missing = ["measurement_registers"]
             supply_stand_in: None,
             min_supply_v: None,
             supply_floors: HashMap::new(),
+            electrical: hauksbee_bind::mcu_electrical::McuElectrical::default(),
         }
     }
 

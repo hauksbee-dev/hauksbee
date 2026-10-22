@@ -105,6 +105,9 @@ pub struct McuBinding {
     /// RP2040's 3.3 V IOVDD and 1.1 V DVDD) has each pad judged against its
     /// own row rather than one part-wide floor.
     pub supply_floors: HashMap<String, f64>,
+    /// The card's pin drive strengths, drive-select register layout and
+    /// reset / brown-out thresholds. Empty when the card states none.
+    pub electrical: crate::mcu_electrical::McuElectrical,
 }
 
 /// One MCP4728 quad DAC discovered on the board.
@@ -7849,6 +7852,21 @@ fn roles_by_name(role_nets: &HashMap<String, NodeId>) -> Vec<(&String, NodeId)> 
     by_role
 }
 
+/// The pad-to-role map for an MCU: the model's own roles win on the pads they
+/// name, and the footprint's pin functions fill the rest (see `bind_mcu`).
+fn merged_mcu_pin_roles(
+    comp: &Component,
+    model: &ModelEntry,
+    derived_when_empty: Option<&DerivedMcuPins>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut merged =
+        derived_when_empty.map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
+    for (pad, role) in &model.pins {
+        merged.insert(pad.clone(), role.clone());
+    }
+    merged
+}
+
 fn bind_mcu(
     comp: &Component,
     model: &ModelEntry,
@@ -7863,7 +7881,6 @@ fn bind_mcu(
     // in an SDK/extending-guide model) must NOT activate the Arduino-header pad
     // mapping. Only `module = true` does.
     let module = model.params.get_bool("module").unwrap_or(false);
-    let derived_when_empty = model.pins.is_empty().then(|| derive_mcu_pin_roles(comp));
     // Merge the two role sources PER PAD instead of treating a non-empty model
     // map as exhaustive. A DB pin map is curated for one package's numbering
     // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied to
@@ -7873,15 +7890,8 @@ fn bind_mcu(
     // on pads they name (they carry curated semantic suffixes like "pc6_reset"
     // that the plain pinfunction derivation would weaken); the derivation only
     // fills pads the model map does not cover.
-    let effective_pins: std::collections::BTreeMap<String, String> = {
-        let mut merged = derived_when_empty
-            .as_ref()
-            .map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
-        for (pad, role) in &model.pins {
-            merged.insert(pad.clone(), role.clone());
-        }
-        merged
-    };
+    let derived_when_empty = model.pins.is_empty().then(|| derive_mcu_pin_roles(comp));
+    let effective_pins = merged_mcu_pin_roles(comp, model, derived_when_empty.as_ref());
     let effective_pins = &effective_pins;
 
     let mut pad_roles = HashMap::new();
@@ -7919,6 +7929,7 @@ fn bind_mcu(
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     let mut adc_pin = HashMap::new();
+    let electrical = crate::mcu_electrical::McuElectrical::from_card(model);
     // Roles in name order, never hash order: two roles reaching one port pin
     // would otherwise race for it (see `port_pin_owners`).
     let by_role = roles_by_name(&role_nets);
@@ -7955,7 +7966,7 @@ fn bind_mcu(
                 node,
                 &net_name,
                 &format!("{}_{port}{bit}", comp.reference),
-                DEFAULT_RO,
+                electrical.initial_ohms(DEFAULT_RO),
             );
             // Start high-impedance: the firmware enables the driver by toggling
             // the pin (DDR + PORT writes surface as an output edge). Inertness
@@ -8012,6 +8023,7 @@ fn bind_mcu(
             })
             .reduce(f64::min),
         supply_floors: supply_floors(model),
+        electrical,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }

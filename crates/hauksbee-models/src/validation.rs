@@ -12,8 +12,8 @@ use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::derating::temp_span;
 use crate::schema::{
     AboveDomainBehavior, Characteristic, ComponentKind, CurrentProgramEquation,
-    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, Params, PeripheralSpec,
-    Pinout,
+    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, OutputLevel, ParamValue, Params,
+    PeripheralSpec, Pinout,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
@@ -800,6 +800,97 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         p.require(!out.basis.trim().is_empty(), || {
             format!("[[models.supply_outputs]] '{r}' needs a basis citing its source path")
         });
+    }
+    for d in &entry.output_drive {
+        let name = &d.setting;
+        let sane = d.vdd.is_finite()
+            && d.vdd > 0.0
+            && !d.points.is_empty()
+            && d.points.iter().all(|pt| {
+                pt.current_a.is_finite()
+                    && pt.current_a > 0.0
+                    && pt.volts.is_finite()
+                    && (0.0..=d.vdd).contains(&pt.volts)
+            });
+        p.require(sane, || {
+            format!("[[models.output_drive]] '{name}' needs a positive vdd and points with positive currents and volts inside 0..vdd")
+        });
+        p.require(!d.basis.trim().is_empty(), || {
+            format!("[[models.output_drive]] '{name}' needs a basis citing the datasheet table and page")
+        });
+        let covered = |level| d.disconnected.contains(&level) || d.fit(level).is_some();
+        p.require(covered(OutputLevel::High) && covered(OutputLevel::Low), || {
+            format!("[[models.output_drive]] '{name}' needs a usable point or a disconnected entry for both high and low")
+        });
+    }
+    if !entry.output_drive.is_empty() {
+        let selectors: Vec<u32> = entry
+            .output_drive
+            .iter()
+            .filter_map(|d| d.selector)
+            .collect();
+        let unique = selectors
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == selectors.len();
+        p.require(unique, || {
+            "[[models.output_drive]] selectors must be unique".to_string()
+        });
+        p.require(
+            selectors.is_empty() || entry.drive_select.is_some(),
+            || "[[models.output_drive]] selectors need a [models.drive_select] saying where the field lives".to_string(),
+        );
+        p.require(
+            entry
+                .output_drive
+                .iter()
+                .filter(|d| d.reset_default)
+                .count()
+                <= 1,
+            || "[[models.output_drive]] at most one setting is reset_default".to_string(),
+        );
+    }
+    if let Some(sel) = &entry.drive_select {
+        p.require(
+            !sel.port_bases.is_empty() && sel.pins_per_register > 0 && (1..=32).contains(&sel.width) && sel.lsb + sel.width <= 32 && !sel.basis.trim().is_empty(),
+            || "[models.drive_select] needs port_bases, pins_per_register > 0, a width in 1..=32 inside the word, and a basis".to_string(),
+        );
+    }
+    if let Some(r) = &entry.reset {
+        let finite = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
+        p.require(
+            finite(r.assert_below_v)
+                && finite(r.release_above_v)
+                && finite(r.pin_vil_v)
+                && finite(r.pin_vih_v)
+                && finite(r.release_delay_s),
+            || "[models.reset] thresholds must be finite and non-negative".to_string(),
+        );
+        p.require(
+            r.assert_below_v
+                .zip(r.release_above_v)
+                .is_none_or(|(a, b)| a <= b)
+                && r.pin_vil_v.zip(r.pin_vih_v).is_none_or(|(a, b)| a < b),
+            || {
+                "[models.reset] needs assert_below_v <= release_above_v and pin_vil_v < pin_vih_v"
+                    .to_string()
+            },
+        );
+        p.require(!r.basis.trim().is_empty(), || {
+            "[models.reset] needs a basis citing the datasheet tables and pages".to_string()
+        });
+        if r.assert_below_v.is_some() || r.release_above_v.is_some() || r.release_delay_s.is_some()
+        {
+            let ok = r
+                .supply_pin
+                .as_ref()
+                .is_some_and(|role| entry.pins.values().any(|v| v == role));
+            p.require(ok, || {
+                "[models.reset] supply thresholds need supply_pin naming a role in [models.pins]"
+                    .to_string()
+            });
+        }
     }
     for opt in &entry.optional_supplies {
         let r = &opt.role;

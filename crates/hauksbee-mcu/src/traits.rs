@@ -494,6 +494,14 @@ pub trait Mcu {
         Vec::new()
     }
 
+    /// Read one 32-bit peripheral register by address, without side effects on
+    /// the firmware (a debugger-style peek). Used to learn the pin drive-strength
+    /// field a firmware has programmed. `None` when the backend cannot peek (the
+    /// default) or the address is unmapped.
+    fn read_register(&mut self, _addr: u32) -> Option<u32> {
+        None
+    }
+
     /// Whether this backend can actually observe pin drive DIRECTION, i.e.
     /// whether an empty [`Mcu::pins_configured_output`] means "no pin is an
     /// output" (trustworthy) rather than "I cannot tell" (the conservative

@@ -120,8 +120,9 @@ pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
     abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, ComponentKind, Doubt, DoubtArea,
-    EnvelopeSeverity, ModelCoverage, ModelEntry, ModelSourceReference, OperatingEnvelope, Params,
-    PeripheralPower, PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
+    DriveSelect, EnvelopeSeverity, ModelCoverage, ModelEntry, ModelSourceReference,
+    OperatingEnvelope, OutputDrive, OutputLevel, OutputPoint, Params, PeripheralPower,
+    PeripheralSpec, ResetSpec, StrapInternalPull, StrapLevel, StrapPin,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,

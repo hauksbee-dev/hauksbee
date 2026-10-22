@@ -105,6 +105,26 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_supplies: Vec<OptionalSupply>,
 
+    /// `[[models.output_drive]]`: the output stage per drive-strength setting,
+    /// as the datasheet's stated VOH / VOL points at stated currents. The
+    /// binder fits one output resistance per direction from them
+    /// ([`OutputDrive::fit`]); with `drive_select` the co-simulation picks the
+    /// row the firmware's live register selects. Absent: the generic fixed
+    /// output resistance applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_drive: Vec<OutputDrive>,
+
+    /// `[models.drive_select]`: where the firmware's drive-strength field
+    /// lives, so a live register read picks the `output_drive` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_select: Option<DriveSelect>,
+
+    /// `[models.reset]`: brown-out / power-on-reset supply thresholds and the
+    /// reset pin's input thresholds. Absent fields mean "the datasheet gives no
+    /// such figure"; the co-simulation then enforces nothing for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetSpec>,
+
     /// Pin-scoped recommended operating conditions and rail relationships.
     /// Every entry carries its own source basis so a static finding can quote
     /// the exact table row that authorizes the constraint.
@@ -293,6 +313,152 @@ impl ModelEntry {
             .get(pad)
             .map(String::as_str)
     }
+}
+
+/// Which output level a stated point belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputLevel {
+    /// A high level (VOH) while the pin sources current.
+    High,
+    /// A low level (VOL) while the pin sinks current.
+    Low,
+}
+
+/// One stated output point: the level a pin holds at a load current.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputPoint {
+    pub level: OutputLevel,
+    /// Magnitude of the load current (A), as the datasheet states it.
+    pub current_a: f64,
+    /// The datasheet's bound for the level at that current: a VOH minimum or a
+    /// VOL maximum (V).
+    pub volts: f64,
+}
+
+/// One drive-strength setting of a pin's output stage (see
+/// [`ModelEntry::output_drive`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputDrive {
+    /// The setting's datasheet name (`"12 mA"`, `"high drive"`).
+    pub setting: String,
+    /// The value of the drive-select register field that picks this setting
+    /// (see [`DriveSelect`]); absent for a part whose strength is not
+    /// firmware-selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<u32>,
+    /// Marks the setting the part comes out of reset in (used until a live
+    /// register read says otherwise).
+    #[serde(default)]
+    pub reset_default: bool,
+    /// The supply (V) the points are stated at.
+    pub vdd: f64,
+    /// The stated points; every direction a setting drives needs one.
+    pub points: Vec<OutputPoint>,
+    /// Levels this setting does not drive at all (an open-drain or open-source
+    /// mode: the pin floats at that level and the net's own pull decides).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disconnected: Vec<OutputLevel>,
+    /// The datasheet table and page the points came from.
+    pub basis: String,
+}
+
+impl OutputDrive {
+    /// The output resistance (ohm) the stated points imply for `level`: the
+    /// least-squares slope of the drop from the rail (high) or from ground
+    /// (low) against current, through the origin. `None` when the setting
+    /// states no usable point for that level.
+    #[must_use]
+    pub fn fit(&self, level: OutputLevel) -> Option<f64> {
+        let (mut num, mut den) = (0.0_f64, 0.0_f64);
+        for p in self.points.iter().filter(|p| p.level == level) {
+            let drop = match level {
+                OutputLevel::High => self.vdd - p.volts,
+                OutputLevel::Low => p.volts,
+            };
+            if p.current_a > 0.0 && drop >= 0.0 {
+                num += drop * p.current_a;
+                den += p.current_a * p.current_a;
+            }
+        }
+        (den > 0.0 && num > 0.0).then(|| num / den)
+    }
+}
+
+/// Where the firmware's drive-strength field lives (see
+/// [`ModelEntry::drive_select`]).
+///
+/// The field for pin `n` of port `P` is
+/// `width` bits at bit `lsb + (n % pins_per_register) * field_pitch_bits` of
+/// the 32-bit word at
+/// `port_bases[P] + (n / pins_per_register) * register_stride`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveSelect {
+    /// Port letter (the port letters the `SoC` descriptor uses) to the address
+    /// of the register holding pin 0's field.
+    pub port_bases: BTreeMap<String, u32>,
+    /// Bytes between consecutive registers of one port.
+    pub register_stride: u32,
+    /// How many pins' fields one register holds.
+    pub pins_per_register: u32,
+    /// Bit position of the first pin's field.
+    pub lsb: u32,
+    /// Field width in bits.
+    pub width: u32,
+    /// Bits between consecutive pins' fields inside one register.
+    #[serde(default)]
+    pub field_pitch_bits: u32,
+    /// The datasheet register description the layout came from.
+    pub basis: String,
+}
+
+impl DriveSelect {
+    /// `(address, shift)` of the field for pin `bit` of `port`.
+    #[must_use]
+    pub fn locate(&self, port: char, bit: u8) -> Option<(u32, u32)> {
+        let base = *self.port_bases.get(port.to_string().as_str())?;
+        let per = self.pins_per_register.max(1);
+        let n = u32::from(bit);
+        Some((
+            base + (n / per) * self.register_stride,
+            self.lsb + (n % per) * self.field_pitch_bits,
+        ))
+    }
+}
+
+/// `[models.reset]`: the supply and pin thresholds at which the part holds
+/// itself in reset (see [`ModelEntry::reset`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetSpec {
+    /// The supply pin role (`"vdd"`, `"dvdd"`) the two thresholds below watch:
+    /// a part's reset circuit senses one rail (the RP2040's brown-out sits on
+    /// its 1.1 V core, not its 3.3 V IO supply). Required with either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supply_pin: Option<String>,
+    /// Supply (V) below which the power-on / brown-out reset asserts (falling
+    /// threshold, typical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assert_below_v: Option<f64>,
+    /// Supply (V) above which the reset releases (rising threshold, typical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_above_v: Option<f64>,
+    /// Reset-pin level (V) below which the pin asserts reset (VIL maximum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_vil_v: Option<f64>,
+    /// Reset-pin level (V) above which the pin releases reset (VIH minimum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_vih_v: Option<f64>,
+    /// Time (s) the part stays in reset after the supply has risen past the
+    /// release threshold (a power-on reset temporization, typical). Applies to
+    /// the supply path only; a reset pin releases when it crosses `pin_vih_v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_delay_s: Option<f64>,
+    /// The datasheet tables and pages the figures came from.
+    pub basis: String,
 }
 
 /// A supply pin a board may leave open (see [`ModelEntry::optional_supplies`]).

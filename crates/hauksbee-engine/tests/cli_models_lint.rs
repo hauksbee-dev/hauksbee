@@ -539,10 +539,9 @@ fn lint_refuses_unrecognized_toml() {
 /// - the WATCHDOG, either the part's own limitation sentence rendered verbatim,
 ///   or, when the descriptor claims none, that the part claims full fidelity.
 ///
-/// Proven on a shipped descriptor (nRF52840, whose watchdog arms and never
-/// fires) and on that same descriptor with the field removed, which is the only
-/// way to reach the full-fidelity branch: every shipped Renode part currently
-/// carries a limitation.
+/// Proven on shipped descriptors: the nRF52840 (whose watchdog is measured to
+/// bite, so it claims full fidelity) and the RP2040 (whose watchdog is still
+/// unmeasured, so its own limitation sentence is quoted verbatim).
 #[cfg(feature = "renode")]
 #[test]
 fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
@@ -558,10 +557,19 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
     );
     assert!(
         out.contains(
-            "watchdog: The nRF52840 watchdog arms in this co-simulator (it reads back as \
-             running, with a correct 32768 Hz reload) but never fires:"
+            "watchdog: this part claims full fidelity, an armed watchdog that is never fed \
+             reboots the core the way silicon does"
         ),
-        "the part's own sentence, verbatim:\n{out}"
+        "a measured watchdog is a CLAIM and must be printed as one:\n{out}"
+    );
+    // The other branch: a descriptor that still declares a limitation has its
+    // own sentence quoted verbatim.
+    let rp2040_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/rp2040.soc.toml");
+    let rp_out = lint_exits(&rp2040_path, 0);
+    assert!(
+        rp_out.contains("watchdog: Watchdog behaviour is UNVERIFIED on this part"),
+        "the part's own sentence, verbatim:\n{rp_out}"
     );
     // TIMING, the same two-branch discipline as the watchdog. The nRF52840
     // declares no timing_limitation (its clock is clock-truth gated), so the
@@ -585,44 +593,6 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
              co-simulator while the core and SysTick run at the 8 MHz reset default"
         ),
         "the F103's own timing sentence, verbatim:\n{out}"
-    );
-
-    // The other branch: a descriptor claiming no limitation says so as a claim,
-    // rather than leaving the reader to infer it from a missing line. Drop the
-    // `watchdog_limitation = """ … """` block, closing delimiter included.
-    let stock = std::fs::read_to_string(&stock_path).expect("read stock descriptor");
-    let mut silent = String::new();
-    let mut skipping = false;
-    for line in stock.lines() {
-        if line.starts_with("watchdog_limitation") {
-            skipping = true;
-            continue;
-        }
-        if skipping {
-            skipping = line.trim() != "\"\"\"";
-            continue;
-        }
-        silent.push_str(line);
-        silent.push('\n');
-    }
-    assert!(
-        !silent.contains("watchdog_limitation") && silent.contains("[[soc.ports]]"),
-        "the field must be gone and the rest of the descriptor intact:\n{silent}"
-    );
-
-    let dir = std::env::temp_dir().join(format!("hauksbee-soc-lint-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let path = dir.join("nrf52840.soc.toml");
-    std::fs::write(&path, silent).expect("write descriptor");
-    let (code, out) = lint(&path);
-    let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(code, 0, "still a valid descriptor:\n{out}");
-    assert!(
-        out.contains(
-            "watchdog: this part claims full fidelity, an armed watchdog that is never fed \
-             reboots the core the way silicon does"
-        ),
-        "an absent limitation is a CLAIM and must be printed as one:\n{out}"
     );
 }
 

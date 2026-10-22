@@ -3440,6 +3440,7 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "4"  = "pc15"
 "5"  = "osc_in"    # HSE crystal / external-clock input
 "6"  = "osc_out"   # HSE crystal oscillator output
+"7"  = "reset"     # NRST, LQFP-48 pin 7 (DS5319 Rev 20 Table 5 PDF p.28)
 "8"  = "vss"
 "9"  = "vdd"
 "10" = "pa0_adc0"  # LQFP-48 pin 10 = PA0 (PA0-WKUP / ADC1_IN0) per ST DS5319; matches the
@@ -3713,9 +3714,37 @@ boot_select = true   # latches the boot memory; firmware cannot undo it
 internal_pull = "none"   # STM32 BOOT0 has NO on-die pull: a floating net is undefined
 note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 
+# Output stage. STM32F103x8/xB DS5319 Rev 20 Table 37 'Output voltage characteristics' section
+# 5.3.13 PDF p.64: VOL max 0.4 V and VOH min VDD-0.4 V at IIO = 8 mA (2.7 V < VDD < 3.6 V), the
+# figure tested in production. The relaxed 20 mA row (VOL 1.3 V, VOH VDD-1.3 V) is
+# characterised only and not fitted. PC13-PC15 are limited to 3 mA (PDF p.64) and the
+# datasheet gives them no VOL/VOH, so they take this fit only because the card has no
+# per-pin exception. Pin speed (MODE bits) changes slew, not these DC limits.
+[[models.output_drive]]
+setting = "8 mA"
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.9 },
+  { level = "low", current_a = 0.008, volts = 0.4 },
+]
+basis = "STM32F103x8/xB DS5319 Rev 20 Table 37 section 5.3.13 PDF p.64: CMOS port, IIO = 8 mA, 2.7 V < VDD < 3.6 V, VOL max 0.4 V, VOH min VDD-0.4 V (VDD 3.3 V gives 2.9 V)"
+
+# Reset. Power-on/power-down reset: DS5319 Table 11 section 5.3.3 PDF p.39, falling edge typ
+# 1.88 V, rising edge typ 1.92 V. NRST pin: Table 39 section 5.3.14 PDF p.66, VIL max 0.8 V,
+# VIH min 2.0 V (pin 7 on LQFP48, Table 5 PDF p.28). NRST filters pulses under 100 ns and
+# passes those over 300 ns; pulses shorter than that are not modelled.
+[models.reset]
+supply_pin = "vdd"
+assert_below_v = 1.88
+release_above_v = 1.92
+release_delay_s = 0.0025   # TRSTTEMPO typ 2.5 ms (min 1.0, max 4.5), Table 11 PDF p.39, specified by design
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "STM32F103x8/xB DS5319 Rev 20: VPOR/PDR and TRSTTEMPO Table 11 section 5.3.3 PDF p.39 (typ 1.88 V falling, 1.92 V rising, 2.5 ms temporization); NRST VIL/VIH Table 39 section 5.3.14 PDF p.66"
+
 [models.coverage]
 implements = ["cortex_m3_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "uart_tx", "virtual_clock_and_systick", "i2c1_controller_bridge", "spi1_controller_bridge"]
-missing = ["adc_injection", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
+missing = ["adc_injection", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
@@ -5254,6 +5283,111 @@ max_v = 3.6
 abs_max_v = 3.9
 basis = "Nordic nRF52840 Product Specification (docs.nordicsemi.com ps_nrf52840), Recommended operating conditions, VDD supply voltage 1.7 V to 3.6 V; Absolute maximum ratings, VDD -0.3 V to +3.9 V"
 
+# Output stage per PIN_CNF.DRIVE mode. nRF52840 PS v1.7 section 6.9.3.1 PDF p.159: IOL,SD /
+# IOH,SD min 1 mA at 0.4 V (VDD >= 1.7 V), IOL,HDH / IOH,HDH min 6 mA at 0.4 V (VDD >= 2.7 V).
+# Modes per section 6.9.2.10 PDF p.158-159: S0S1=0, H0S1=1, S0H1=2, H0H1=3, D0S1=4, D0H1=5,
+# S0D1=6, H0D1=7 ('0' is the pin driven low, '1' high; D = disconnected). S0S1 is the reset
+# default. Points are at VDD 3.0 V (the typical supply, section 5.3.8.1 PDF p.83).
+[[models.output_drive]]
+setting = "S0S1"
+selector = 0
+reset_default = true   # S0S1 is the default DRIVE setting at reset (PS v1.7 p.57, PIN_CNF reset 0x00000002)
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0S1"
+selector = 1
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "S0H1"
+selector = 2
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0H1"
+selector = 3
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "D0S1"
+selector = 4
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.001, volts = 2.6 },
+]
+disconnected = ["low"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "D0H1"
+selector = 5
+vdd = 3.0
+points = [
+  { level = "high", current_a = 0.006, volts = 2.6 },
+]
+disconnected = ["low"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "S0D1"
+selector = 6
+vdd = 3.0
+points = [
+  { level = "low", current_a = 0.001, volts = 0.4 },
+]
+disconnected = ["high"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+[[models.output_drive]]
+setting = "H0D1"
+selector = 7
+vdd = 3.0
+points = [
+  { level = "low", current_a = 0.006, volts = 0.4 },
+]
+disconnected = ["high"]
+basis = "nRF52840 Product Specification v1.7 section 6.9.3.1 GPIO Electrical Specification PDF p.159: standard drive guarantees IOL/IOH of 1 mA at VSS+0.4 V / VDD-0.4 V (VDD >= 1.7 V); high drive guarantees 6 mA (VDD >= 2.7 V). The minimum column is used (typ 2 mA / 10 mA / 9 mA is better than the bound)"
+
+# GPIO P0/P1 PIN_CNF[n] at base + 0x700 + 4n, DRIVE bits 10:8 (PS v1.7 section 6.9.2.10 PDF
+# p.158-159; P0 at 0x50000000, P1 at 0x50000300, instantiation table PDF p.30).
+[models.drive_select]
+port_bases = { "0" = 0x50000700, "1" = 0x50000A00 }
+register_stride = 4
+pins_per_register = 1
+lsb = 8
+width = 3
+basis = "nRF52840 PS v1.7 section 6.9.2.10 PIN_CNF[n] PDF p.158-159: offset 0x700 + 4n, DRIVE bits 10:8, S0S1=0 H0S1=1 S0H1=2 H0H1=3 D0S1=4 D0H1=5 S0D1=6 H0D1=7"
+
+# Brown-out reset: nRF52840 PS v1.7 section 5.3.8.4 PDF p.85, VBOR,ON (System ON, VDD only)
+# min 1.57 V, typ 1.6 V, max 1.63 V. No hysteresis is printed, so release_above_v is absent.
+# The nRESET pin exists only when UICR PSELRESET maps it (section 4.5.1.4 PDF p.45) and the
+# datasheet prints no nRESET-specific VIL/VIH, so the card carries no reset pin threshold.
+[models.reset]
+supply_pin = "vdd"
+assert_below_v = 1.6
+basis = "nRF52840 PS v1.7 section 5.3.8.4 Power fail comparator, VBOR,ON typ 1.6 V (PDF p.85)"
+
 # nice!nano (v1/v2): an nRF52840 on the Pro Micro footprint. Its pin names are
 # Nordic port pins ("P0.06", "P1.15-LF"), which the binder reads as p0<bit> /
 # p1<bit>; the header numbering differs between footprint libraries, so no pad
@@ -5427,6 +5561,76 @@ level = "high"
 boot_select = false
 internal_pull = "pull_up"
 note = "RUN is active low with an internal pull-up; held low it keeps the chip in reset"
+
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour. RUN is the global asynchronous reset: low holds the chip in reset
+# regardless of DVDD (section 2.12.5 PDF p.168; pin list Table 619 PDF p.614). The datasheet
+# prints no RUN-specific VIL/VIH; RUN is typed 'Digital In (FT)' in the IOVDD domain, so the
+# generic Table 625 input levels at IOVDD 3.3 V are applied by pin type (VIL max 0.8 V, VIH
+# min 2.0 V, PDF p.616-617). Brown-out watches DVDD (the 1.1 V core), not IOVDD: nominal
+# threshold 0.86 V at power-on or after a reset (section 2.12.3.2 PDF p.167, Table 194), BOD
+# enabled at reset (BOD register EN reset 0x1, Table 190 PDF p.159-160). No rising threshold
+# is printed, so release_above_v is absent.
+[models.reset]
+supply_pin = "dvdd"
+assert_below_v = 0.86
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 190 PDF p.159-160 (DVDD, nominal 0.86 V, 0.83-0.89 V); RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
@@ -5648,6 +5852,76 @@ min_v = 1.62
 max_v = 3.63
 basis = "RP2040 Datasheet build-date 2025-02-20, Table 634 Power Supply Specifications, ADC_AVDD ADC 1.62-3.63 V (ADC performance compromised below 2.97 V)"
 
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour. RUN is the global asynchronous reset: low holds the chip in reset
+# regardless of DVDD (section 2.12.5 PDF p.168; pin list Table 619 PDF p.614). The datasheet
+# prints no RUN-specific VIL/VIH; RUN is typed 'Digital In (FT)' in the IOVDD domain, so the
+# generic Table 625 input levels at IOVDD 3.3 V are applied by pin type (VIL max 0.8 V, VIH
+# min 2.0 V, PDF p.616-617). Brown-out watches DVDD (the 1.1 V core), not IOVDD: nominal
+# threshold 0.86 V at power-on or after a reset (section 2.12.3.2 PDF p.167, Table 194), BOD
+# enabled at reset (BOD register EN reset 0x1, Table 190 PDF p.159-160). No rising threshold
+# is printed, so release_above_v is absent.
+[models.reset]
+supply_pin = "dvdd"
+assert_below_v = 0.86
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet: BOD threshold section 2.12.3.2 PDF p.167 and Table 190 PDF p.159-160 (DVDD, nominal 0.86 V, 0.83-0.89 V); RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
 missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
@@ -5801,6 +6075,70 @@ basis = "Raspberry Pi Pico Datasheet (build date 03/07/2026), Figure 2 pinout of
 "31" = "ADC0"
 "32" = "ADC1"
 "34" = "ADC2"
+
+# Output stage per drive-strength setting. RP2040 Datasheet Table 625 section 5.5.3.4
+# PDF p.616-617: IOVDD 3.3 V, VOH min 2.62 V, VOL max 0.5 V, test current = the selected
+# setting (2/4/8/12 mA). The 1.8 V and 2.5 V rows (VOH 1.24/1.78 V, VOL 0.3/0.4 V) are
+# not carried: only the 3.3 V row is fitted.
+[[models.output_drive]]
+setting = "2 mA"
+selector = 0   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x0 = 2MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.002, volts = 2.62 },
+  { level = "low", current_a = 0.002, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "4 mA"
+selector = 1   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x1 = 4MA (Table 341 PDF p.302-303)
+reset_default = true   # DRIVE reset value 0x1 = 4MA (Table 341 PDF p.302)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.004, volts = 2.62 },
+  { level = "low", current_a = 0.004, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "8 mA"
+selector = 2   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x2 = 8MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.008, volts = 2.62 },
+  { level = "low", current_a = 0.008, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+[[models.output_drive]]
+setting = "12 mA"
+selector = 3   # PADS_BANK0 GPIOn DRIVE bits 5:4, 0x3 = 12MA (Table 341 PDF p.302-303)
+vdd = 3.3
+points = [
+  { level = "high", current_a = 0.012, volts = 2.62 },
+  { level = "low", current_a = 0.012, volts = 0.5 },
+]
+basis = "RP2040 Datasheet (target/launch/wp5-datasheets/rp2040-datasheet.pdf, downloaded 2026-10-22), Table 625 'Digital IO characteristics' section 5.5.3.4 PDF p.616-617 (printed 615-616): at IOVDD 3.3 V VOH min 2.62 V and VOL max 0.5 V with IOH/IOL = 2, 4, 8 or 12 mA 'depending on setting'; section 5.5.3.5 PDF p.618 defines VOH/VOL as the worst-case level at the setting's current, so the fitted resistance is the datasheet bound, not the typical curve (Figure 171 is graph-only)"
+
+# PADS_BANK0 GPIO0..GPIO29, Table 341 section 2.19.6.3 PDF p.301-303: base 0x4001c000,
+# GPIO0 at +0x04, one 32-bit register per pin at a 4-byte stride, DRIVE = bits 5:4.
+[models.drive_select]
+port_bases = { "0" = 0x4001c004 }
+register_stride = 4
+pins_per_register = 1
+lsb = 4
+width = 2
+basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): base 0x4001c000 + 0x04 + 4*n, DRIVE bits 5:4, 0x0=2MA 0x1=4MA 0x2=8MA 0x3=12MA, reset 0x1"
+
+# Reset behaviour: RUN (header pin 30) is the chip's global reset; low holds the chip in
+# reset (RP2040 Datasheet section 2.12.5 PDF p.168). The datasheet prints no RUN-specific
+# VIL/VIH; RUN is typed 'Digital In (FT)' so Table 625 input levels at IOVDD 3.3 V apply by pin
+# type (PDF p.616-617). The module's DVDD is internal, so no supply threshold is carried.
+[models.reset]
+pin_vil_v = 0.8
+pin_vih_v = 2.0
+basis = "RP2040 Datasheet RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
 
 [[models]]
 id = "daisy_seed"

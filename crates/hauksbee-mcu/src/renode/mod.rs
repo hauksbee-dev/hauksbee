@@ -28,6 +28,7 @@
 
 mod monitor;
 mod process;
+mod reset;
 pub mod support;
 
 // RenodeProcess is exported (not just used internally) for the child-reaping
@@ -940,6 +941,8 @@ pub struct RenodeBackend {
     external_inputs: HashMap<char, u32>,
     /// Execution-evidence hooks and PC samples (see [`Mcu::execution_probe`]).
     probe: RenodeProbe,
+    /// Core reboots: the `reset` macro and the reset-entry counter.
+    reboots: reset::RebootWatch,
 }
 
 /// Execution-evidence state for one Renode machine: which symbols are hooked
@@ -1164,6 +1167,7 @@ impl RenodeBackend {
             adc_unmapped_warned: std::collections::HashSet::new(),
             external_inputs: HashMap::new(),
             probe: RenodeProbe::default(),
+            reboots: reset::RebootWatch::default(),
         })
     }
 
@@ -1950,6 +1954,7 @@ impl Mcu for RenodeBackend {
         }
         self.core.firmware_loaded = true;
         self.install_execution_hooks(&abs);
+        self.install_reset_support(&abs);
         self.install_pull_hooks()?;
 
         // Execution-trace introspection: opt-in via HAUKSBEE_RENODE_TRACE=1.
@@ -2159,11 +2164,36 @@ impl Mcu for RenodeBackend {
         chans
     }
 
+    fn read_register(&mut self, addr: u32) -> Option<u32> {
+        self.read_word_abs(addr)
+    }
+
+    fn supports_reset(&self) -> bool {
+        self.reboots.can_reset()
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.reset_core()
+    }
+
+    fn watchdog_resets(&self) -> u64 {
+        self.reboots.unrequested()
+    }
+
     fn watchdog_limitation(&self) -> Option<String> {
         // Per-part descriptor data, not a backend constant: the shipped
         // platforms genuinely differ, and the descriptor is where a measured
         // per-part fact belongs.
-        self.config.watchdog_limitation.clone()
+        self.config.watchdog_limitation.clone().or_else(|| {
+            // The reset macro is installed but the reset entry could not be
+            // found, so reboots cannot be counted: say so rather than report
+            // zero bites as a clean run.
+            (self.reboots.can_reset() && !self.reboots.counting()).then(|| {
+                "This run could not locate the firmware's reset entry, so watchdog \
+                 reboots are not counted: a starved watchdog would go unreported."
+                    .to_owned()
+            })
+        })
     }
 
     fn timing_limitation(&self) -> Option<String> {
@@ -2272,6 +2302,7 @@ impl RenodeBackend {
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();
         self.sample_pc();
+        self.poll_reboots();
         let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some()
             || std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
         self.core.pump_uart_out(trace)?;
