@@ -5831,8 +5831,8 @@ max_adc_source_impedance_ohms = 10000.0
 [models.levels]
 vih = [[4.5, 2.7], [5.5, 3.3]]
 vil = [[4.5, 1.35], [5.5, 1.65]]
-voh = [[5.0, 4.2]]
-vol = [[5.0, 0.9]]
+voh = [[5.0, 4.2], [5.5, 4.2]]  # datasheet gives VOH at VCC = 5 V only; held flat to the 5.5 V ceiling
+vol = [[5.0, 0.9], [5.5, 0.9]]  # datasheet gives VOL at VCC = 5 V only; held flat to the 5.5 V ceiling
 
 [models.pin_capability.adc]
 basis = "Microchip ATmega640/V-1280/V-1281/V-2560/V-2561/V datasheet DS40002211A, Figure 1-1 TQFP-pinout (p.2): PF0-PF7 carry ADC0-ADC7 and PK0-PK7 carry ADC8-ADC15; Table 1-1 (p.3) gives the CBGA balls and states the functions are the same as the 100-pin package; 2.3.8 and 2.3.12 (pp.8-9)"
@@ -6486,8 +6486,8 @@ max_adc_source_impedance_ohms = 10000.0
 [models.levels]
 vih = [[4.5, 2.7], [5.5, 3.3]]
 vil = [[4.5, 1.35], [5.5, 1.65]]
-voh = [[5.0, 4.2]]
-vol = [[5.0, 0.9]]
+voh = [[5.0, 4.2], [5.5, 4.2]]  # datasheet gives VOH at VCC = 5 V only; held flat to the 5.5 V ceiling
+vol = [[5.0, 0.9], [5.5, 0.9]]  # datasheet gives VOL at VCC = 5 V only; held flat to the 5.5 V ceiling
 
 [models.pin_capability.adc]
 basis = "Microchip ATmega640/V-1280/V-1281/V-2560/V-2561/V datasheet DS40002211A, Figure 1-1 TQFP-pinout (p.2): PF0-PF7 carry ADC0-ADC7 and PK0-PK7 carry ADC8-ADC15; Table 1-1 (p.3) gives the CBGA balls and states the functions are the same as the 100-pin package; 2.3.8 and 2.3.12 (pp.8-9)"

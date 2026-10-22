@@ -57,6 +57,7 @@ iovdd5	*	supply iovdd 0
 iovdd6	*	supply iovdd 0
 out	*	none
 pgnd	*	return 1
+pgnd1	*	return 1
 pgnd2	*	return 1
 pgnd3	*	return 1
 sensgnd	*	none

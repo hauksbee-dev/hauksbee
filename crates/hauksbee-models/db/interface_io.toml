@@ -38,7 +38,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102DCT([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -52,8 +52,9 @@ gnd_pin = "2"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -148,7 +149,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102DCU([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -162,8 +163,9 @@ gnd_pin = "2"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -258,7 +260,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102DTT([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -272,8 +274,9 @@ gnd_pin = "2"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -368,7 +371,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102DQE([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -382,8 +385,9 @@ gnd_pin = "4"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -478,7 +482,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102DQM([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -492,8 +496,9 @@ gnd_pin = "4"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -588,7 +593,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0102YZP([RT](E4|G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.211   # derived: 0.67 x VCC at VCC = 3.3 V; 5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.67 x VCC at IOH = -20 uA, 5.5 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 5.5 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -602,8 +607,9 @@ gnd_pin = "B1"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB min VCC x 0.67, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.1055], [5.5, 3.685]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.67 x VCCO at IOH = -20 uA (5.5 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "oe"]
@@ -707,7 +713,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104ED(R|G4|RG4)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -721,8 +727,9 @@ gnd_pin = "7"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -829,7 +836,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104EPW([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -843,8 +850,9 @@ gnd_pin = "7"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -952,7 +960,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104ERGY([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -966,8 +974,9 @@ gnd_pin = "7"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -1077,7 +1086,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104EBQA([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -1091,8 +1100,9 @@ gnd_pin = "7"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -1198,7 +1208,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104ERUT([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -1212,8 +1222,9 @@ gnd_pin = "6"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -1318,7 +1329,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104EYZT([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -1332,8 +1343,9 @@ gnd_pin = "D2"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -1440,7 +1452,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104EZXU([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -1454,8 +1466,9 @@ gnd_pin = "B4"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]
@@ -1562,7 +1575,7 @@ reason = "a card carries one input-threshold table per rail, so the table is the
 value_re = "(?i)^TXS0104ENMN([RT]?(G4)?)?(\\.[AB])?$"
 
 [models.params]
-voh = 2.64   # derived: 0.8 x VCC at VCC = 3.3 V; 6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C
+voh = 3.3   # derived: the unloaded port node sits at its own 10 kOhm pull-up rail (VCC = 3.3 V here; ro below); the printed guarantee is VOH min 0.8 x VCC at IOH = -20 uA, 6.6 Electrical Characteristics VOHA/VOHB, which is the driven-side floor, not the unloaded level
 vol = 0.4          # IOL = 1 mA, VOL max over -40 C to 85 C, Section 6.6 Electrical Characteristics
 vih = 2.145        # derived: 0.65 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
 vil = 1.155        # derived: 0.35 x VCCA at VCCA = 3.3 V, OE input, Recommended Operating Conditions
@@ -1576,8 +1589,9 @@ gnd_pin = "B4"
 # OE input band: Recommended Operating Conditions, OE VIH min = VCCA x 0.65, VIL max = VCCA x 0.35 (derived at the 1.65 V and 5.5 V ends; the OE pin is read at VCCA <= 3.6 V).
 vih = [[1.65, 1.0725], [3.6, 2.34]]
 vil = [[1.65, 0.5775], [3.6, 1.26]]
-# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB min VCC x 0.8, IOH = -20 uA, TA = -40 C to 85 C), derived at 1.65 V and 5.5 V.
-voh = [[1.65, 1.32], [5.5, 4.4]]
+# Unloaded VOH: the port node rests at its own 10 kOhm pull-up rail (derived: VOH = VCCO, so 1.65 V and 5.5 V at the ends; ro = 10 kOhm above). The printed guarantee is
+# VOH min = 0.8 x VCCO at IOH = -20 uA (6.6 Electrical Characteristics VOHA/VOHB), the floor under drive, which is not the level of an open port.
+voh = [[1.65, 1.65], [5.5, 5.5]]
 
 [models.level_rails]
 vcca = ["a1", "a2", "a3", "a4", "oe"]

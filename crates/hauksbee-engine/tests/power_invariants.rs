@@ -374,6 +374,10 @@ fn vreg_plan(card: &Card, value: &str) -> Option<Plan> {
         .and_then(|f| float(f, "vref_v"))
         .or_else(|| conv.is_none().then(|| card.param("vref")).flatten());
     let fixed = conv.map_or_else(|| card.param("vout"), |c| float(c, "vout_setpoint"));
+    // A fixed converter version (LM2596-12) names its output as the feedback
+    // reference: FB sits on the output node, there is no divider to build, and
+    // the rig runs it at its own setpoint rather than at the adjustable 5 V.
+    let vref = vref.filter(|v| fixed.is_none_or(|f| (f - v).abs() > 1e-9));
     let mut target = if vref.is_some() { 5.0 } else { fixed? };
     let dropout = card.param("dropout_v").unwrap_or(1.0);
     let topology = conv.and_then(|c| text(c, "topology")).unwrap_or("linear");
@@ -1236,20 +1240,18 @@ const STATIC_INERT: &[&str] = &[
 fn digital_output_current_is_drawn_from_the_supply_pin() {
     let cards =
         cards_of(|k, t| matches!(k, "digital" | "shift_register") && t.contains_key("logic"));
-    // A sink-only open-collector array (no `voh`, no supply pin: ULN2003) has
-    // no positive pin to draw a sourced current from, and no high drive to
-    // check one against: `open_collector_outputs_only_sink_into_the_ground_pin`
-    // covers it.
+    // A sink-only open-collector or open-drain card (no `voh`: ULN2003, or an
+    // open-drain buffer such as the 74LVC1G07, which has a supply pin it never
+    // sources through) has no high drive to check a sourced current against:
+    // `open_collector_outputs_only_sink_into_the_ground_pin` covers it.
     let (sink_only, cards): (Vec<Card>, Vec<Card>) = cards
         .into_iter()
         .filter(|c| !c.logic("outputs").is_empty())
         // A `voh` stated as a row (min/typ/max with conditions) is still a `voh`.
         .partition(|c| c.table.get("params").and_then(|p| p.get("voh")).is_none());
     assert!(
-        sink_only
-            .iter()
-            .all(|c| open_collector(c) && !c.has_role("vcc") && !c.has_role("vdd")),
-        "a card with no `voh` must say `open_collector = true` and have no supply pin"
+        sink_only.iter().all(open_collector),
+        "a card with no `voh` must say `open_collector = true`"
     );
     assert!(
         cards.len() >= 30,
@@ -1306,9 +1308,14 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
 
 /// The outputs of an open-collector array on `+5V` pull-ups (or 1 k
 /// pull-downs), the ground pin on net `E` through 1 ohm to ground, every input
-/// high (`on`) or low. Returns the rig and the output nets.
+/// at the level that sinks (`on`) or the one that leaves the outputs open.
+/// Returns the rig and the output nets.
 fn open_collector_rig(card: &Card, value: &str, on: bool, pull_up: bool) -> (Rig, Vec<String>) {
     let (inputs, outputs) = (card.logic("inputs"), card.logic("outputs"));
+    let sink_when_high = card
+        .table
+        .get("logic")
+        .is_some_and(|l| l.get("tristate").is_some());
     let mut rig = Rig::default();
     rig.net("GND");
     let mut pins = Vec::new();
@@ -1321,7 +1328,10 @@ fn open_collector_rig(card: &Card, value: &str, on: bool, pull_up: bool) -> (Rig
                 format!("OUT_{r}")
             }
             r if inputs.iter().any(|i| i == r) => {
-                if on {
+                // An array whose outputs are tri-stated by their inputs (ULN2003)
+                // sinks on a high input; a buffer whose output follows its input
+                // (74LVC1G07) sinks while its input is low.
+                if on == sink_when_high {
                     rail(3.3)
                 } else {
                     "GND".into()
@@ -1424,7 +1434,11 @@ fn open_collector_outputs_only_sink_into_the_ground_pin() {
 /// control with the routing stripped must fail.
 #[test]
 fn dac_output_current_is_drawn_from_the_supply_pin() {
-    let cards = cards_of(|k, _| k == "dac");
+    // The rig programs the card over I2C with a Fast Write, so it takes the DAC
+    // cards that have an I2C address; the SPI and I2S ones (MCP4921/2, PCM5102A)
+    // have no such register path to drive.
+    let cards =
+        cards_of(|k, t| k == "dac" && t.get("params").is_some_and(|p| p.get("i2c_addr").is_some()));
     assert!(!cards.is_empty(), "no DAC card");
     let lib = probe_library(&cards, "dacs");
     let mut failures = Vec::new();
