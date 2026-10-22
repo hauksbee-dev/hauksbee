@@ -1143,12 +1143,9 @@ impl RenodeBackend {
         // Descriptor-driven clock model: readiness gating and clock-tree
         // following. Its script file rides the bridge-source cleanup list.
         let mut bridge_files: Vec<PathBuf> = platform_file.into_iter().collect();
-        let model_loaded = if let Some(path) = clock::install_readiness(&mut monitor, &config)? {
-            bridge_files.push(path);
-            true
-        } else {
-            false
-        };
+        let readiness_script = clock::install_readiness(&mut monitor, &config)?;
+        let model_loaded = readiness_script.is_some();
+        bridge_files.extend(readiness_script);
 
         // Setup is the cold path. Runtime register polls must keep the tighter
         // bound so a stalled emulator cannot freeze each port read for a full

@@ -32,6 +32,7 @@ use crate::periph_snapshot::{
 };
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,10 +77,11 @@ fn entries_literal(config: &RenodeConfig) -> String {
                 format!("('{}', {when})", n.entry)
             })
             .collect();
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "    '{name}': {{'p': '{p}', 'en_reg': {en_reg}, 'en_mask': {en_mask}, \
              'en_val': {en_val}, 'rd_reg': {rd_reg}, 'rd_mask': {rd_mask}, 'ext': {ext}, \
-             'su': {su:?}, 'scale': {scale}, 'needs': [{needs}]}},\n",
+             'su': {su:?}, 'scale': {scale}, 'needs': [{needs}]}},",
             name = e.name,
             p = e.peripheral,
             en_reg = e.enable_register,
@@ -90,7 +92,7 @@ fn entries_literal(config: &RenodeConfig) -> String {
             ext = if e.requires_external { "True" } else { "False" },
             su = e.startup_us,
             needs = needs.join(", "),
-        ));
+        );
     }
     out.push_str("}\n");
     out
@@ -239,14 +241,15 @@ fn write_script(script: &str) -> Result<PathBuf> {
 fn timer_fixes_literal(config: &RenodeConfig) -> String {
     let mut out = String::from("UF = [\n");
     for u in &config.timer_fixes {
-        out.push_str(&format!(
-            "    ('{}', {}, {}, {}),\n",
+        let _ = writeln!(
+            out,
+            "    ('{}', {}, {}, {}),",
             u.peripheral,
             u.enable_register,
             u.enable_mask,
             u.auto_reload_register
                 .map_or_else(|| "None".to_string(), |r| r.to_string())
-        ));
+        );
     }
     out.push_str("]\n");
     out
@@ -397,10 +400,11 @@ impl RenodeBackend {
             return Ok(());
         }
         let list: Vec<String> = addresses.iter().map(|a| format!("0x{a:X}")).collect();
-        stmt.push_str(&format!(
+        let _ = write!(
+            stmt,
             "print(' '.join('%x' % b.hkb_rd(a) for a in [{}]))",
             list.join(", ")
-        ));
+        );
         let reply = self.monitor.run(&format!("python \"{stmt}\""))?;
         let values: Vec<u32> = reply
             .split_whitespace()

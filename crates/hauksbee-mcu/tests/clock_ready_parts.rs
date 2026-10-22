@@ -4,7 +4,7 @@
 //!
 //! A board with a crystal must raise HSERDY after the part's startup time and
 //! PLLRDY after the lock time on top of that; a board without one must never
-//! raise either, so firmware that waits on the flag (the CubeMX and pico-sdk
+//! raise either, so firmware that waits on the flag (the `CubeMX` and pico-sdk
 //! bring-up loops have no timeout) stays blocked, as on silicon. The STM32F072
 //! rows double as the regression test for its old RCC stub, which returned
 //! alternating values on every read and so hung any firmware that waited.

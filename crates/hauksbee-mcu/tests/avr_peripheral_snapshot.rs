@@ -11,6 +11,7 @@
 
 use hauksbee_mcu::periph_snapshot::Decoded;
 use hauksbee_mcu::{AvrMcu, Mcu};
+use std::fmt::Write as _;
 
 /// `ldi r16, k` : 1110 KKKK dddd KKKK with d = r16 (dddd = 0).
 fn ldi(k: u8) -> u16 {
@@ -18,7 +19,7 @@ fn ldi(k: u8) -> u16 {
 }
 
 /// Words of `sts addr, r16`: 0x9300 then the 16-bit data address.
-fn sts(addr: u16) -> [u16; 2] {
+const fn sts(addr: u16) -> [u16; 2] {
     [0x9300, addr]
 }
 
@@ -35,10 +36,12 @@ fn record(at: u16, bytes: &[u8]) -> String {
     line.extend(bytes);
     let sum = line.iter().fold(0u8, |a, b| a.wrapping_add(*b));
     line.push(sum.wrapping_neg());
-    format!(
-        ":{}\n",
-        line.iter().map(|b| format!("{b:02X}")).collect::<String>()
-    )
+    let mut out = String::from(":");
+    for b in &line {
+        write!(out, "{b:02X}").expect("write to a String");
+    }
+    out.push('\n');
+    out
 }
 
 fn hex(program: &[u16]) -> String {

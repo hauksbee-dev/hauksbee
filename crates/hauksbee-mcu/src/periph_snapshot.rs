@@ -5,7 +5,7 @@
 //! emulator, or a UART at 115200 baud from one that is 3.5 % off. This module
 //! decodes the configuration registers the firmware wrote (RCC, USART BRR, SPI
 //! CR1, ...) into a typed [`PeripheralConfig`], driven entirely by data in the
-//! SoC descriptor (`[[soc.decode]]`). Nothing here knows a register layout.
+//! `SoC` descriptor (`[[soc.decode]]`). Nothing here knows a register layout.
 //!
 //! # The decode language
 //!
@@ -69,7 +69,7 @@ impl RegisterReader for BTreeMap<u32, u32> {
 // ── Decoded values ───────────────────────────────────────────────────
 
 /// A decoded quantity, or the reason it could not be decoded.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decoded<T> {
     /// Decoded from the registers.
     Known(T),
@@ -80,7 +80,7 @@ pub enum Decoded<T> {
 impl<T: Copy> Decoded<T> {
     /// The value when known.
     #[must_use]
-    pub fn known(&self) -> Option<T> {
+    pub const fn known(&self) -> Option<T> {
         match self {
             Self::Known(v) => Some(*v),
             Self::Unknown(_) => None,
@@ -146,10 +146,10 @@ enum Op {
 enum Node {
     Num(f64),
     Var(String),
-    Neg(Box<Node>),
-    Not(Box<Node>),
-    Bin(Op, Box<Node>, Box<Node>),
-    Call(String, Vec<Node>),
+    Neg(Box<Self>),
+    Not(Box<Self>),
+    Bin(Op, Box<Self>, Box<Self>),
+    Call(String, Vec<Self>),
 }
 
 /// A parsed decode expression.
@@ -446,6 +446,7 @@ fn as_word(v: f64, what: &str) -> Result<u64, ExprError> {
 
 #[allow(clippy::cast_precision_loss)] // bit fields are at most 32 bits wide, exact in f64
 #[allow(clippy::float_cmp)] // truth tests compare against the exact 0.0/1.0 this evaluator produces
+#[allow(clippy::many_single_char_names)] // x/y/a/b/n are the operands of a binary operator
 fn eval_node(n: &Node, lookup: &dyn Fn(&str) -> Result<f64, ExprError>) -> Result<f64, ExprError> {
     let truth = |b: bool| if b { 1.0 } else { 0.0 };
     match n {
@@ -506,13 +507,18 @@ fn eval_node(n: &Node, lookup: &dyn Fn(&str) -> Result<f64, ExprError>) -> Resul
             "pick" => {
                 let i = as_word(eval_node(&args[0], lookup)?, "pick() index")?;
                 let choices = &args[1..];
-                match usize::try_from(i).ok().and_then(|i| choices.get(i)) {
-                    Some(choice) => eval_node(choice, lookup),
-                    None => err(format!(
-                        "encoding {i} is reserved or undecoded (table has {} entries)",
-                        choices.len()
-                    )),
-                }
+                usize::try_from(i)
+                    .ok()
+                    .and_then(|i| choices.get(i))
+                    .map_or_else(
+                        || {
+                            err(format!(
+                                "encoding {i} is reserved or undecoded (table has {} entries)",
+                                choices.len()
+                            ))
+                        },
+                        |choice| eval_node(choice, lookup),
+                    )
             }
             "if" => {
                 if eval_node(&args[0], lookup)? == 0.0 {
@@ -995,14 +1001,14 @@ fn decode_block(
 ///
 /// 1. The update flag latches only while the update-interrupt enable is set.
 ///    Silicon sets UIF on every update event (RM0090 Rev 22 p.631, TIM2 to TIM5
-///    TIMx_SR bit 0: "set by hardware on an update event"); TIMx_DIER UIE only
+///    `TIMx_SR` bit 0: "set by hardware on an update event"); `TIMx_DIER` UIE only
 ///    gates the interrupt request. Firmware that polls UIF with the interrupt
 ///    masked never sees it. The backend keeps the enable bit set inside the
 ///    emulator and shows the firmware its own value on reads.
 /// 2. The counter wraps after ARR ticks, not ARR + 1. Silicon counts from 0 to
 ///    the auto-reload value and then restarts from 0 (RM0090 Rev 22 s18.3.2
 ///    p.589, TIM2 to TIM5 upcounting mode: "counts from 0 to the auto-reload
-///    value (content of the TIMx_ARR register), then restarts from 0 and
+///    value (content of the `TIMx_ARR` register), then restarts from 0 and
 ///    generates a counter overflow event"), so the update period is ARR + 1
 ///    ticks. The backend writes ARR + 1 to the emulator and shows the firmware
 ///    its own value on reads. A value of 0xFFFF or more is left alone (the
@@ -1012,11 +1018,11 @@ fn decode_block(
 pub struct TimerFix {
     /// The Renode peripheral name, e.g. `timer2`.
     pub peripheral: String,
-    /// Offset of the interrupt-enable register (TIMx_DIER, +0x0C).
+    /// Offset of the interrupt-enable register (`TIMx_DIER`, +0x0C).
     pub enable_register: u32,
     /// The update-interrupt-enable bit (UIE, bit 0).
     pub enable_mask: u32,
-    /// Offset of the auto-reload register (TIMx_ARR, +0x2C), when the
+    /// Offset of the auto-reload register (`TIMx_ARR`, +0x2C), when the
     /// emulated period is short by one tick.
     #[serde(default)]
     pub auto_reload_register: Option<u32>,
@@ -1427,7 +1433,7 @@ mod tests {
         let uart = DecodeBlock {
             kind: BlockKind::Uart,
             name: "usart1".into(),
-            registers: [("brr".to_string(), 0x4001_100C)].into_iter().collect(),
+            registers: std::iter::once(("brr".to_string(), 0x4001_100C)).collect(),
             // baud = fPCLK / (16 x USARTDIV) and BRR holds USARTDIV as
             // mantissa[15:4].fraction[3:0] in 1/16ths, so 16 x USARTDIV = BRR.
             vars: vec![("baud".into(), "clk_pclk2 / brr".into())],

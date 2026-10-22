@@ -205,8 +205,8 @@ fn f072_usart1_follows_its_clock_switch() {
     }
 }
 
-/// USART2SW (RCC_CFGR3 17:16, RM0091 p.133, "available only on STM32F07x and
-/// STM32F09x"): 00 PCLK, 01 SYSCLK, 10 LSE, 11 HSI, independent of USART1SW.
+/// `USART2SW` (`RCC_CFGR3` 17:16, RM0091 p.133, "available only on `STM32F07x` and
+/// `STM32F09x`"): 00 PCLK, 01 SYSCLK, 10 LSE, 11 HSI, independent of USART1SW.
 /// With PCLK 24 MHz, SYSCLK 48 MHz, HSI 8 MHz and BRR 0x100 (256) the baud is
 /// the selected clock / 256. USART3 has no switch on the F072 (USART3SW is
 /// F09x only), so it stays on PCLK whatever bits 19:18 hold.
@@ -331,7 +331,7 @@ fn l0_pll_16mhz_usart_spi_timers() {
     close(&t.period_s, 1.0);
 }
 
-/// USART2SEL (RCC_CCIPR 3:2, p.209): 01 SYSCLK, 10 HSI16, 11 LSE.
+/// `USART2SEL` (`RCC_CCIPR` 3:2, p.209): 01 SYSCLK, 10 HSI16, 11 LSE.
 #[test]
 fn l0_usart2_follows_ccipr() {
     for (sel, fck) in [(0u32, 16e6), (1, 16e6), (2, 16e6), (3, 32768.0)] {
@@ -342,7 +342,7 @@ fn l0_usart2_follows_ccipr() {
     }
 }
 
-/// HSI16DIVEN (RCC_CR bit 3, RM0377 p.182) divides HSI16 by 4 before the HSI16
+/// `HSI16DIVEN` (`RCC_CR` bit 3, RM0377 p.182) divides HSI16 by 4 before the HSI16
 /// node of Figure 17 (p.171), so the divided clock is what the SYSCLK mux, the
 /// PLLSRC mux and the USART kernel mux see.
 const L0_HSI16DIVEN: u32 = 1 << 3;
@@ -472,7 +472,7 @@ fn g4_pll_84mhz_usart_prescaler_spi_timers() {
     close(&t2.period_s, 4_294_967_296.0 / 2000.0);
 }
 
-/// USART1SEL (RCC_CCIPR 1:0, p.324): 00 PCLK2, 01 SYSCLK, 10 HSI16, 11 LSE.
+/// `USART1SEL` (`RCC_CCIPR` 1:0, p.324): 00 PCLK2, 01 SYSCLK, 10 HSI16, 11 LSE.
 #[test]
 fn g4_usart1_follows_ccipr() {
     for (sel, fck) in [(0u32, 84e6), (1, 84e6), (2, 16e6), (3, 32768.0)] {
@@ -515,7 +515,7 @@ fn block_names_are_unique_per_kind() {
 // ── RP2040 XOSC startup (RP2040 datasheet s2.16.3, s2.16.7) ──────────────
 
 /// STARTUP.DELAY (bits 13:0) counts 256 crystal cycles and STARTUP.X4 (bit 20)
-/// "multiplies the startup_delay by 4". At the reference design's 12 MHz one
+/// "multiplies the `startup_delay` by 4". At the reference design's 12 MHz one
 /// count is 256 / 12 = 21.333 us: the pico-sdk's DELAY = 47 is 1002.7 us, the
 /// hardware reset value 0xC4 (196) is 4181.3 us, and X4 quadruples either.
 #[test]
