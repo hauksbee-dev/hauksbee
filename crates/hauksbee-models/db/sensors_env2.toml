@@ -2,3 +2,1992 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP388: Bosch Sensortec digital barometric pressure sensor, 10-pin metal-lid
+# LGA 2.0 x 2.0 x 0.75 mm.
+#
+# Source: Bosch Sensortec "BMP388 Datasheet", document BST-BMP388-DS001-07,
+#   revision 1.7, November 2020 (technical reference code 0 273 300 511). Page
+#   numbers below are the printed page numbers. Table 2 (pp.7-8) operating
+#   conditions, Table 3 (p.9) absolute maximum ratings, Table 21 (p.26) current
+#   consumption, Table 24 (pp.30-31) memory map, Section 5.1 (p.40) interface
+#   selection, Section 5.2 (p.40-41) I2C address, Table 47 (p.43) interface
+#   parameters, Table 50 (p.46) pin description.
+#
+# LEVELS: Table 47 prints Vil, Vih, Vol and Voh as fractions of VDDIO and never
+# in volts. The volts below are those fractions evaluated at the Table 2 typical
+# VDDIO = 1.8 V (the printed fractions are kept as characteristic records). They
+# are wrong by the ratio on a board with another interface rail; Vol and Voh are
+# printed at a test current (3 mA, 1 mA) without a VDDIO, so they are also
+# evaluated at 1.8 V and are rows of a loaded level (the loader turns them into the
+# rail behind an output resistance, the rail ASSUMED because no light-load row
+# is printed).
+#
+# THERMAL: the datasheet prints no theta_JA / theta_JC for the LGA package
+# (searched Tables 2, 3 and Section 7); the field is left ABSENT.
+#
+# BUS MODEL: I2C only (CSB high selects I2C, SDO selects 0x76 or 0x77). The
+# registers are the full Table 24 map except the NVM trimming block 0x31-0x45
+# (device specific, not printed) and the reserved gaps, which read 0xFF. The
+# data registers answer from two RAW 24-bit ADC count inputs (press_raw,
+# temp_raw), because the printed conversion needs the unprinted per-device
+# trimming coefficients; with the enables clear they read the Table 24 reset
+# value 0x800000 (output skipped).
+#
+# Renode (MIT, Antmicro) was not consulted for this part: the register map and
+# every value are from the datasheet only.
+[[models]]
+id = "bmp388"
+kind = "digital"
+description = "Bosch BMP388 barometric pressure sensor, 10-pin LGA (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw pressure/temperature data); no compensation"
+
+[models.match]
+# Bare part number; the Bosch reference code 0 273 300 511 is not a value
+# spelling. BMP390 (chip id 0x60, different die), BMP280, BMP581 and BMP180 are
+# different parts and are excluded by the anchored number.
+value_re = "(?i)^BMP388$"
+
+[models.params]
+voh   = { min = 1.44, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOH = 1 mA (SDI, SDO, INT); 0.8 x VDDIO", basis = "Table 47 p.43, Voh 0.8 x VDDIO min; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vol   = { max = 0.36, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOL = 3 mA (SDI, SDO, INT); 0.2 x VDDIO", basis = "Table 47 p.43, Vol 0.2 x VDDIO max; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vih   = 1.26     # Table 47 p.43, Vih 0.7 x VDDIO min (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+vil   = 0.45     # Table 47 p.43, Vil 0.25 x VDDIO max (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+supply_static_ua = 46.4    # Table 21 p.26, highest resolution (x32 / x2) at 1 Hz forced mode, typ; the
+                           # largest duty-cycled figure tabulated (ultra low power is 3.4 uA). The
+                           # conversion peak is 700 uA typ / 800 uA max (Table 2) and is not carried.
+supply_pin = "10"          # VDD
+gnd_pin    = "3"           # VSS
+
+[models.pins]
+# Table 50 Pin description, all 10 pads. SCK/SDI use the bus vocabulary.
+"1"  = "vddio"   # digital interface supply, 1.2 to 3.6 V
+"2"  = "scl"     # SCK: I2C SCL / SPI SCK
+"3"  = "gnd"
+"4"  = "sda"     # SDI: I2C SDA / SPI SDI (3-wire SDI/SDO)
+"5"  = "sdo"     # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6"  = "csb"     # chip select; VDDIO selects I2C (Section 5.1)
+"7"  = "int"     # interrupt output
+"8"  = "gnd2"
+"9"  = "gnd3"
+"10" = "vdd"     # analog supply, 1.65 to 3.6 V
+
+[models.ratings]
+# Table 3 p.9: VDD and VDDIO pins -0.3 to 3.8 V; interface pins Vss -0.3 V to
+# VDDIO + 0.3 V; storage -45 to +85 C; ESD HBM class 2 (2 kV).
+max_voltage_v = 3.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 3.8
+basis = "Bosch BST-BMP388-DS001-07, Table 2 p.7 Sensor supply voltage VDD row (ripple max 50 mVpp); Table 3 p.9 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 3.8
+basis = "Bosch BST-BMP388-DS001-07, Table 2 p.7 Interface supply voltage VDDIO row; Table 3 p.9 supply pin maximum"
+
+# Section 5.1 (p.40): "If CSB is connected to VDDIO, the I2C interface is
+# active." Section 5.2 (p.40): SDO to GND gives 1110110 (0x76), SDO to VDDIO
+# gives 1110111 (0x77); "The SDO pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BMP388"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW 24-bit ADC counts. The datasheet's compensation needs the per-device NVM
+# trimming coefficients (Table 23, registers 0x31-0x45) which are not printed, so
+# the registers report the uncompensated counts. 8388608 = 0x800000 is the Table
+# 24 reset value of DATA_2 / DATA_5 (output skipped).
+[[sensor.input]]
+name = "press_raw"
+default = 8388608.0
+
+[[sensor.input]]
+name = "temp_raw"
+default = 8388608.0
+
+# Table 24 memory map (pp.30-31), reset values as printed.
+# 0x00 CHIP_ID, reset 0x50.
+[[sensor.register]]
+addr = 0x00
+const = [0x50]
+
+# 0x02 ERR_REG, reset 0x00 (fatal_err, cmd_err, conf_err clear).
+[[sensor.register]]
+addr = 0x02
+const = [0x00]
+
+# 0x03 STATUS (Table 27 p.32): cmd_rdy bit 4 (1 = command decoder ready), drdy_press
+# bit 5, drdy_temp bit 6. Table 24 prints the reset value 0x00 for the instant before
+# the decoder is ready; an idle device reads cmd_rdy = 1, so 0x10 is carried (ASSUMED
+# from the Table 27 bit meaning). The data-ready bits are set while a measurement mode
+# is selected and the channel is enabled; conversion time and clear-on-read are not
+# modelled.
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "16 + if(mode > 0, 32 * press_en + 64 * temp_en, 0)"
+
+# 0x04-0x06 DATA_0..DATA_2 pressure (XLSB, LSB, MSB), 0x07-0x09 DATA_3..DATA_5
+# temperature. Reset 00 00 80 / 00 00 80.
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "if(press_en > 0, press_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 65536), 128)"
+
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "if(temp_en > 0, temp_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 65536), 128)"
+
+# 0x0C-0x0E SENSORTIME_0..2, reset 0x00 (the free-running counter is not modelled).
+[[sensor.register]]
+addr = 0x0C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0E
+const = [0x00]
+
+# 0x10 EVENT, reset 0x01 (por_detected after power-up).
+[[sensor.register]]
+addr = 0x10
+const = [0x01]
+
+# 0x11 INT_STATUS, 0x12 FIFO_LENGTH_0, 0x13 FIFO_LENGTH_1, 0x14 FIFO_DATA: reset 0x00
+# (FIFO empty; the FIFO is not modelled).
+[[sensor.register]]
+addr = 0x11
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x12
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x13
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x14
+const = [0x00]
+
+# 0x15 FIFO_WTM_0, reset 0x01.
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "fifo_wtm_0"
+default = 1.0
+
+# 0x16 FIFO_WTM_1, reset 0x00.
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "fifo_wtm_1"
+default = 0.0
+
+# 0x17 FIFO_CONFIG_1, reset 0x02.
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "fifo_config_1"
+default = 2.0
+
+# 0x18 FIFO_CONFIG_2, reset 0x02.
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "fifo_config_2"
+default = 2.0
+
+# 0x19 INT_CTRL, reset 0x02 (int_level high-active bit 1 per the reset value).
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "int_ctrl"
+default = 2.0
+
+# 0x1A IF_CONF, reset 0x00 (spi3 bit 0, i2c_wdt_en bit 1, i2c_wdt_sel bit 2).
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "if_conf"
+default = 0.0
+
+# 0x1B PWR_CTRL, reset 0x00: press_en bit 0, temp_en bit 1, mode bits 5:4
+# (00 sleep, 01 and 10 forced, 11 normal).
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "pwr_ctrl"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "press_en"
+bits = [0, 0]
+
+[[sensor.write_register.field]]
+name = "temp_en"
+bits = [1, 1]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [5, 4]
+
+# 0x1C OSR, reset 0x02: osr_p bits 2:0, osr_t bits 5:3.
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "osr"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "osr_p"
+bits = [2, 0]
+
+[[sensor.write_register.field]]
+name = "osr_t"
+bits = [5, 3]
+
+# 0x1D ODR, reset 0x00: odr_sel bits 4:0.
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "odr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "odr_sel"
+bits = [4, 0]
+
+# 0x1F CONFIG, reset 0x00: iir_filter bits 3:1.
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "iir_filter"
+bits = [3, 1]
+
+# 0x7E CMD, reset 0x00 (write-only; the soft-reset and fifo_flush commands are not modelled).
+[[sensor.write_register]]
+addr = 0x7E
+encoding = "u8"
+store = "cmd"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.65   # Table 2 p.7, VDD min
+idle_a = 0.0000464            # Table 21 p.26, highest resolution at 1 Hz forced, typ
+read_a = 0.0000464
+write_a = 0.0000464
+low_power_a = 0.000002        # Table 2 p.7, IDD,sleep typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_pressure_temperature_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "nvm_trimming_coefficients", "compensated_pressure_temperature", "forced_mode_return_to_sleep", "data_ready_clear_on_read", "measurement_timing", "fifo", "interrupt_engine", "soft_reset_command", "sensor_time_counter", "iir_filter", "conversion_peak_current", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp388-ds001.pdf"
+title = "Bosch Sensortec BMP388 Datasheet, BST-BMP388-DS001-07, revision 1.7, November 2020"
+locator = "Table 2 pp.7-8; Table 3 p.9; Table 21 p.26; Table 24 memory map pp.30-31; Table 27 p.32; Sections 5.1-5.2 pp.40-41; Table 47 p.43; Table 50 Pin description p.46"
+sha256 = "1ab21c90aaf15542751be6b970d53dc57893a4ea948f45f9fe96e844789fdec2"
+
+[[models.source.pinout]]
+package = "LGA-10 2.0 x 2.0 mm metal lid"
+pins = { "1" = "VDDIO", "2" = "SCK", "3" = "VSS", "4" = "SDI", "5" = "SDO", "6" = "CSB", "7" = "INT", "8" = "VSS", "9" = "VSS", "10" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil input low level (SCK, SDI, CSB)"
+max = 0.25
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 47 p.43, 0.25 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih input high level (SCK, SDI, CSB)"
+min = 0.7
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 47 p.43, 0.7 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol output low level (SDI, SDO, INT)"
+max = 0.2
+unit = "VDDIO"
+conditions = "IOL = 3 mA"
+basis = "Table 47 p.43, 0.2 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDI, SDO, INT)"
+min = 0.8
+unit = "VDDIO"
+conditions = "IOH = 1 mA"
+basis = "Table 47 p.43, 0.8 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rcsb CSB internal pull-up to VDDIO"
+min = 75
+typ = 100
+max = 125
+unit = "kOhm"
+conditions = "internal pull-up resistance to VDDIO"
+basis = "Table 47 p.43"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % rel. H."
+basis = "Table 3 p.9"
+
+[[models.source.characteristic]]
+parameter = "Ipeak supply current during pressure measurement"
+typ = 700
+max = 800
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDT supply current during temperature measurement"
+typ = 300
+max = 400
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 2 p.8"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMP390: Bosch Sensortec digital barometric pressure sensor, 10-pin metal-lid
+# LGA 2.0 x 2.0 x 0.75 mm. Same pad order and I2C addressing as the BMP388 but a
+# different die (CHIP_ID 0x60, REV_ID register 0x01, short_in bit in CONFIG),
+# tighter supply absolute maximum (3.6 V) and different electrical figures.
+#
+# Source: Bosch Sensortec "BMP390 Datasheet", document BST-BMP390-DS002-07,
+#   revision 1.7, March 2021 (technical reference code 0 273 017 014). Page
+#   numbers are the printed page numbers. Table 2 (pp.7-8), Table 3 (p.9),
+#   Table 22 (p.26) current consumption, memory map (pp.30-31), Table 49 (p.43)
+#   interface parameters, Table 52 (p.46) pin description.
+#
+# Levels, thermal and the bus model follow the BMP388 notes above: fractions of
+# VDDIO evaluated at the Table 2 typical 1.8 V; no theta_JA printed (left absent);
+# I2C only; raw 24-bit count inputs because the NVM trimming block is unprinted.
+# Renode was not consulted; every value is from the datasheet.
+[[models]]
+id = "bmp390"
+kind = "digital"
+description = "Bosch BMP390 barometric pressure sensor, 10-pin LGA (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw pressure/temperature data); no compensation"
+
+[models.match]
+value_re = "(?i)^BMP390$"
+
+[models.params]
+voh   = { min = 1.44, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOH = 1 mA (SDI, SDO, INT); 0.8 x VDDIO", basis = "Table 49 p.43, Voh 0.8 x VDDIO min; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vol   = { max = 0.36, unit = "V", conditions = "VDDIO = 1.8 V (Table 2 typ), IOL = 3 mA (SDI, SDO, INT); 0.2 x VDDIO", basis = "Table 49 p.43, Vol 0.2 x VDDIO max; derived by evaluating the printed fraction at VDDIO = 1.8 V" }
+vih   = 1.26     # Table 49 p.43, Vih 0.7 x VDDIO min (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+vil   = 0.45     # Table 49 p.43, Vil 0.25 x VDDIO max (SCK, SDI, CSB), derived at VDDIO = 1.8 V
+supply_static_ua = 46.4    # Table 22 p.26, highest resolution (x32 / x2) at 1 Hz forced mode, typ; the
+                           # largest duty-cycled figure tabulated (ultra low power is 3.2 uA). The
+                           # conversion peak is 660 uA typ / 730 uA max (Table 2) and is not carried.
+supply_pin = "10"          # VDD
+gnd_pin    = "3"           # VSS
+
+[models.pins]
+# Table 52 Pin description, all 10 pads (same as the BMP388).
+"1"  = "vddio"   # digital interface supply, 1.2 to 3.6 V
+"2"  = "scl"     # SCK: I2C SCL / SPI SCK
+"3"  = "gnd"
+"4"  = "sda"     # SDI: I2C SDA / SPI SDI (3-wire SDI/SDO)
+"5"  = "sdo"     # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6"  = "csb"     # chip select; VDDIO selects I2C
+"7"  = "int"     # interrupt output
+"8"  = "gnd2"
+"9"  = "gnd3"
+"10" = "vdd"     # analog supply, 1.65 to 3.6 V
+
+[models.ratings]
+# Table 3 p.9: VDD and VDDIO pins -0.3 to 3.6 V; interface pins Vss -0.3 V to
+# VDDIO + 0.3 V; storage -45 to +85 C; ESD HBM class 2 (2 kV).
+max_voltage_v = 3.6
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.65
+max_v = 3.6
+abs_max_v = 3.6
+basis = "Bosch BST-BMP390-DS002-07, Table 2 p.7 Sensor supply voltage VDD row (ripple max 50 mVpp); Table 3 p.9 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 3.6
+basis = "Bosch BST-BMP390-DS002-07, Table 2 p.7 Interface supply voltage VDDIO row; Table 3 p.9 supply pin maximum"
+
+# Sections 5.1 and 5.2 (pp.40-41): CSB to VDDIO selects I2C; SDO to GND gives
+# 0x76, SDO to VDDIO gives 0x77; SDO cannot be left floating.
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BMP390"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW 24-bit ADC counts (see the BMP388 note: the trimming block is unprinted).
+# 8388608 = 0x800000, the Table 25 reset value of DATA_2 / DATA_5.
+[[sensor.input]]
+name = "press_raw"
+default = 8388608.0
+
+[[sensor.input]]
+name = "temp_raw"
+default = 8388608.0
+
+# Memory map (pp.30-31), reset values as printed.
+# 0x00 CHIP_ID, reset 0x60.
+[[sensor.register]]
+addr = 0x00
+const = [0x60]
+
+# 0x01 REV_ID, reset 0x01 (rev_id_major / rev_id_minor).
+[[sensor.register]]
+addr = 0x01
+const = [0x01]
+
+# 0x02 ERR_REG, reset 0x00.
+[[sensor.register]]
+addr = 0x02
+const = [0x00]
+
+# 0x03 STATUS: cmd_rdy bit 4, drdy_press bit 5, drdy_temp bit 6. The memory map prints the
+# reset value 0x00 for the instant before the decoder is ready; an idle device reads
+# cmd_rdy = 1, so 0x10 is carried (ASSUMED from the bit meaning). Data-ready bits follow the
+# channel enables while a measurement mode is selected.
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "16 + if(mode > 0, 32 * press_en + 64 * temp_en, 0)"
+
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "if(press_en > 0, press_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "if(press_en > 0, floor(press_raw / 65536), 128)"
+
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "if(temp_en > 0, temp_raw % 256, 0)"
+
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 256) % 256, 0)"
+
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "if(temp_en > 0, floor(temp_raw / 65536), 128)"
+
+# 0x0C-0x0E SENSORTIME_0..2, reset 0x00 (counter not modelled).
+[[sensor.register]]
+addr = 0x0C
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0D
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x0E
+const = [0x00]
+
+# 0x10 EVENT, reset 0x01 (por_detected).
+[[sensor.register]]
+addr = 0x10
+const = [0x01]
+
+# 0x11 INT_STATUS, 0x12-0x13 FIFO_LENGTH, 0x14 FIFO_DATA: reset 0x00 (FIFO not modelled).
+[[sensor.register]]
+addr = 0x11
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x12
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x13
+const = [0x00]
+
+[[sensor.register]]
+addr = 0x14
+const = [0x00]
+
+# 0x15 FIFO_WTM_0 reset 0x01; 0x16 FIFO_WTM_1 reset 0x00; 0x17 FIFO_CONFIG_1 reset 0x02;
+# 0x18 FIFO_CONFIG_2 reset 0x02; 0x19 INT_CTRL reset 0x02; 0x1A IF_CONF reset 0x00.
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "fifo_wtm_0"
+default = 1.0
+
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "fifo_wtm_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "fifo_config_1"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "fifo_config_2"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "int_ctrl"
+default = 2.0
+
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "if_conf"
+default = 0.0
+
+# 0x1B PWR_CTRL, reset 0x00: press_en bit 0, temp_en bit 1, mode bits 5:4.
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "pwr_ctrl"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "press_en"
+bits = [0, 0]
+
+[[sensor.write_register.field]]
+name = "temp_en"
+bits = [1, 1]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [5, 4]
+
+# 0x1C OSR, reset 0x02: osr_p bits 2:0, osr_t bits 5:3.
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "osr"
+default = 2.0
+
+[[sensor.write_register.field]]
+name = "osr_p"
+bits = [2, 0]
+
+[[sensor.write_register.field]]
+name = "osr_t"
+bits = [5, 3]
+
+# 0x1D ODR, reset 0x00: odr_sel bits 4:0.
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "odr"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "odr_sel"
+bits = [4, 0]
+
+# 0x1F CONFIG, reset 0x00: iir_filter bits 3:1, short_in bit 0.
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "iir_filter"
+bits = [3, 1]
+
+[[sensor.write_register.field]]
+name = "short_in"
+bits = [0, 0]
+
+# 0x7E CMD, reset 0x00 (commands not modelled).
+[[sensor.write_register]]
+addr = 0x7E
+encoding = "u8"
+store = "cmd"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.65   # Table 2 p.7, VDD min
+idle_a = 0.0000464            # Table 22 p.26, highest resolution at 1 Hz forced, typ
+read_a = 0.0000464
+write_a = 0.0000464
+low_power_a = 0.0000014       # Table 2 p.7, IDDSL typ at VDD = VDDIO = 1.8 V
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v8_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_pressure_temperature_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "nvm_trimming_coefficients", "compensated_pressure_temperature", "forced_mode_return_to_sleep", "data_ready_clear_on_read", "measurement_timing", "fifo", "interrupt_engine", "soft_reset_command", "sensor_time_counter", "iir_filter", "conversion_peak_current", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp390-ds002.pdf"
+title = "Bosch Sensortec BMP390 Datasheet, BST-BMP390-DS002-07, revision 1.7, March 2021"
+locator = "Table 2 pp.7-8; Table 3 p.9; Table 22 p.26; memory map pp.30-31; Sections 5.1-5.2 pp.40-41; Table 49 p.43; Table 52 Pin description p.46"
+sha256 = "8dcf0f74449cb1627e865c7f24d328b76c204d8b9621091ede8c6869fb393e48"
+
+[[models.source.pinout]]
+package = "LGA-10 2.0 x 2.0 mm metal lid"
+pins = { "1" = "VDDIO", "2" = "SCK", "3" = "VSS", "4" = "SDI", "5" = "SDO", "6" = "CSB", "7" = "INT", "8" = "VSS", "9" = "VSS", "10" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil input low level (SCK, SDI, CSB)"
+max = 0.25
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 49 p.43, 0.25 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih input high level (SCK, SDI, CSB)"
+min = 0.7
+unit = "VDDIO"
+conditions = "fraction of VDDIO"
+basis = "Table 49 p.43, 0.7 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol output low level (SDI, SDO, INT)"
+max = 0.2
+unit = "VDDIO"
+conditions = "IOL = 3 mA"
+basis = "Table 49 p.43, 0.2 VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDI, SDO, INT)"
+min = 0.8
+unit = "VDDIO"
+conditions = "IOH = 1 mA"
+basis = "Table 49 p.43, 0.8 VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rcsb CSB internal pull-up to VDDIO"
+min = 75
+typ = 100
+max = 125
+unit = "kOhm"
+conditions = "internal pull-up resistance to VDDIO"
+basis = "Table 49 p.43"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % rel. H."
+basis = "Table 3 p.9"
+
+[[models.source.characteristic]]
+parameter = "Ipeak supply current during pressure measurement"
+typ = 660
+max = 730
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDT supply current during temperature measurement"
+typ = 240
+max = 320
+unit = "uA"
+conditions = "VDD = VDDIO"
+basis = "Table 2 p.7"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.8 V and VDDIO > 1.8 V"
+basis = "Table 2 p.8"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BME680: Bosch Sensortec gas / humidity / pressure / temperature sensor, LGA-8
+# 3.0 x 3.0 x 0.93 mm metal lid.
+#
+# Source: Bosch Sensortec "BME680 Data sheet", document BST-BME680-DS001-09,
+#   revision 1.9, February 2024 (marking "S" = 0 273 141 229, "E" = 0 273 141
+#   312). Table 1 (p.7) electrical parameters, Table 2 (p.8) gas sensor, Table 9
+#   (p.13) absolute maximum ratings, Table 20 (p.28) memory map, Sections 6.1-6.3
+#   (p.38) interface selection and I2C address, Table 21 (p.41) interface
+#   parameters, Table 24 (p.44) pin description.
+#
+# TWO CARDS, ONE DIE FAMILY: the BME688 datasheet (BST-BME688-DS000-03) differs
+# (extra Variant_Id register 0xF0, parallel-mode data fields, Gas_wait_shared),
+# so the BME688 has its own card below.
+#
+# LEVELS: Table 21 prints Vil, Vih, Vol, Voh as percentages of VDDIO. VIH/VIL are
+# those fractions evaluated at the Table 1 typical VDDIO = 1.6 V; VOH/VOL are the
+# rows at their printed VDDIO = 1.62 V (loaded levels; the loader turns them into
+# the rail behind an output resistance, ASSUMED because no light-load row is
+# printed). Wrong by the ratio on another interface rail.
+#
+# THERMAL: no theta_JA or theta_JC is printed for the LGA package; left ABSENT.
+#
+# BUS MODEL: I2C only. Registers are the Table 20 map: Id 0xD0 (0x61), status,
+# Config, Ctrl_meas, Ctrl_hum, Ctrl_gas_0/1, heater set-points and the data
+# registers. The data registers answer from RAW ADC count inputs (adc_press,
+# adc_temp, adc_hum, adc_gas, gas_range) because the compensation parameters are
+# device specific and unprinted. Reserved addresses are undeclared: a single
+# read returns 0xFF and a BURST read hops to the next declared register, so a
+# 17-byte field read from 0x1D is misaligned (SCHEMA GAP, see the report).
+#
+# Renode (MIT, Antmicro) was not consulted; every value is from the datasheet.
+[[models]]
+id = "bme680"
+kind = "digital"
+description = "Bosch BME680 gas, humidity, pressure and temperature sensor, LGA-8 (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values, raw sensor data); no compensation"
+
+[models.match]
+value_re = "(?i)^BME680([-_ ].*)?$"
+
+[models.params]
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 0.8 x VDDIO", basis = "Table 21 p.41, Voh 0.8 x VDDIO min (0.8 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row relaxes to 0.6 x VDDIO" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 0.2 x VDDIO", basis = "Table 21 p.41, Vol_SDI 0.2 x VDDIO max (0.2 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row is 0.23 x VDDIO" }
+vih   = 1.28     # Vih_si 0.8 x VDDIO min, derived at the Table 1 typical VDDIO = 1.6 V
+vil   = 0.32     # Vil_si 0.2 x VDDIO max, derived at VDDIO = 1.6 V
+supply_static_ua = 3.7     # p.3 key features, 3.7 uA at 1 Hz humidity, pressure and temperature (typ);
+                           # excludes the gas heater (IDD 12 mA typ with the heater on, Table 2 p.8).
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 24 Pin description, LGA-8. Numbering direction follows the
+# datasheet's connection diagram (see the BME280 entry in digital.toml for the
+# direction caveat); SDI/SCK use the bus vocabulary.
+"1" = "gnd"
+"2" = "csb"      # chip select; VDDIO selects I2C
+"3" = "sda"      # SDI: I2C SDA / SPI SDI
+"4" = "scl"      # SCK: I2C SCL / SPI SCK
+"5" = "sdo"      # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6" = "vddio"    # interface supply, 1.2 to 3.6 V
+"7" = "gnd2"
+"8" = "vdd"      # supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 9 p.13: VDD and VDDIO pins -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V;
+# storage -45 to +85 C; ESD HBM 2 kV.
+max_voltage_v = 4.25
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME680-DS001-09, Table 1 p.7 Supply Voltage Internal Domains VDD row (ripple max 50 mVpp); Table 9 p.13 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME680-DS001-09, Table 1 p.7 Supply Voltage I/O Domain VDDIO row; Table 9 p.13 supply pin maximum"
+
+# Section 6.2 (p.38): "If CSB is connected to VDDIO, the I2C interface is active."
+# SDO to GND gives 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77); "The SDO
+# pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BME680"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW ADC counts (the Bosch compensation needs the per-device calibration
+# parameters in registers 0x89-0xA1 / 0xE1-0xEE and 0x00-0x02, which the
+# datasheet does not print values for). Defaults are the Table 20 reset values:
+# 524288 = 0x80000 (press, temp), 32768 = 0x8000 (hum), gas 0.
+[[sensor.input]]
+name = "adc_press"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_temp"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_hum"
+default = 32768.0
+
+[[sensor.input]]
+name = "adc_gas"
+default = 0.0
+
+[[sensor.input]]
+name = "gas_range"
+default = 0.0
+
+# 0x1D eas_status_0 (reset 0x00): new_data_0 bit 7 is set while a measurement mode is selected (instant conversion; measuring and gas_measuring stay 0).
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# 0x1F-0x21 press_msb/lsb/xlsb<7:4>, reset 80 00 00; oversampling 000 skips the channel (output 0x80000).
+[[sensor.register]]
+addr = 0x1F
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# 0x22-0x24 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x22
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# 0x25-0x26 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x25
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# 0x2A-0x2B gas_r_msb (gas_r<9:2>) / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00; valid and stable are set while run_gas = 1.
+[[sensor.register]]
+addr = 0x2A
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# 0x73 status (spi_mem_page), reset 0x00; irrelevant on I2C.
+[[sensor.register]]
+addr = 0x73
+const = [0x00]
+
+# 0xD0 Id (chip_id), reset 0x61.
+[[sensor.register]]
+addr = 0xD0
+const = [0x61]
+
+# Idac_heat_x 0x50-0x59, Res_heat_x 0x5A-0x63, Gas_wait_x 0x64-0x6D: ten set-points each,
+# reset 0x00 (Table 'Memory map'); the heater itself is not modelled.
+[[sensor.write_register]]
+addr = 0x50
+encoding = "u8"
+store = "idac_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x51
+encoding = "u8"
+store = "idac_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x52
+encoding = "u8"
+store = "idac_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x53
+encoding = "u8"
+store = "idac_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x54
+encoding = "u8"
+store = "idac_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x55
+encoding = "u8"
+store = "idac_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "idac_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "idac_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "idac_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "idac_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "res_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "res_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "res_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "res_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "res_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "res_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x60
+encoding = "u8"
+store = "res_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x61
+encoding = "u8"
+store = "res_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "res_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x63
+encoding = "u8"
+store = "res_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x64
+encoding = "u8"
+store = "gas_wait_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x65
+encoding = "u8"
+store = "gas_wait_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x66
+encoding = "u8"
+store = "gas_wait_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x67
+encoding = "u8"
+store = "gas_wait_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x68
+encoding = "u8"
+store = "gas_wait_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "gas_wait_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6A
+encoding = "u8"
+store = "gas_wait_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6B
+encoding = "u8"
+store = "gas_wait_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6C
+encoding = "u8"
+store = "gas_wait_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6D
+encoding = "u8"
+store = "gas_wait_9"
+default = 0.0
+
+# 0x70 Ctrl_gas_0, reset 0x00: heat_off bit 3.
+[[sensor.write_register]]
+addr = 0x70
+encoding = "u8"
+store = "ctrl_gas_0"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "heat_off"
+bits = [3, 3]
+
+# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 4, nb_conv bits 3:0.
+[[sensor.write_register]]
+addr = 0x71
+encoding = "u8"
+store = "ctrl_gas_1"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "run_gas"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "nb_conv"
+bits = [3, 0]
+
+# 0x72 Ctrl_hum, reset 0x00: spi_3w_int_en bit 6, osrs_h bits 2:0.
+[[sensor.write_register]]
+addr = 0x72
+encoding = "u8"
+store = "ctrl_hum"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "spi_3w_int_en"
+bits = [6, 6]
+
+[[sensor.write_register.field]]
+name = "osrs_h"
+bits = [2, 0]
+
+# 0x74 Ctrl_meas, reset 0x00: osrs_t bits 7:5, osrs_p bits 4:2, mode bits 1:0 (00 sleep, 01 forced).
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "ctrl_meas"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "osrs_t"
+bits = [7, 5]
+
+[[sensor.write_register.field]]
+name = "osrs_p"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [1, 0]
+
+# 0x75 Config, reset 0x00: filter bits 4:2, spi_3w_en bit 0.
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "filter"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "spi_3w_en"
+bits = [0, 0]
+
+# 0xE0 Reset, reset 0x00 (writing 0xB6 requests a soft reset; the reset itself is not modelled).
+[[sensor.write_register]]
+addr = 0xE0
+encoding = "u8"
+store = "reset_cmd"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1 p.7, VDD min
+idle_a = 0.0000037            # p.3 key features, 3.7 uA at 1 Hz H+P+T, typ (no gas heater)
+read_a = 0.0000037
+write_a = 0.0000037
+low_power_a = 0.00000015      # Table 1 p.7, IDDSL sleep current typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v6_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_humidity_pressure_temperature_gas_data", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_register_map", "calibration_parameters", "compensated_values", "forced_mode_return_to_sleep", "measurement_timing", "gas_heater_supply_current", "heater_profile_execution", "iir_filter", "soft_reset_command", "reserved_register_reads", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme680-ds001.pdf"
+title = "Bosch Sensortec BME680 Data sheet, BST-BME680-DS001-09, revision 1.9, February 2024"
+locator = "p.3 Key features; Table 1 p.7; Table 2 p.8; Table 9 p.13; Table 20 Memory map p.28; Sections 6.1-6.2 p.38; Table 21 Interface parameters p.41; Table 24 Pin description p.44"
+sha256 = "8e42b591a9cabd84ae3377f2ea11e794120e4140dc4f0e4f29a30be3d1f6c9f6"
+
+[[models.source.pinout]]
+package = "LGA-8 3.0 x 3.0 mm metal lid"
+pins = { "1" = "GND", "2" = "CSB", "3" = "SDI", "4" = "SCK", "5" = "SDO", "6" = "VDDIO", "7" = "GND", "8" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil_si input low level"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 21 p.41, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih_si input high level"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 21 p.41, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI output low level I2C"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Iol=3 mA"
+basis = "Table 21 p.41, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI_1.2 output low level I2C"
+max = 0.23
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Iol=3 mA"
+basis = "Table 21 p.41, 23 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDO, SDI)"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Ioh=1 mA"
+basis = "Table 21 p.41, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Voh_1.2 output high level (SDO, SDI)"
+min = 0.6
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Ioh=1 mA"
+basis = "Table 21 p.41, 60 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rpull internal CSB pull-up to VDDIO"
+min = 70
+typ = 120
+max = 190
+unit = "kOhm"
+conditions = "internal CSB pull-up resistor to VDDIO"
+basis = "Table 21 p.41"
+
+[[models.source.characteristic]]
+parameter = "IDDH supply current during humidity measurement"
+typ = 340
+max = 450
+unit = "uA"
+conditions = "max value at 85 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDP supply current during pressure measurement"
+typ = 714
+max = 849
+unit = "uA"
+conditions = "max value at -40 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDD gas heater supply current"
+min = 9
+typ = 12
+max = 13
+unit = "mA"
+conditions = "heater target 320 C, constant operation (VDD <= 1.8 V, 25 C)"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "IPeak peak supply current when switching on the hotplate"
+min = 15
+typ = 17
+max = 18
+unit = "mA"
+conditions = "within the first ms of switching on the hotplate"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % r.H."
+basis = "Table 9 p.13"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BME688: Bosch Sensortec gas sensor with AI, LGA-8 3.0 x 3.0 x 0.9 mm metal lid.
+#
+# Source: Bosch Sensortec "BME688 Datasheet", document BST-BME688-DS000-03,
+#   revision 1.3, February 2024 (technical reference code 0 273 017 016). Table 1
+#   (p.7), Table 2 (p.8), Table 11 (p.15) absolute maximum ratings, Table 22
+#   (pp.33-34) memory map, Section 5.3.2.1 (p.36) Variant_Id, Section 6 (p.45)
+#   interface selection and I2C address, Table 23 (p.48) interface parameters,
+#   Table 26 (p.51) pin description.
+#
+# SEPARATE CARD FROM THE BME680 because the memory map differs: Variant_Id
+# (0xF0, reset 0x01) separates the BME688 from the BME680 at the same chip id
+# 0x61, Gas_wait_shared (0x6E) is new, Status resets to 0x01 as printed, and
+# parallel mode (mode 10) adds data fields 1 and 2 at 0x2E-0x3E and 0x3F-0x4F.
+# Levels, thermal row and the I2C-only bus model follow the BME680 notes: Table 23
+# fractions evaluated at the Table 1 typical VDDIO = 1.6 V (VOH/VOL at their
+# printed 1.62 V); no theta_JA printed (left ABSENT); data registers answer from
+# RAW ADC count inputs shared by all three fields.
+#
+# Renode (MIT, Antmicro) was not consulted; every value is from the datasheet.
+[[models]]
+id = "bme688"
+kind = "digital"
+description = "Bosch BME688 gas sensor with AI (gas, humidity, pressure, temperature), LGA-8 (strap-selected I2C address, pad map, VDDIO logic levels, register map with reset values incl. Variant_Id and three data fields, raw sensor data); no compensation"
+
+[models.match]
+value_re = "(?i)^BME688([-_ ].*)?$"
+
+[models.params]
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 0.8 x VDDIO", basis = "Table 23 p.48, Voh 0.8 x VDDIO min (0.8 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row relaxes to 0.6 x VDDIO" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 0.2 x VDDIO", basis = "Table 23 p.48, Vol_SDI 0.2 x VDDIO max (0.2 x 1.62 V); derived by evaluating the printed fraction at the row's VDDIO; the 1.20 V row is 0.23 x VDDIO" }
+vih   = 1.28     # Vih_si 0.8 x VDDIO min, derived at the Table 1 typical VDDIO = 1.6 V
+vil   = 0.32     # Vil_si 0.2 x VDDIO max, derived at VDDIO = 1.6 V
+supply_static_ua = 3.7     # p.3 key features, 3.7 uA at 1 Hz humidity, pressure and temperature (typ);
+                           # excludes the gas heater (IDD 12 mA typ with the heater on, Table 2 p.8).
+supply_pin = "8"           # VDD
+gnd_pin    = "1"           # GND
+
+[models.pins]
+# Table 26 Pin description, LGA-8. Numbering direction follows the
+# datasheet's connection diagram (see the BME280 entry in digital.toml for the
+# direction caveat); SDI/SCK use the bus vocabulary.
+"1" = "gnd"
+"2" = "csb"      # chip select; VDDIO selects I2C
+"3" = "sda"      # SDI: I2C SDA / SPI SDI
+"4" = "scl"      # SCK: I2C SCL / SPI SCK
+"5" = "sdo"      # SPI data out; in I2C the address LSB (GND = 0x76, VDDIO = 0x77)
+"6" = "vddio"    # interface supply, 1.2 to 3.6 V
+"7" = "gnd2"
+"8" = "vdd"      # supply, 1.71 to 3.6 V
+
+[models.ratings]
+# Table 11 p.15: VDD and VDDIO pins -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V;
+# storage -45 to +85 C; ESD HBM 2 kV.
+max_voltage_v = 4.25
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME688-DS000-03, Table 1 p.7 Supply Voltage Internal Domains VDD row (ripple max 50 mVpp); Table 11 p.15 supply pin maximum"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.25
+basis = "Bosch BST-BME688-DS000-03, Table 1 p.7 Supply Voltage I/O Domain VDDIO row; Table 11 p.15 supply pin maximum"
+
+# Sections 6.1-6.2 (p.45): "If CSB is connected to VDDIO, the I2C interface is active."
+# SDO to GND gives 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77); "The SDO
+# pin cannot be left floating".
+[models.peripheral]
+kind = "register_map"
+required_high_roles = ["csb"]
+address_select_role = "sdo"
+address_when_low = 0x76
+address_when_high = 0x77
+spec_toml = '''
+[sensor]
+name = "BME688"
+bus = "i2c"
+i2c_address = 0x76
+
+# RAW ADC counts (the Bosch compensation needs per-device calibration
+# parameters the datasheet does not print values for). Defaults are the Table 22
+# reset values: 524288 = 0x80000 (press, temp), 32768 = 0x8000 (hum), gas 0. All
+# three parallel-mode data fields report the same inputs (the sequencer is not
+# modelled).
+[[sensor.input]]
+name = "adc_press"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_temp"
+default = 524288.0
+
+[[sensor.input]]
+name = "adc_hum"
+default = 32768.0
+
+[[sensor.input]]
+name = "adc_gas"
+default = 0.0
+
+[[sensor.input]]
+name = "gas_range"
+default = 0.0
+
+# Field 0 0x1D meas_status_0 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 0 0x1E sub_meas_index_0, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x1E
+const = [0x00]
+
+# Field 0 0x1F-0x21 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x1F
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 0 0x22-0x24 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x22
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 0 0x25-0x26 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x25
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 0 0x2C-0x2D gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x2C
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# Field 1 0x2E meas_status_1 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x2E
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 1 0x2F sub_meas_index_1, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x2F
+const = [0x00]
+
+# Field 1 0x30-0x32 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x30
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 1 0x33-0x35 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x33
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 1 0x36-0x37 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x36
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 1 0x3D-0x3E gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x3D
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# Field 2 0x3F meas_status_2 (reset 0x00): new_data bit 7 is set while a measurement mode is selected (instant conversion).
+[[sensor.register]]
+addr = 0x3F
+encoding = "u8"
+expr = "if(mode > 0, 128, 0)"
+
+# Field 2 0x40 sub_meas_index_2, reset 0x00 (the parallel sequencer is not modelled).
+[[sensor.register]]
+addr = 0x40
+const = [0x00]
+
+# Field 2 0x41-0x43 press_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x41
+encoding = "u20_be_xlsb"
+expr = "if(osrs_p > 0, adc_press, 524288)"
+
+# Field 2 0x44-0x46 temp_msb/lsb/xlsb<7:4>, reset 80 00 00.
+[[sensor.register]]
+addr = 0x44
+encoding = "u20_be_xlsb"
+expr = "if(osrs_t > 0, adc_temp, 524288)"
+
+# Field 2 0x47-0x48 hum_msb/lsb, reset 80 00.
+[[sensor.register]]
+addr = 0x47
+encoding = "u16_be"
+expr = "if(osrs_h > 0, adc_hum, 32768)"
+
+# Field 2 0x4E-0x4F gas_r_msb / gas_r_lsb (gas_r<1:0> bits 7:6, gas_valid_r bit 5, heat_stab_r bit 4, gas_range_r bits 3:0), reset 00 00.
+[[sensor.register]]
+addr = 0x4E
+encoding = "u16_be"
+expr = "if(run_gas > 0, adc_gas * 64 + 48 + gas_range, 0)"
+
+# 0x73 Status (spi_mem_page), reset 0x01 as printed in Table 22 (the BME680 prints 0x00); irrelevant on I2C.
+[[sensor.register]]
+addr = 0x73
+const = [0x01]
+
+# 0xD0 Chip_Id, reset 0x61 (same value as the BME680).
+[[sensor.register]]
+addr = 0xD0
+const = [0x61]
+
+# 0xF0 Variant_Id, reset 0x01: Section 5.3.2.1 'For BME688 - 0x01' distinguishes the BME688 from the BME680 at the same chip id.
+[[sensor.register]]
+addr = 0xF0
+const = [0x01]
+
+# Idac_heat_x 0x50-0x59, Res_heat_x 0x5A-0x63, Gas_wait_x 0x64-0x6D: ten set-points each,
+# reset 0x00 (Table 'Memory map'); the heater itself is not modelled.
+[[sensor.write_register]]
+addr = 0x50
+encoding = "u8"
+store = "idac_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x51
+encoding = "u8"
+store = "idac_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x52
+encoding = "u8"
+store = "idac_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x53
+encoding = "u8"
+store = "idac_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x54
+encoding = "u8"
+store = "idac_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x55
+encoding = "u8"
+store = "idac_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x56
+encoding = "u8"
+store = "idac_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x57
+encoding = "u8"
+store = "idac_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x58
+encoding = "u8"
+store = "idac_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x59
+encoding = "u8"
+store = "idac_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5A
+encoding = "u8"
+store = "res_heat_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5B
+encoding = "u8"
+store = "res_heat_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5C
+encoding = "u8"
+store = "res_heat_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5D
+encoding = "u8"
+store = "res_heat_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5E
+encoding = "u8"
+store = "res_heat_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x5F
+encoding = "u8"
+store = "res_heat_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x60
+encoding = "u8"
+store = "res_heat_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x61
+encoding = "u8"
+store = "res_heat_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x62
+encoding = "u8"
+store = "res_heat_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x63
+encoding = "u8"
+store = "res_heat_9"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x64
+encoding = "u8"
+store = "gas_wait_0"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x65
+encoding = "u8"
+store = "gas_wait_1"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x66
+encoding = "u8"
+store = "gas_wait_2"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x67
+encoding = "u8"
+store = "gas_wait_3"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x68
+encoding = "u8"
+store = "gas_wait_4"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x69
+encoding = "u8"
+store = "gas_wait_5"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6A
+encoding = "u8"
+store = "gas_wait_6"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6B
+encoding = "u8"
+store = "gas_wait_7"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6C
+encoding = "u8"
+store = "gas_wait_8"
+default = 0.0
+
+[[sensor.write_register]]
+addr = 0x6D
+encoding = "u8"
+store = "gas_wait_9"
+default = 0.0
+
+# 0x6E Gas_wait_shared, reset 0x00 (Section 5.3.2.2: step 0.477 ms; not modelled).
+[[sensor.write_register]]
+addr = 0x6E
+encoding = "u8"
+store = "gas_wait_shared"
+default = 0.0
+
+# 0x70 Ctrl_gas_0, reset 0x00: heat_off bit 3.
+[[sensor.write_register]]
+addr = 0x70
+encoding = "u8"
+store = "ctrl_gas_0"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "heat_off"
+bits = [3, 3]
+
+# 0x71 Ctrl_gas_1, reset 0x00: run_gas bit 4, nb_conv bits 3:0.
+[[sensor.write_register]]
+addr = 0x71
+encoding = "u8"
+store = "ctrl_gas_1"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "run_gas"
+bits = [4, 4]
+
+[[sensor.write_register.field]]
+name = "nb_conv"
+bits = [3, 0]
+
+# 0x72 Ctrl_hum, reset 0x00: spi_3w_int_en bit 6, osrs_h bits 2:0.
+[[sensor.write_register]]
+addr = 0x72
+encoding = "u8"
+store = "ctrl_hum"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "spi_3w_int_en"
+bits = [6, 6]
+
+[[sensor.write_register.field]]
+name = "osrs_h"
+bits = [2, 0]
+
+# 0x74 Ctrl_meas, reset 0x00: osrs_t bits 7:5, osrs_p bits 4:2, mode bits 1:0 (00 sleep, 01 forced, 10 parallel).
+[[sensor.write_register]]
+addr = 0x74
+encoding = "u8"
+store = "ctrl_meas"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "osrs_t"
+bits = [7, 5]
+
+[[sensor.write_register.field]]
+name = "osrs_p"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "mode"
+bits = [1, 0]
+
+# 0x75 Config, reset 0x00: filter bits 4:2, spi_3w_en bit 0.
+[[sensor.write_register]]
+addr = 0x75
+encoding = "u8"
+store = "config"
+default = 0.0
+
+[[sensor.write_register.field]]
+name = "filter"
+bits = [4, 2]
+
+[[sensor.write_register.field]]
+name = "spi_3w_en"
+bits = [0, 0]
+
+# 0xE0 Reset, reset 0x00 (writing 0xB6 requests a soft reset; the reset itself is not modelled).
+[[sensor.write_register]]
+addr = 0xE0
+encoding = "u8"
+store = "reset_cmd"
+default = 0.0
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.71   # Table 1 p.7, VDD min
+idle_a = 0.0000037            # p.3 key features, 3.7 uA at 1 Hz H+P+T, typ (no gas heater)
+read_a = 0.0000037
+write_a = 0.0000037
+low_power_a = 0.00000015      # Table 1 p.7, IDDSL sleep current typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels_at_1v6_vddio", "duty_cycled_supply_current", "absolute_ratings", "supply_ranges", "i2c_bus_mode_strap", "i2c_address_strap", "register_map", "chip_id_read", "reset_values", "config_register_readback", "raw_humidity_pressure_temperature_gas_data", "bus_coupled_active_current", "supply_voltage_gating", "variant_id_read", "three_data_fields"]
+missing = ["spi_register_map", "calibration_parameters", "compensated_values", "forced_mode_return_to_sleep", "measurement_timing", "gas_heater_supply_current", "heater_profile_execution", "iir_filter", "soft_reset_command", "reserved_register_reads", "thermal_resistance_not_printed", "parallel_mode_sequencer", "gas_wait_shared_timing"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme688-ds000.pdf"
+title = "Bosch Sensortec BME688 Datasheet, BST-BME688-DS000-03, revision 1.3, February 2024"
+locator = "p.3 Key features; Table 1 p.7; Table 2 p.8; Table 11 p.15; Table 22 Memory map pp.33-34; Section 5.3.2.1 p.36; Section 6 p.45; Table 23 p.48; Table 26 Pin description p.51"
+sha256 = "fce73ae028a985b3265ce3dbc17ab5b7bea1ae31b7ea84c6698c7694083e2478"
+
+[[models.source.pinout]]
+package = "LGA-8 3.0 x 3.0 mm metal lid"
+pins = { "1" = "GND", "2" = "CSB", "3" = "SDI", "4" = "SCK", "5" = "SDO", "6" = "VDDIO", "7" = "GND", "8" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "Vil_si input low level"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 23 p.48, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vih_si input high level"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.2 V to 3.6 V"
+basis = "Table 23 p.48, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI output low level I2C"
+max = 0.2
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Iol=3 mA"
+basis = "Table 23 p.48, 20 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Vol_SDI_1.2 output low level I2C"
+max = 0.23
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Iol=3 mA"
+basis = "Table 23 p.48, 23 %VDDIO max"
+
+[[models.source.characteristic]]
+parameter = "Voh output high level (SDO, SDI)"
+min = 0.8
+unit = "VDDIO"
+conditions = "VDDIO=1.62 V, Ioh=1 mA"
+basis = "Table 23 p.48, 80 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Voh_1.2 output high level (SDO, SDI)"
+min = 0.6
+unit = "VDDIO"
+conditions = "VDDIO=1.20 V, Ioh=1 mA"
+basis = "Table 23 p.48, 60 %VDDIO min"
+
+[[models.source.characteristic]]
+parameter = "Rpull internal CSB pull-up to VDDIO"
+min = 70
+typ = 120
+max = 190
+unit = "kOhm"
+conditions = "internal CSB pull-up resistor to VDDIO"
+basis = "Table 23 p.48"
+
+[[models.source.characteristic]]
+parameter = "IDDH supply current during humidity measurement"
+typ = 340
+max = 450
+unit = "uA"
+conditions = "max value at 85 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDDP supply current during pressure measurement"
+typ = 714
+max = 849
+unit = "uA"
+conditions = "max value at -40 C"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "IDD gas heater supply current"
+min = 9
+typ = 12
+max = 13
+unit = "mA"
+conditions = "heater target 320 C, constant operation (VDD <= 1.8 V, 25 C)"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "IPeak peak supply current when switching on the hotplate"
+min = 15
+typ = 17
+max = 18
+unit = "mA"
+conditions = "within the first ms of switching on the hotplate"
+basis = "Table 2 p.8"
+
+[[models.source.characteristic]]
+parameter = "tstartup time to first communication"
+max = 2
+unit = "ms"
+conditions = "after both VDD > 1.58 V and VDDIO > 0.65 V"
+basis = "Table 1 p.7"
+
+[[models.source.characteristic]]
+parameter = "Storage temperature"
+min = -45
+max = 85
+unit = "C"
+conditions = "<= 65 % r.H."
+basis = "Table 11 p.15"
