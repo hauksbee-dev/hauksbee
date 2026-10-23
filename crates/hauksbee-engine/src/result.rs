@@ -3933,7 +3933,8 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::PowerDomainBusLockup
         | LintCheck::RequiredPinBias
         | LintCheck::SupplyCapacitance
-        | LintCheck::HoldUpDroop => supply_fix_hint(check),
+        | LintCheck::HoldUpDroop
+        | LintCheck::MissingOpenDrainPullup => supply_fix_hint(check),
         LintCheck::SignalDirection
         | LintCheck::DebugHeaderPinout
         | LintCheck::SwitchShort
@@ -4013,6 +4014,9 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::HoldUpDroop => {
             "Raise the bulk capacitor, lower the load, or raise the transformer voltage until the valley stays above the regulator's minimum input."
+        }
+        LintCheck::MissingOpenDrainPullup => {
+            "Add a pull-up resistor (10k is typical) from the line to the rail the receiver reads, or enable an internal pull-up on the receiving pin if its datasheet gives one."
         }
         LintCheck::AudioBusWiring => {
             "Wire each audio pin to the net carrying its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), keep exactly one clock master, and connect MCLK where the codec needs it."

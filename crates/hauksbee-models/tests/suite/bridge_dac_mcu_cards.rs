@@ -21,8 +21,16 @@ fn ch340c_takes_the_sop16_map_with_nc_and_out() {
         query_id(Some("CH340G"), Some("CH340G"), None).as_deref(),
         Some("ch340g")
     );
-    for other in ["CH340N", "CH340K", "CH340E", "CH340B"] {
+    for other in ["CH340N", "CH340B"] {
         assert_eq!(query_id(Some(other), Some(other), None), None, "{other}");
+    }
+    // The K (ESSOP-10) and E (MSOP-10) have their own pin maps (official_serial_logic.rs), never the SOP16 map.
+    for (value, id) in [("CH340K", "ch340k"), ("CH340E", "ch340e")] {
+        assert_eq!(
+            query_id(Some(value), Some(value), None).as_deref(),
+            Some(id),
+            "{value}"
+        );
     }
     // The CH340X has its own MSOP-10 card (supply draw only), never the SOP16 map.
     for value in ["CH340X", "CH340X(MSOP-10)"] {

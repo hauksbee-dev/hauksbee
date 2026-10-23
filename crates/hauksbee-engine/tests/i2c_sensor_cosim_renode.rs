@@ -48,7 +48,7 @@ use hauksbee_mcu::renode::is_available;
 use std::path::PathBuf;
 
 /// Minimal board: U1 STM32F103, power/ground on the usual pads, I2C bus on
-/// PB6/PB7 (pads 37/38 on the LQFP-48), FLAG on PA8 (pad 29), with a 4k7
+/// PB6/PB7 (pads 42/43 on the LQFP-48), FLAG on PA8 (pad 29), with a 4k7
 /// pull-down to ground so the net has a well-defined logic level when the GPIO
 /// is not driving it. The LM75 is not placed on the board (it is intercepted
 /// in-process); the SDA/SCL pads are wired for board completeness only.
@@ -73,8 +73,8 @@ const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
     (pad 24 smd rect (at 3 3) (net 2 "+3V3"))
     (pad 35 smd rect (at -3 3) (net 1 "GND"))
     (pad 36 smd rect (at -3 4) (net 2 "+3V3"))
-    (pad 37 smd rect (at -3 5) (net 5 "SCL"))
-    (pad 38 smd rect (at -3 6) (net 4 "SDA"))
+    (pad 42 smd rect (at -3 5) (net 5 "SCL"))
+    (pad 43 smd rect (at -3 6) (net 4 "SDA"))
     (pad 44 smd rect (at -3 7) (net 1 "GND"))
     (pad 48 smd rect (at -3 8) (net 2 "+3V3"))
   )

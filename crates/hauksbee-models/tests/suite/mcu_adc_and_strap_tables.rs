@@ -75,6 +75,40 @@ fn stm32g474_adc_pads_follow_the_ufqfpn48_column() {
     assert_adc_pads_are_mapped(&m);
 }
 
+/// DS12288 Rev 6 Table 12 gives LQFP48 its own column: from pad 16 on it differs from
+/// UFQFPN48 (no PC4/PC6/PC10/PC11, VSSA on 19, VSS on 23/35/47), so a "T" part must not
+/// resolve to the UFQFPN48 card and a "U" part must not resolve to the LQFP48 card.
+#[test]
+fn stm32g474_lqfp48_has_its_own_pad_map() {
+    let t = resolve_part("STM32G474CET6").expect("resolves");
+    assert_eq!(t.id, "stm32g474c_lqfp48");
+    assert_pins(
+        &t,
+        &pins("16=pb0_adc15 19=vssa 23=vss 24=vdd 25=pb11_adc14 37=pa13_swdio 45=pb8_boot0 47=vss3 48=vdd3"),
+    );
+    assert!(!t
+        .pins
+        .values()
+        .any(|r| r.starts_with("pc4") || r.starts_with("pc6")));
+    assert_eq!(
+        adc_pads(&t),
+        vec![5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 25, 26, 27, 28, 29, 30, 31]
+    );
+    assert_eq!(t.adc_channel("16"), Some("ADC1_IN15/ADC3_IN12"));
+    assert_adc_pads_are_mapped(&t);
+    for supply in ["19", "23", "24", "35", "36", "47", "48"] {
+        assert!(
+            !t.has_internal_pull_up(supply),
+            "pad {supply} is a supply pad on LQFP48"
+        );
+    }
+    assert!(t.has_internal_pull_up("46") && t.has_internal_pull_up("16"));
+
+    let u = resolve_part("STM32G474CEU6").expect("resolves");
+    assert_eq!(u.id, "stm32g474c");
+    assert_pins(&u, &pins("16=pc4_adc37 19=pb2_adc44 29=pc6 46=pb8_boot0"));
+}
+
 #[test]
 fn stm32f77x_adc_pads_are_on_lqfp100() {
     let m = resolve_part("STM32F777VIT6").expect("resolves");

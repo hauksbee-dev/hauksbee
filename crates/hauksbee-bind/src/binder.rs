@@ -746,6 +746,26 @@ pub fn bind_board_driven(
         {
             report.identity_ics.insert(comp.reference.clone());
         }
+        let card = (!matches!(outcome, BindOutcome::Unresolved { .. }))
+            .then(|| model_id.clone())
+            .flatten();
+        // A skipped part (a connector, a test point) is the board's edge or a
+        // bare pad, never what drives a net on it.
+        let skipped = matches!(outcome, BindOutcome::Skipped { .. });
+        let pins = if skipped { &[][..] } else { &comp.pins[..] };
+        report.part_pins.extend(pins.iter().filter_map(|p| {
+            Some(crate::bind_report::PartPin {
+                reference: comp.reference.clone(),
+                pin: p.number.clone(),
+                node: node_of(p.net)?,
+                card: card.clone(),
+                role: card
+                    .as_ref()
+                    .and(model.as_ref())
+                    .and_then(|m| m.pins.get(&p.number).cloned()),
+                can_drive: crate::bind_report::pin_can_drive(&p.kind),
+            })
+        }));
         report.push(BindRow {
             reference: comp.reference.clone(),
             value: comp.value.clone(),

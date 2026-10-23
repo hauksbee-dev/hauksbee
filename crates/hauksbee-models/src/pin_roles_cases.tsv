@@ -1,6 +1,6 @@
-# Shared cases of the card power-pin vocabulary: role<TAB>card kind (* for any)<TAB>what it reads as.
-# Read by crates/hauksbee-models/src/pin_roles.rs (power_pin) and qc/tests/test_fault_injection.py
 # (catalogue._power_role); both must reproduce every row, and a built-in card role not listed here must read
+# Read by crates/hauksbee-models/src/pin_roles.rs (power_pin) and qc/tests/test_fault_injection.py
+# Shared cases of the card power-pin vocabulary: role<TAB>card kind (* for any)<TAB>what it reads as.
 # as none on both sides. `supply <family> <base pad 0/1>`, `return <true ground 0/1>`, or `none`.
 3v3	*	none
 3v3a	*	none
@@ -50,6 +50,7 @@ gnd9	*	return 1
 gnd_a	*	return 1
 gnd_aux	*	none
 gnd_ep	*	none
+gnda	*	return 1
 gndio	*	return 1
 in_plus	*	none
 iovdd	*	supply iovdd 1
@@ -60,6 +61,7 @@ iovdd5	*	supply iovdd 0
 iovdd6	*	supply iovdd 0
 out	*	none
 pgnd	*	return 1
+pgnd1	*	return 1
 pgnd2	*	return 1
 pgnd3	*	return 1
 sensgnd	*	none
@@ -84,6 +86,12 @@ vcca	*	supply vcca 1
 vccb	*	supply vccb 1
 vccio	*	supply vccio 1
 vdd	*	supply vdd 1
+vdd10	*	supply vdd 0
+vdd11	*	supply vdd 0
+vdd12	*	supply vdd 0
+vdd13	*	supply vdd 0
+vdd14	*	supply vdd 0
+vdd15	*	supply vdd 0
 vdd1a	*	supply vdd 1
 vdd2	*	supply vdd 0
 vdd2a	*	supply vdd 0
@@ -92,7 +100,12 @@ vdd33_a	*	supply vdd 0
 vdd33_b	*	supply vdd 0
 vdd4	*	supply vdd 0
 vdd5	*	supply vdd 0
+vdd6	*	supply vdd 0
+vdd7	*	supply vdd 0
+vdd8	*	supply vdd 0
+vdd9	*	supply vdd 0
 vdda	*	supply vdda 1
+vdda2	*	supply vdda 0
 vdda33_a	*	supply vdda 0
 vdda33_b	*	supply vdda 0
 vdda33_c	*	supply vdda 0
@@ -101,6 +114,7 @@ vddana	*	supply vddana 1
 vddcore	*	none
 vddcp	*	none
 vddcr	*	none
+vddd	*	supply vddd 1
 vddio	*	supply vddio 1
 vddio2	*	supply vddio 0
 vin	*	none
@@ -117,8 +131,14 @@ vs	mcu	none
 vs	opamp	supply vs 1
 vs	vreg	none
 vss	*	return 0
+vss10	*	return 0
+vss11	*	return 0
 vss2	*	return 0
 vss3	*	return 0
 vss4	*	return 0
 vss5	*	return 0
+vss6	*	return 0
+vss7	*	return 0
+vss8	*	return 0
+vss9	*	return 0
 vssa	*	return 0

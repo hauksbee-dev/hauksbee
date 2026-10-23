@@ -7,7 +7,7 @@
 //! `hauksbee-ci/tests/schema_drift.rs` for the CI-spec input schema.
 //!
 //! Regenerate after changing `JsonReport` (or anything it contains) with:
-//!     `UPDATE_RUN_SCHEMA=1` cargo test -p hauksbee-engine --test `run_report_schema_drift`
+//!     `UPDATE_RUN_SCHEMA=1` cargo test -p hauksbee-engine --test it `run_report_schema_drift`
 
 use hauksbee_engine::result::{JsonReport, RUN_REPORT_SCHEMA_VERSION};
 use schemars::generate::SchemaSettings;
@@ -15,7 +15,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 const REGEN: &str =
-    "UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift";
+    "UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test it run_report_schema_drift";
 
 fn schema_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas/hauksbee-run-report.schema.json")

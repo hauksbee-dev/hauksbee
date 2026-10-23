@@ -1998,6 +1998,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A rectifier only recharges the bulk capacitor near the peak of each mains half-cycle, and between peaks the load alone discharges it. The lowest voltage before the next peak (the valley) is the peak less the droop I / (2 f C), and a regulator needs its input above its output plus its dropout at all times. Below that the output loses regulation at the supply's ripple frequency: the rail dips, the load resets, and the board works on the bench at light load and fails under full load.".to_string(),
                 "Raise the bulk capacitance, lower the load on the rail, or raise the transformer voltage so the valley stays above the regulator's minimum input, then re-check.".to_string(),
             ),
+            LintCheck::MissingOpenDrainPullup => (
+                format!("An open-drain output ({parts}) on \"{net}\" has no pull-up. {}", f.message),
+                "An open-drain (or open-collector) output can only pull its line low; it never drives it high. A resistor to a power rail is what brings the line back up when the chip lets go. Without one the line floats, so a fault, alert, interrupt or power-good flag is never seen as released, or reads as random levels, and whatever listens to it misbehaves.".to_string(),
+                format!("Add a pull-up resistor (typically 10k ohm) from \"{net}\" to the supply rail the receiving chip reads, or turn on an internal pull-up on the receiving pin if its datasheet provides one."),
+            ),
             LintCheck::AudioBusWiring => (
                 format!("The digital-audio wiring on {parts} (net \"{net}\") disagrees with the pins' roles. {}", f.message),
                 "An I2S or TDM audio bus has one bit clock and one frame clock, each driven by exactly one part (the master) and listened to by the rest, and data lines that each have a transmitter and a receiver. Two outputs on one line, a line nobody sends on, a clock on the wrong pin, a clock driven by two parts or none, or a codec missing the master clock it needs all leave the bus silent or noisy, and nothing about the board looks wrong to a power or level check.".to_string(),

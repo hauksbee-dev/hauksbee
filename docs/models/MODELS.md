@@ -814,6 +814,37 @@ exist in `[models.pins]`, none of them a supply or ground role, and a channel fo
 each. `card_coverage` lists the table (`adc_pins`) among an MCU card's needs when
 the datasheet mentions an ADC.
 
+### Partial tables: tri-state, open-drain and internal pull-up pads
+
+Three more tables state a property of the pads they list and say nothing about the
+rest (a pad not listed is unknown, never "no"). Each has a `basis` citing the
+datasheet table or sentence and its page, and `pads` keyed by pad number of
+`[models.pins]`. None may list a supply or ground pad.
+
+```toml
+[models.pin_capability.tri_state]      # non-MCU cards
+basis = "Datasheet <part> sec 7.5 p.14: DO is high impedance while /CS is high"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"          # output pad to the role of the pad whose inactive level releases it
+
+[models.pin_capability.open_drain]     # non-MCU cards
+basis = "Datasheet <part> Table 5-1 p.3: ALERT is open-drain"
+[models.pin_capability.open_drain.pads]
+"3" = "ALERT"       # output pad to the datasheet's name for the signal
+
+[models.pin_capability.pull_up]        # MCU cards
+basis = "Datasheet <part> sec 14.2 p.85: PORTxn=1 with DDxn=0 enables the pull-up"
+[models.pin_capability.pull_up.pads]
+"2" = "PORTD0"      # pad to the register or setting that enables the pull-up
+```
+
+`output_release.rs` reads `tri_state` to drop an output-contention finding when every
+driver on the net is released by its own chip select (a shared SPI MISO line);
+`open_drain_pullup.rs` reads `open_drain` and `pull_up` to find an open-drain output
+with no resistor to a rail and no receiving MCU pin with a stated internal pull-up.
+Validation (`check_listed_pads`) requires a basis, at least one pad, pads that exist,
+a releasing role the card itself carries, `pull_up` on `mcu` cards only and the other
+two on cards that are not `mcu`.
 ### Other peripheral tables
 
 The same section holds one table per hardware peripheral function, for the board

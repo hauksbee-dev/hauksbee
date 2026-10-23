@@ -9,7 +9,7 @@
 //! * `schema_file_matches_spec_type`: after normalizing checkout line endings,
 //!   the checked-in file equals what the types generate, byte for byte.
 //!   Regenerate after editing `Spec` (or any type it contains) with:
-//!   `UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift`
+//!   `UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test it schema_drift`
 //! * `generated_schema_is_strict_and_documented`: the generator actually
 //!   carries the properties the editor experience depends on (doc comments as
 //!   hover descriptions, `deny_unknown_fields` as additionalProperties: false),
@@ -23,7 +23,7 @@ use std::path::PathBuf;
 /// The published `$id`; kept from the original hand-written schema.
 const SCHEMA_ID: &str = "https://github.com/hauksbee-dev/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json";
 
-const REGEN: &str = "UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift";
+const REGEN: &str = "UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test it schema_drift";
 
 /// Render the schema exactly as the checked-in file must contain it.
 fn generated_schema() -> String {
@@ -50,7 +50,7 @@ fn generated_schema() -> String {
              crates/hauksbee-ci/src/spec.rs (doc comments become these descriptions; \
              serde deny_unknown_fields becomes additionalProperties: false). Do not \
              hand-edit; regenerate with: UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci \
-             --test schema_drift"
+             --test it schema_drift"
         ),
     );
     // `assert` is required in practice (Spec::validate rejects an empty list),

@@ -31,7 +31,7 @@ validation = "physical-bounds-only"
 url = "https://www.ti.com/lit/ds/symlink/bq24075.pdf"
 title = "Texas Instruments BQ2407x datasheet, SLUS810N, Rev. N"
 locator = "Section 6 Device Comparison Table; Table 7-1 Pin Functions; Sections 8.1 Absolute Maximum Ratings, 8.3 Recommended Operating Conditions, 8.5 Electrical Characteristics (BATTERY CHARGER), 9.1 Overview, 9.3.5 Battery Charging, and 9.3.6 Battery Pack Temperature Monitoring"
-sha256 = "05585ca0112a74b0ad1ef22f3cc30e92c1cdce50430d32605a00f4c3b57b7435"
+sha256 = "4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1"
 
 [[models.source.uncertainty]]
 status = "unknown"
@@ -81,6 +81,12 @@ vout_setpoint_high = 4.23
 "14" = "tmr"
 "15" = "sysoff"
 "16" = "iset"
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments BQ2407x SLUS810N (September 2008, revised October 2021): Table 7-1 Pin Functions (p.8) describes PGOOD and CHG as open-drain status outputs, and Section 9.3.5.7 Status Indicators (p.28) states the BQ2407x contains two open-drain outputs, PGOOD and CHG"
+[models.pin_capability.open_drain.pads]
+"7" = "PGOOD"
+"9" = "CHG"
 
 [models.ratings]
 theta_ja_c_per_w = 44.5     # SLUS810N 8.4 Thermal Information, RGT 16 pins
@@ -136,6 +142,13 @@ iq_a = 0.001
 "7"  = "sensvin"   # SENSVIN, input supply sense
 "15" = "rng_ss"    # RNG/SS, frequency range + soft-start (the mb2.0->2.5 pin)
 "20" = "bat"       # BAT, battery / charge output
+# BGATE, PowerPath FET gate driver output (Rev E, Pin Functions, PDF p.11, "BGATE (Pin 21)"): pulled low in a normal
+# charge cycle and while the DC/DC is disabled, with CSP - BGATE clamped at 9.5 V; pulled HIGH to disconnect the battery
+# once the charge cycle terminates or on NTC faults; servoed (14 mV ideal-diode drop) when the battery sources load.
+# Its level therefore depends on the charger state: the card records the pin's identity only and stamps NO drive on it
+# (the behavioural block below does not model the charge-cycle state machine), so a gate net it alone drives is not a
+# known level.
+"21" = "bgate"     # BGATE, PowerPath FET gate driver output (identity only; no drive modelled)
 "22" = "csn"       # CSN, battery current sense (-)
 "23" = "csp"       # CSP, battery current sense (+)
 "25" = "ilimit"    # ILIMIT, input-current-limit program pin (R8)
@@ -149,6 +162,11 @@ theta_ja_c_per_w = 34.0    # UHF 38-lead 5x7 QFN, Pin Configuration (Rev E)
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/LTC4020.pdf"
+title = "Analog Devices LTC4020 55V Buck-Boost Multi-Chemistry Battery Charger datasheet, Rev. E, 2023-03"
+locator = "PDF p.2 pinout drawing (UHF 38-lead QFN); p.8-13 Pin Functions, pin 21 BGATE on p.11"
+sha256 = "82cfef2de7f519b6a66660bf5d65e2795b396f02c956e354329b3c8c518cbfc9"
 
 [[models.source.characteristic]]
 parameter = "θJA junction-to-ambient thermal resistance"
@@ -951,6 +969,20 @@ iq_a = 0.000055    # ICC standby and shutdown, 55 uA typ (100 uA max); charge
 "6" = "stdby"      # open-drain charge-terminated status output
 "7" = "chrg"       # open-drain charging status output
 "8" = "ce"         # chip enable, active high
+
+[models.pin_capability.open_drain]
+basis = "NanJing Top Power ASIC TP4056 1A Standalone Linear Li-Ion Battery Charger with Thermal Regulation in SOP-8 (datasheet carries no revision marking): pin descriptions (p.2) give STDBY (Pin 6) and CHRG (Pin 7) as Open Drain Charge Status Output"
+[models.pin_capability.open_drain.pads]
+"6" = "STDBY"
+"7" = "CHRG"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://dlnmh9ip6v2uc.cloudfront.net/datasheets/Prototyping/TP4056.pdf"
+title = "NanJing Top Power ASIC TP4056 1A Standalone Linear Li-Ion Battery Charger with Thermal Regulation in SOP-8 (no revision marking)"
+locator = "Pin descriptions p.2 (Pin 6 STDBY, Pin 7 CHRG)"
+sha256 = "cdafa22618e7221fa93b8d432237cafb246a515606eef2672f50230d5ae205ce"
 
 [models.ratings]
 max_current_a = 1.2          # BAT pin current, Absolute Maximum Ratings
@@ -2040,6 +2072,12 @@ iq_a = 0.00075      # IQ_IN typ (p.6), charge enabled, ICHG = 0
 "8" = "iset"       # ISET, charge-current program resistor
 "9" = "stat1"      # STAT1, open-drain status
 "10" = "in"        # IN, DC input
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments BQ25185 SLUSF65B (October 2023, revised August 2026): Table 4-1 Pin Functions (p.4) describes STAT1 and STAT2 as open-drain status outputs, and the status pins description (p.18) states the two status pins are open-drain"
+[models.pin_capability.open_drain.pads]
+"9" = "STAT1"
+"3" = "STAT2"
 
 [models.ratings]
 max_current_a = 1.1          # 5.4 (p.5): IIN, IN to SYS, max (the stamp feeds SYS from IN only)

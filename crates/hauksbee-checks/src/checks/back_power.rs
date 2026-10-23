@@ -480,7 +480,7 @@ mod tests {
         let board = r#"(kicad_pcb (version 20221018) (generator pcbnew)
   (net 0 "") (net 1 "GND") (net 2 "+5V") (net 3 "/SIG") (net 4 "+3V3")
   (footprint "Package_QFP:LQFP-100" (layer "F.Cu") (at 100 100)
-    (property "Reference" "U9" (at 0 0)) (property "Value" "STM32F407VGT6" (at 0 2))
+    (property "Reference" "U9" (at 0 0)) (property "Value" "STM32F446VET6" (at 0 2))
     (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "+3V3") (pinfunction "VDD"))
     (pad "2" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND") (pinfunction "VSS"))
     (pad "3" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "/SIG") (pinfunction "PA9")))

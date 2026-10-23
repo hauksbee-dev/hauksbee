@@ -15,6 +15,8 @@
 //! * [`program_resistor`]: the resistance a programming pin sees to ground.
 //! * [`stress`], [`thermal`], [`shorts`]: the per-device envelopes and the
 //!   fault monitor that watches them during a run.
+//! * [`control_inputs`]: the FET gates whose level nothing in the DC netlist
+//!   sets, so a rating judged at rest must not read them as 0 V.
 //! * [`board_input`], [`firmware_input`], [`schematic_ties`],
 //!   [`asbuilt`], [`waiver`]: the inputs a run is bound from.
 //! * [`bind_report`]: the per-component bind verdicts and their summary.
@@ -28,6 +30,7 @@ pub mod bind_report;
 pub mod binder;
 pub mod board_input;
 pub mod component_evidence;
+pub mod control_inputs;
 pub mod digital;
 pub mod dnp_rails;
 pub mod drivers;

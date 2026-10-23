@@ -3404,6 +3404,11 @@ iq_a      = 1.2e-6    # I(GND) typ at IO = 10 mA (2 uA max)
 "4" = "in"
 "5" = "out"
 
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TPS797xx SLVS332J (March 2001, revised December 2016): Section 5 Pin Functions (p.4), DCK pin 1 PG is an open drain, active-high output that requires a pullup resistor"
+[models.pin_capability.open_drain.pads]
+"1" = "PG"
+
 [models.ratings]
 # Section 6.1 Absolute Maximum Ratings and Section 6.3 Recommended Operating.
 max_current_a = 0.05  # IO continuous, Section 6.3 (ISC is a limit, not a rating)
@@ -3415,6 +3420,11 @@ theta_ja_c_per_w = 230.9     # DCK (SC70-5), 6.4 Thermal Information
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps797.pdf"
+title = "Texas Instruments TPS797xx Ultra-Low IQ, 50-mA Low-Dropout Linear Regulators With Power Good Output in SC70 Package, SLVS332J, March 2001, revised December 2016"
+locator = "Section 5 Pin Configuration and Functions p.4; 6.4 Thermal Information"
+sha256 = "ace5c5708757b3ce74c8e1b6c3653227df1538b4c8b2e86c65881b2358d527cf"
 [[models.source.characteristic]]
 parameter = "RθJA junction-to-ambient thermal resistance"
 rating = "theta_ja_c_per_w"
@@ -5368,6 +5378,19 @@ i_shdn_a=3.25e-7  # ISHUTDOWN "Shutdown current" typ 325 nA (600 nA max), VEN <=
 "5"="gnd"
 "6"="in"
 "7"="gnd"
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TPS7A26 SBVS290B (December 2018, revised October 2019): Pin Functions table (p.3), DRV fixed pin 3 PG is Power-good pin; open-collector output, and Section 7.3.6 Power Good (p.15) states the PG pin is an open-drain output"
+[models.pin_capability.open_drain.pads]
+"3" = "PG"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps7a26.pdf"
+title = "Texas Instruments TPS7A26 500-mA, 18-V, Ultra-Low IQ, Low-Dropout Linear Voltage Regulator With Power-Good, SBVS290B, December 2018, revised October 2019"
+locator = "Pin Functions p.3 (DRV fixed pin 3 PG); Section 7.3.6 Power Good p.15"
+sha256 = "4d0b73c2b191e30fe34fa203e2158d6ae6d92091bac942255427219eb64b4aa9"
 [models.ratings]
 max_current_a=0.5
 max_voltage_v=20.0
@@ -7113,6 +7136,11 @@ warning = "source-bound averaged DC model: board feedback and EN are executable;
 "5" = "fb"
 "6" = "pg"     # open-drain power good; named, not modelled
 
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TPS62A0x SLUSEG9E (December 2021, revised June 2024): Table 5-1 Pin Functions (p.3) lists PG (SOT563-6 pin 6) as Power-good open-drain output pin, and the PG description (p.9) states the PG pin is an open-drain output that requires a pullup resistor"
+[models.pin_capability.open_drain.pads]
+"6" = "PG"
+
 [models.ratings]
 max_current_a = 2.0          # Recommended Operating Conditions, IOUT TPS62A02
 max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN/EN/PG
@@ -8460,6 +8488,11 @@ iq_a = 40e-6           # 7.5 IQ non-switching, VEN = 3.3 V, PFM variant (typ)
 "8" = "sw"
 "9" = "gnd_ep"        # exposed thermal pad, connect to system ground
 "EP" = "gnd_ep2"
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments LMR38010 SNVSC73B (January 2022, revised September 2023): Table 6-1 Pin Functions (p.3) lists PG pin 6 as Open-drain power-good flag output, and p.12 states this open-drain output goes low under fault conditions"
+[models.pin_capability.open_drain.pads]
+"6" = "PG"
 
 [models.ratings]
 max_current_a = 1.0          # 7.3 IOUT 0 to 1 A
