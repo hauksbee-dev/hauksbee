@@ -265,6 +265,12 @@ pub(super) enum WeakKind {
     Connector,
     /// An MCU pad: high impedance from reset until firmware drives it.
     Gpio,
+    /// An MCU pad that is an output once firmware runs: the symbol types it
+    /// `output`/`bidirectional`, its card lists the pad as a peripheral output
+    /// (SPI clock or data-out, UART transmit, PWM), or it has no electrical type
+    /// to say otherwise. The net has a driver; it is high impedance only while
+    /// that MCU is in reset.
+    McuOutput,
     /// An NPN collector or N-channel drain: pulls low only while on.
     Sink,
 }
@@ -437,10 +443,12 @@ impl Classifier<'_> {
                     } else {
                         format!("{at} ({name})")
                     };
-                    weak.push(Weak {
-                        kind: WeakKind::Gpio,
-                        label,
-                    });
+                    let kind = if model.is_some_and(|m| mcu_pad_drives(q, m)) {
+                        WeakKind::McuOutput
+                    } else {
+                        WeakKind::Gpio
+                    };
+                    weak.push(Weak { kind, label });
                     continue;
                 }
                 return (true, Vec::new());
@@ -448,6 +456,41 @@ impl Classifier<'_> {
         }
         (false, weak)
     }
+}
+
+/// Whether an MCU pad drives its net once firmware runs: the schematic types it
+/// as an output (`output`, `bidirectional`, `tri_state`, `open_collector`,
+/// `open_emitter`), or the card lists the pad as a peripheral output (SPI clock
+/// or data-out, UART transmit, PWM, a tri-state or open-drain output). A pad the
+/// symbol types `input` and the card does not list is shown only to listen. A
+/// pad with no electrical type at all (a layout-only extraction keeps pad
+/// numbers and nets, not symbol types) is not shown to listen either, so it is
+/// read as an MCU pad firmware may drive.
+pub(super) fn mcu_pad_drives(pin: &Pin, model: &ModelEntry) -> bool {
+    let kind = pin.kind.to_ascii_lowercase();
+    let kind = kind.split('+').next().unwrap_or_default().trim();
+    if kind.is_empty()
+        || matches!(
+            kind,
+            "output" | "bidirectional" | "tri_state" | "open_collector" | "open_emitter"
+        )
+    {
+        return true;
+    }
+    let caps = &model.pin_capability;
+    let listed = [&caps.spi_mosi, &caps.spi_sck, &caps.uart_tx, &caps.pwm]
+        .into_iter()
+        .flatten()
+        .any(|t| t.pads.contains_key(&pin.number));
+    listed
+        || caps
+            .tri_state
+            .as_ref()
+            .is_some_and(|t| t.pads.contains_key(&pin.number))
+        || caps
+            .open_drain
+            .as_ref()
+            .is_some_and(|t| t.pads.contains_key(&pin.number))
 }
 
 /// A transistor's base or gate pad: it senses the net like an input.
@@ -548,7 +591,9 @@ fn when_open(weak: &[Weak]) -> String {
         .map(|w| match w.kind {
             WeakKind::Switch => "no button or switch is closed",
             WeakKind::Connector => "nothing is plugged in",
-            WeakKind::Gpio => "the MCU is in reset and the pad is high-impedance",
+            WeakKind::Gpio | WeakKind::McuOutput => {
+                "the MCU is in reset and the pad is high-impedance"
+            }
             WeakKind::Sink => "the transistor is off",
         })
         .collect();

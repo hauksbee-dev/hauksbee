@@ -436,6 +436,69 @@ mod tests {
         assert_eq!(report.of_check(LintCheck::FloatingControlPin).count(), 0);
     }
 
+    /// ADXL345 CS (pad 7) and SDO/ALT ADDRESS (pad 12) have no internal pull
+    /// (ADXL345 Rev. G, Serial Communications): left open they float. A net an
+    /// MCU pad drives is driven once firmware runs, whatever the pad is called
+    /// and however the symbol types it, so the SPI chip select an MCU GPIO
+    /// drives and the address pin an MCU output sets are not floating.
+    #[test]
+    fn a_control_pin_an_mcu_output_drives_is_not_floating_but_an_open_one_is() {
+        const CS: i64 = 11;
+        const SDO: i64 = 12;
+        let mcu = |cs_kind: &str, sdo_kind: &str| {
+            let mut cs = pin_fn("10", CS, "PA4");
+            cs.kind = cs_kind.into();
+            let mut sdo = pin_fn("11", SDO, "PA6");
+            sdo.kind = sdo_kind.into();
+            fitted(
+                "U1",
+                "STM32F103C8T6",
+                "Package_QFP:LQFP-48_7x7mm_P0.5mm",
+                vec![pin("1", V3), pin("8", GND), cs, sdo],
+            )
+        };
+        let sensor = |cs: i64, sdo: i64| {
+            fitted(
+                "U2",
+                "ADXL345",
+                "Package_LGA:LGA-14_3x5mm_P0.8mm",
+                vec![
+                    pin("1", V3),
+                    pin("2", GND),
+                    pin("6", V3),
+                    pin("7", cs),
+                    pin("12", sdo),
+                ],
+            )
+        };
+        let run = |parts: Vec<Component>| {
+            let nets = [
+                (GND, "GND"),
+                (V3, "+3V3"),
+                (CS, "/SPI_CS"),
+                (SDO, "SENSOR_SDO"),
+            ];
+            model_control_lint(&board("t", &nets, parts), &ModelLibrary::builtin())
+                .of_check(LintCheck::FloatingControlPin)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // The chip select on a bidirectional MCU pad, the address pin on an
+        // MCU pad typed as an input (symbols type output-capable pads so).
+        for (cs_kind, sdo_kind) in [
+            ("bidirectional", "bidirectional"),
+            ("output", "input"),
+            ("", ""),
+        ] {
+            let found = run(vec![mcu(cs_kind, sdo_kind), sensor(CS, SDO)]);
+            assert!(found.is_empty(), "{cs_kind}/{sdo_kind}: {found:#?}");
+        }
+        // Wired to nothing else, both float.
+        let open = run(vec![sensor(CS, SDO)]);
+        assert_eq!(open.len(), 2, "{open:#?}");
+        assert!(open.iter().all(|f| f.severity == Severity::High));
+    }
+
     /// ADS122C04 RESET has no internal pull (TI SBAS751B sec 9.1.3: "Tie the
     /// RESET pin to DVDD if the RESET pin is not used"). A breakout that brings
     /// it to a header with no pull-up floats it whenever nothing is plugged in;

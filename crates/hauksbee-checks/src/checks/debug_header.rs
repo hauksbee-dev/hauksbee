@@ -22,12 +22,17 @@
 //!   left out (an LPC serial-boot `ISP` header and an Altera or Xilinx `JTAG`
 //!   header are other connectors) and so is `ICSP`, because PIC and AVR use
 //!   different orders under that name.
-//! - **The pin's use is known.** What a pin carries is read from the net on it
-//!   (and the signal nets one series resistor away; a resistor to a rail is a
-//!   pull, not a series part): its supply or ground name, a
-//!   `MOSI`/`MISO`/`SCK`/`SWDIO`/`SWCLK`/reset name, or the card pad of an MCU on
-//!   it. A name and a card that disagree, or no reading at all, leave the pin
-//!   unjudged. The serial pins are judged from the UART pins of the parts on the
+//! - **The pin's use is known.** What a pin carries is read from what the net
+//!   connects to (and the signal nets one series resistor away; a resistor to a
+//!   rail is a pull, not a series part): the programming function of the MCU pad
+//!   on it (`MOSI`/`MISO`/`SCK`/`SWDIO`/`SWCLK`/reset), from the pad's card, else
+//!   from the pin name of its symbol (`PB3(MOSI/OC2A)`), and only when no pad
+//!   states one, from the net's name. A net named for the application's SPI is
+//!   not the programming signal of the pad it reaches (an `ATtiny`'s USI data-out
+//!   is the ISP `MISO` pad, and the net on it is often called `MOSI`), so a name
+//!   never overrules a pad. A supply or ground name is read alongside any of
+//!   these. Pads that disagree with each other, or no reading at all, leave the
+//!   pin unjudged. The serial pins are judged from the UART pins of the parts on the
 //!   net: a pin facing the adapter's `TXD` output must not carry a board
 //!   transmitter, and the one facing its `RXD` input must not carry a board
 //!   receiver.
@@ -177,37 +182,97 @@ fn rail_clash(board: &ExtractedBoard, net: i64) -> Option<(String, f64)> {
     ((volts - ADAPTER_SUPPLY_VOLTS).abs() > RAIL_TOLERANCE_VOLTS).then_some((name, volts))
 }
 
+/// What a header pin carries, and what the reading rests on.
+struct Reading {
+    signal: HeaderSignal,
+    /// The pads the reading comes from (`U1 pin 17 (PB3(MOSI))`); empty when
+    /// the reading is only the net's name.
+    basis: String,
+}
+
+/// Whether `part` is a chip a programming header is wired to: an IC whose own
+/// symbol names a reset or a debug pin. Its other pin names (`PB3(MOSI/OC2A)`)
+/// then state the programming function of each pad.
+fn is_programming_target(part: &Component) -> bool {
+    !is_connector_like(part)
+        && !is_test_point_or_hole(part)
+        && part.pins.len() >= 6
+        && part.pins.iter().any(|p| {
+            matches!(
+                from_role(&p.function),
+                Some(HeaderSignal::Reset | HeaderSignal::SwdData | HeaderSignal::SwdClock)
+            )
+        })
+}
+
+/// The one signal every reading in `said` agrees on.
+fn agreed(said: &[HeaderSignal]) -> Option<HeaderSignal> {
+    let (first, rest) = said.split_first()?;
+    rest.iter().all(|s| s == first).then_some(*first)
+}
+
 /// What the nets at `net` say a header pin carries, `None` when nothing is said
 /// or the readings disagree.
+///
+/// A signal is decided by what the net connects to, not by what it is called:
+/// the programming function of the MCU pad on it, from its card, then from its
+/// symbol's pin name. The net's name states a signal only when no pad does (a
+/// net named `MOSI` for the application's SPI is the ISP `MISO` pin of a chip
+/// whose USI data-out is on that pad). A supply or ground name is a fact about
+/// the net and is read alongside any of these.
 fn pin_signal(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     header: &Component,
     net: i64,
-) -> Option<HeaderSignal> {
-    let mut said = Vec::new();
+) -> Option<Reading> {
+    let mut rails = Vec::new();
+    let mut named = Vec::new();
+    let mut card: Vec<(HeaderSignal, String)> = Vec::new();
+    let mut symbol: Vec<(HeaderSignal, String)> = Vec::new();
     for n in series_nets(board, net) {
         if let Some(name) = board.net(n).map(|x| &x.name) {
             // A resistor from the line to a rail is a pull-up or pull-down, not a
             // series part: the rail it reaches says nothing about the line.
-            let pull = n != net;
-            if let Some(s) = from_name(name)
-                .filter(|s| !(pull && matches!(s, HeaderSignal::Ground | HeaderSignal::Supply)))
-            {
-                said.push(s);
+            match from_name(name) {
+                Some(s @ (HeaderSignal::Ground | HeaderSignal::Supply)) => {
+                    if n == net {
+                        rails.push(s);
+                    }
+                }
+                Some(s) => named.push(s),
+                None => {}
             }
         }
         for (part, pin) in board.net_members(n) {
             if std::ptr::eq(part, header) {
                 continue;
             }
+            let at = format!("{} pin {} ({})", part.reference, pin.number, pin.function);
             if let Some(s) = mcu_role(board, lib, part, pin).and_then(|r| from_role(&r)) {
-                said.push(s);
+                card.push((s, at));
+            } else if is_programming_target(part) && AssemblyState::of(part).fitted().is_some() {
+                if let Some(s) = from_role(&pin.function) {
+                    symbol.push((s, at));
+                }
             }
         }
     }
-    let (first, rest) = said.split_first()?;
-    rest.iter().all(|s| s == first).then_some(*first)
+    // Pad evidence first (the card, then the symbol), the net's name last.
+    let pads = if card.is_empty() { &symbol } else { &card };
+    let (mut signals, basis): (Vec<HeaderSignal>, String) = if pads.is_empty() {
+        (named, String::new())
+    } else {
+        (
+            pads.iter().map(|(s, _)| *s).collect(),
+            pads.iter()
+                .map(|(_, at)| at.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    };
+    signals.extend(rails);
+    agreed(&signals).map(|signal| Reading { signal, basis })
 }
 
 /// The UART direction of the board's parts on the nets at `net`: whether any
@@ -302,6 +367,36 @@ fn supply_fault(
     })
 }
 
+/// The finding text for a pin that carries a different signal than the standard gives it.
+fn wrong_pin_message(
+    header: &StandardHeader,
+    number: &str,
+    expected: HeaderSignal,
+    net: &str,
+    got: HeaderSignal,
+    basis: &str,
+) -> String {
+    let mut home = header.pins_of(got);
+    if got == HeaderSignal::Supply {
+        home.extend(header.pins_of(HeaderSignal::AdapterSupply5V));
+    }
+    let home = if home.is_empty() {
+        String::new()
+    } else {
+        format!(" (it belongs on pin {})", home.join(", "))
+    };
+    let from = if basis.is_empty() {
+        String::new()
+    } else {
+        format!(", read from the pad {basis}")
+    };
+    format!(
+        "pin {number} is {} in the standard but net '{net}' carries {}{home}{from}",
+        expected.label(),
+        got.label(),
+    )
+}
+
 /// Flag every named standard header whose pins carry something else.
 #[must_use]
 pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -332,37 +427,23 @@ pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
                     serial_fault(board, lib, comp, &pin.number, net, expected)
                 }
                 HeaderSignal::AdapterSupply5V
-                    if pin_signal(board, lib, comp, net) == Some(HeaderSignal::Supply) =>
+                    if pin_signal(board, lib, comp, net)
+                        .is_some_and(|r| r.signal == HeaderSignal::Supply) =>
                 {
                     let clash = supply_fault(board, &pin.number, net, expected);
                     power |= clash.is_some();
                     clash
                 }
                 _ => pin_signal(board, lib, comp, net)
-                    .filter(|got| *got != expected)
-                    .map(|got| {
+                    .filter(|r| r.signal != expected)
+                    .map(|Reading { signal: got, basis }| {
                         power |= matches!(
                             expected,
                             HeaderSignal::Ground
                                 | HeaderSignal::Supply
                                 | HeaderSignal::AdapterSupply5V
                         ) || matches!(got, HeaderSignal::Ground | HeaderSignal::Supply);
-                        let mut home = header.pins_of(got);
-                        if got == HeaderSignal::Supply {
-                            home.extend(header.pins_of(HeaderSignal::AdapterSupply5V));
-                        }
-                        let home = if home.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" (it belongs on pin {})", home.join(", "))
-                        };
-                        format!(
-                            "pin {} is {} in the standard but net '{}' carries {}{home}",
-                            pin.number,
-                            expected.label(),
-                            name(net),
-                            got.label(),
-                        )
+                        wrong_pin_message(header, &pin.number, expected, &name(net), got, &basis)
                     }),
             };
             if let Some(f) = fault {
@@ -736,5 +817,146 @@ mod tests {
         let found =
             debug_header_lint(&board(&nets, vec![crossed]), &ModelLibrary::builtin()).findings;
         assert_eq!(found.len(), 1, "{found:#?}");
+    }
+
+    // Nets for the programming-function fixtures.
+    const APP_MOSI: i64 = 9;
+    const APP_MISO: i64 = 10;
+    const APP_SCK: i64 = 11;
+
+    /// An ATtiny85-style chip, symbol only (no card): pin names carry the ISP
+    /// function of each pad (`PB0` is ISP MOSI and the USI `DI`, `PB1` is ISP
+    /// MISO and the USI `DO`). `data_in`/`data_out` are the nets on those pads.
+    fn tiny(data_in: i64, data_out: i64) -> Component {
+        let mut u = part(
+            "U2",
+            "FancyTiny",
+            &[
+                ("1", RST),
+                ("2", 0),
+                ("3", 0),
+                ("4", GND),
+                ("5", data_in),
+                ("6", data_out),
+                ("7", APP_SCK),
+                ("8", V5),
+            ],
+        );
+        for (pin, name) in u.pins.iter_mut().zip([
+            "PB5(~{RESET}/ADC0)",
+            "PB3",
+            "PB4",
+            "GND",
+            "PB0(MOSI/DI/SDA)",
+            "PB1(MISO/DO/OC0B)",
+            "PB2(SCK/USCK/SCL)",
+            "VCC",
+        ]) {
+            pin.function = name.into();
+        }
+        u
+    }
+
+    /// A 6-pin AVR ISP header with the given nets on MISO (1), MOSI (4).
+    fn isp6(miso: i64, mosi: i64) -> Component {
+        Component {
+            lib_id: "Connector_Generic:Conn_02x03_Odd_Even".into(),
+            ..part(
+                "J2",
+                "AVR_ISP",
+                &[
+                    ("1", miso),
+                    ("2", V5),
+                    ("3", APP_SCK),
+                    ("4", mosi),
+                    ("5", RST),
+                    ("6", GND),
+                ],
+            )
+        }
+    }
+
+    fn lint_isp(parts: Vec<Component>) -> Vec<LintFinding> {
+        let mut nets = NETS.to_vec();
+        nets.extend([(APP_MOSI, "MOSI"), (APP_MISO, "MISO"), (APP_SCK, "SCK")]);
+        debug_header_lint(&board(&nets, parts), &ModelLibrary::builtin()).findings
+    }
+
+    /// The application's SPI is wired through the chip's USI: its data-out
+    /// (`DO`, the ISP MISO pad) is the application's MOSI and is named so. The
+    /// ISP header is wired right, by the pads, and the net names do not decide.
+    #[test]
+    fn an_isp_header_is_judged_by_the_pad_it_reaches_not_by_the_nets_name() {
+        // ISP MISO (header pin 1) on the pad whose function is MISO, whose net
+        // is called MOSI by the application; ISP MOSI (pin 4) on the pad whose
+        // function is MOSI, net called MISO.
+        let right = lint_isp(vec![tiny(APP_MISO, APP_MOSI), isp6(APP_MOSI, APP_MISO)]);
+        assert!(right.is_empty(), "{right:#?}");
+        // With no pad evidence at all the names are the fallback, and they
+        // disagree with the header.
+        let mut bare = tiny(APP_MISO, APP_MOSI);
+        for pin in &mut bare.pins {
+            pin.function.clear();
+        }
+        let named = lint_isp(vec![bare, isp6(APP_MOSI, APP_MISO)]);
+        assert_eq!(named.len(), 1, "{named:#?}");
+    }
+
+    /// Wired wrong for real: the header's MISO pin on the pad whose function is
+    /// MOSI. A net name that happens to agree with the header does not excuse it.
+    #[test]
+    fn an_isp_pin_on_the_wrong_pad_is_flagged_whatever_the_net_is_called() {
+        // Header pin 1 (MISO) lands on the MOSI pad (net 10, named MISO).
+        let found = lint_isp(vec![tiny(APP_MISO, APP_MOSI), isp6(APP_MISO, APP_MOSI)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::Medium);
+        for want in [
+            "pin 1 is MISO in the standard but net 'MISO' carries MOSI",
+            "read from the pad U2 pin 5 (PB0(MOSI/DI/SDA))",
+            "pin 4 is MOSI in the standard but net 'MOSI' carries MISO",
+        ] {
+            assert!(f.message.contains(want), "{want}: {}", f.message);
+        }
+    }
+
+    /// The same by the pad's card: an `ATmega328P`'s pads 17/18/19 are ISP
+    /// MOSI/MISO/SCK (DS40002061B Table 14-3).
+    #[test]
+    fn an_isp_header_is_judged_by_the_mcu_card_when_one_binds() {
+        let mcu = || {
+            let mut u = part(
+                "U1",
+                "ATmega328P",
+                &[
+                    ("1", RST),
+                    ("7", V5),
+                    ("8", GND),
+                    ("17", APP_MOSI),
+                    ("18", APP_MISO),
+                    ("19", APP_SCK),
+                ],
+            );
+            u.footprint = "Package_DIP:DIP-28_W7.62mm".into();
+            u
+        };
+        // The net on the MOSI pad is named MISO (and the reverse), as an
+        // application that views the SPI from the peripheral would name them.
+        let mut nets = NETS.to_vec();
+        nets.extend([(APP_MOSI, "MISO"), (APP_MISO, "MOSI"), (APP_SCK, "SCK")]);
+        let run = |header: Component| {
+            debug_header_lint(&board(&nets, vec![mcu(), header]), &ModelLibrary::builtin()).findings
+        };
+        // Right by the card (pin 1 = MISO on pad 18, pin 4 = MOSI on pad 17).
+        let right = run(isp6(APP_MISO, APP_MOSI));
+        assert!(right.is_empty(), "{right:#?}");
+        // Swapped by the card, with names that agree with the header.
+        let swapped = run(isp6(APP_MOSI, APP_MISO));
+        assert_eq!(swapped.len(), 1, "{swapped:#?}");
+        assert!(
+            swapped[0].message.contains("read from the pad U1 pin"),
+            "{}",
+            swapped[0].message
+        );
     }
 }
