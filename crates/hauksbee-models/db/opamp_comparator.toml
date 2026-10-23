@@ -548,6 +548,15 @@ missing = ["response_time", "output_current_limit", "input_common_mode_range",
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Open-drain outputs: TI LM393B/LM2903B/LM193/LM293/LM393/LM2903 SLCS005AH (April 2025)
+# https://www.ti.com/lit/ds/symlink/lm393.pdf
+# sha256 f28830c2f4cbd9ef6a1cd6788a840fa2b92caafee366d53385f88d1cf24e9456
+[models.pin_capability.open_drain]
+basis = "TI LM393 family SLCS005AH PDF p.17 6.1 Overview: \"The open-collector outputs allow the user to level shift to the desired logic level indpendent of VCC\"; 6.3 Feature Description: \"The output consists of an open drain NPN (pull-down or low side) transistor.\"; Table 4-1 Pin Functions (p.3): 1OUT pin 1, 2OUT pin 7"
+[models.pin_capability.open_drain.pads]
+"1" = "1OUT"
+"7" = "2OUT"
+
 # The quad sibling of `lm393` above: the same open-collector stage bound four
 # times by `wired_channels`, the same NOT MODELLED list, a different package and
 # a slightly softer VOL. TI SLCS006Z; the LM2901 automotive grade shares those
@@ -656,6 +665,17 @@ missing = ["response_time", "output_current_limit", "input_common_mode_range",
 "12" = "vss"
 "13" = "out_d"
 "14" = "out_c"
+
+# Open-drain outputs: TI LM339B/LM2901B/LM339/LM239/LM139/LM2901 SLCS006Z (May 2025)
+# https://www.ti.com/lit/ds/symlink/lm339.pdf
+# sha256 406e7bd1ab1f2fb15b46bff397bde497ba714b00ed4455a556d84e1113546f6a
+[models.pin_capability.open_drain]
+basis = "TI LM339 family SLCS006Z PDF p.19 7.1 Overview: \"The open-collector outputs allow the user to level shift to the desired logic level indpendent of VCC\"; 7.3 Feature Description: \"The output consists of an open drain NPN (pull-down or low side) transistor.\"; Table 5-1 Pin Functions (p.4): OUT1 pin 1, OUT2 pin 2, OUT4 pin 13, OUT3 pin 14"
+[models.pin_capability.open_drain.pads]
+"1" = "OUT1"
+"2" = "OUT2"
+"13" = "OUT4"
+"14" = "OUT3"
 
 # ─────────────────────────────────────────────────────────────────────────────
 

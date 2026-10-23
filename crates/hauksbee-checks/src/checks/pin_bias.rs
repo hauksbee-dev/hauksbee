@@ -392,7 +392,12 @@ pub fn pin_bias_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRepor
                 let Some(pin) = comp.pins.iter().find(|p| p.number == *pad) else {
                     continue;
                 };
-                let verdict = judge(board, &classify, (comp, pin), row);
+                let verdict = match judge(board, &classify, (comp, pin), row) {
+                    // A function most boards never use: only a bias the wrong way
+                    // round is evidence, never a pin left open.
+                    Verdict::Missing { .. } if row.opposed_only => Verdict::Fine,
+                    v => v,
+                };
                 if let Some(f) = finding(board, (comp, model), (pad, pin), row, &verdict) {
                     report.findings.push(f);
                 }
@@ -439,7 +444,13 @@ fn finding(
             (*severity, format!("{head}It has no bias: {why}.{note} {fix}"))
         }
         Verdict::Opposite { why } => (
-            Severity::High,
+            // A bias that only matters when the board uses the function (a ROM
+            // bootloader's UART) is a Medium warning, not a gating fault.
+            if row.opposed_only {
+                Severity::Medium
+            } else {
+                Severity::High
+            },
             format!("{head}It is biased the wrong way: {why}.{note} {fix}"),
         ),
         Verdict::OutOfRange { why } => (
@@ -488,6 +499,13 @@ unlocked_by = "validated behavior"
 "4" = "rx"
 "5" = "out"
 "6" = "flag"
+"7" = "brx"
+[[models.pin_bias]]
+role = "brx"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "fixture app note Table 2, p.4: the ROM bootloader RX pin idles high; a low level is a break"
 [[models.pin_bias]]
 role = "nfault"
 level = "high"
@@ -706,6 +724,53 @@ basis = "fixture datasheet Table 1, p.3: FLAG open-drain output"
         dnp.dnp = true;
         let f = lint(vec![dnp, r("R2", "10k", 4, 2)]);
         assert_eq!(on_net(&f, "FAULT").len(), 1, "{f:?}");
+    }
+
+    /// A bootloader receive line (`opposed_only`): an ordinary port pin when the
+    /// bootloader is unused, so a floating or unbiased pin is fine, but a pull
+    /// toward the break level is a flaw.
+    #[test]
+    fn a_bootloader_rx_pin_is_flagged_only_when_pulled_the_wrong_way() {
+        let run = |pull: Option<(&str, i64)>| {
+            let mut parts = vec![part("U1", "BIASTEST", &[("1", 2), ("2", 1), ("7", 8)])];
+            if let Some((value, rail)) = pull {
+                parts.push(r("R1", value, 8, rail));
+            }
+            let b = board(&[(1, "GND"), (2, "+3V3"), (8, "BOOT_RX")], parts);
+            pin_bias_lint(&b, &library()).findings
+        };
+        // Floating: the port pin is simply unused. Silent.
+        assert!(run(None).is_empty());
+        // The correct idle level, a pull-up: silent.
+        assert!(run(Some(("10k", 2))).is_empty());
+        // A pull-down holds the line in break so the bootloader never starts.
+        let down = run(Some(("10k", 1)));
+        assert_eq!(down.len(), 1, "{down:?}");
+        assert_eq!(down[0].check, LintCheck::RequiredPinBias);
+        assert_eq!(down[0].severity, Severity::Medium);
+        assert!(down[0].message.contains("wrong way"), "{}", down[0].message);
+        assert!(down[0].message.contains("p.4"), "{}", down[0].message);
+    }
+
+    /// The shipped STM32F103C8 card: PA10 (pad 31) is the system-memory
+    /// bootloader's USART1 RX, so a pull-down there is flagged and a pull-up
+    /// or nothing is not.
+    #[test]
+    fn the_shipped_stm32_bootloader_rx_rejects_a_pull_down() {
+        let lib = ModelLibrary::builtin();
+        let run = |pull_to: Option<i64>| {
+            let mut parts = vec![part("U1", "STM32F103C8", &[("31", 3)])];
+            if let Some(rail) = pull_to {
+                parts.push(part("R1", "10k", &[("1", 3), ("2", rail)]));
+            }
+            let b = board(&[(1, "GND"), (2, "+3V3"), (3, "USART_RX")], parts);
+            pin_bias_lint(&b, &lib).findings
+        };
+        let down = run(Some(1));
+        assert_eq!(down.len(), 1, "{down:?}");
+        assert!(down[0].message.contains("wrong way"), "{}", down[0].message);
+        assert!(run(Some(2)).is_empty());
+        assert!(run(None).is_empty());
     }
 
     /// The shipped AP22815 card (pad 3 is the open-drain FLG output) needs a

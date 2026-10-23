@@ -338,6 +338,95 @@ fn validate_digital_enable_params(entry: &ModelEntry, p: &mut Problems) {
     );
 }
 
+/// The enable fields of a load switch (an `analog_switch` card whose `ctrl` pin
+/// is the enable, `in_out_b` the input and `in_out_a` the switched output):
+/// the on level (`en_on_level`, active-high only, because the switch binder
+/// closes the path on a high `ctrl`; an active-low ordering option is refused
+/// by the card's match rule), what an open pin does (`en_open` = `off`, `on`
+/// or `undefined`, or an internal pull) and the datasheet's words for it. An
+/// `undefined` pin is one the datasheet says must not be left floating, so the
+/// card must also list it under `must_not_float_roles`.
+fn validate_load_switch_enable_params(entry: &ModelEntry, p: &mut Problems) {
+    const KEYS: [&str; 7] = [
+        "en_on_level",
+        "en_pull_down_ohms",
+        "en_pull_up_ohms",
+        "en_pull_down_a",
+        "en_pull_up_a",
+        "en_open",
+        "en_open_basis",
+    ];
+    if entry.kind != ComponentKind::AnalogSwitch {
+        return;
+    }
+    let stated = stated_params(entry, KEYS.iter());
+    if stated.is_empty() {
+        return;
+    }
+    let params = &entry.params;
+    p.require(
+        ["ctrl", "in_out_a", "in_out_b"]
+            .iter()
+            .all(|r| has_role(entry, r)),
+        || {
+            format!(
+                "load-switch enable params ({stated}) need the 'ctrl' (enable), 'in_out_b' \
+                 (input) and 'in_out_a' (switched output) roles in [models.pins]"
+            )
+        },
+    );
+    p.require(params.get_str("en_on_level") == Some("high"), || {
+        "a load-switch card states param 'en_on_level' = \"high\": the switch binder closes \
+         the path on a high 'ctrl', so an active-low ordering option is excluded by the \
+         match rule, not carded"
+            .into()
+    });
+    let pulls = KEYS[1..5]
+        .iter()
+        .filter(|k| params.0.contains_key(**k))
+        .count();
+    p.require(pulls <= 1, || {
+        "a load switch enable pin has at most one internal pull ('en_pull_*')".into()
+    });
+    for key in &KEYS[1..5] {
+        if params.0.contains_key(*key) {
+            p.require(params.get_f64(key).is_some_and(positive_finite), || {
+                format!("param '{key}' must be a positive finite number")
+            });
+        }
+    }
+    let basis_given = params
+        .get_str("en_open_basis")
+        .is_some_and(|q| !q.trim().is_empty());
+    p.require(
+        !(params.0.contains_key("en_open") || pulls == 1) || basis_given,
+        || {
+            "a load switch's open-enable statement (en_open or an internal pull) needs \
+             'en_open_basis', the datasheet's words and page"
+                .into()
+        },
+    );
+    if params.get_str("en_open") == Some("undefined") {
+        p.require(pulls == 0, || {
+            "param 'en_open' = \"undefined\" says the datasheet gives the pin no defined \
+             state, so the card cannot also state an internal pull"
+                .into()
+        });
+        let listed = params
+            .get_str("must_not_float_roles")
+            .unwrap_or_default()
+            .split(',')
+            .any(|r| r.trim().eq_ignore_ascii_case("ctrl"));
+        p.require(listed, || {
+            "param 'en_open' = \"undefined\" means the enable must not float: list 'ctrl' in \
+             'must_not_float_roles'"
+                .into()
+        });
+    } else {
+        validate_en_open(params, Some("high"), pulls, p);
+    }
+}
+
 /// The datasheet's stated open-pin state (`en_open`) and its quote
 /// (`en_open_basis`), checked against the internal pull the card states.
 fn validate_en_open(params: &Params, level: Option<&str>, pulls: usize, p: &mut Problems) {
@@ -765,6 +854,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     check_pinout(entry, &mut p);
     // Its enable-pin pull is a datasheet fact too, whatever the card simulates.
     validate_digital_enable_params(entry, &mut p);
+    validate_load_switch_enable_params(entry, &mut p);
 
     // An identity-only card is useful provenance, but it is deliberately not a
     // simulation model. Keep that state explicit and machine-checkable instead
@@ -3002,6 +3092,7 @@ mod tests {
             min_ohm: None,
             max_ohm: None,
             open_ok: false,
+            opposed_only: false,
             basis: "fixture datasheet p.4".into(),
             note: String::new(),
         }

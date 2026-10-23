@@ -124,18 +124,31 @@ impl<'a> Index<'a> {
         (names_a_supply_of_unknown_voltage(name) && !negative).then_some(UNNAMED_SUPPLY_V)
     }
 
+    /// Whether a carded part takes its supply from `net`: one of its
+    /// supply-role pads (`vcc`, `vdd`...) is on it. A net named `V5` or `RAIL_A`
+    /// states no voltage by name, but what powers a chip is a positive rail.
+    pub(super) fn feeds_a_supply_pin(&self, net: i64) -> bool {
+        self.members(net)
+            .iter()
+            .any(|(c, p)| self.role(c, p).is_some_and(is_supply_role))
+    }
+
     /// The highest supply level among a part's supply-role pads.
     fn supply_of(&self, c: &Component) -> Option<f64> {
         c.pins
             .iter()
-            .filter(|p| {
-                self.role(c, p).is_some_and(|r| {
-                    matches!(r, "vcc" | "vdd" | "vddio" | "avcc" | "vdda" | "vio" | "5v")
-                })
-            })
+            .filter(|p| self.role(c, p).is_some_and(is_supply_role))
             .filter_map(|p| p.net.filter(|&n| n != 0).and_then(|n| self.level(n)))
             .max_by(f64::total_cmp)
     }
+}
+
+/// A card role that is a chip's positive supply input.
+fn is_supply_role(role: &str) -> bool {
+    matches!(
+        role,
+        "vcc" | "vdd" | "vddio" | "avcc" | "vdda" | "vio" | "5v"
+    )
 }
 
 /// A microcontroller signal pin: a port or GPIO role, or an analog-capable

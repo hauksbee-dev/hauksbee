@@ -2540,6 +2540,12 @@ gnd_pin    = "2"
 "5" = "vdd"   # V+
 "6" = "sda"   # SDA
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI TMP117 SNOSD82D (June 2018, rev. Sept 2022), https://www.ti.com/lit/ds/symlink/tmp117.pdf, sha256 4002364bdbb5c4c47e42b828939e12daf17f5249ae162866ca0a445b730f66c9.
+[models.pin_capability.open_drain]
+basis = "TI TMP117 SNOSD82D Rev. D PDF p.4 Table 5-1 Pin Functions: ALERT: \"Over temperature alert or data-ready signal. This open-drain output requires a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"3" = "ALERT"
+
 [models.ratings]
 # Section 6.1 p.5: V+ -0.3 to 6 V; SCL, SDA, ALERT, ADD0 -0.3 to 6 V; TJ -55 to 155 C.
 max_voltage_v = 6.0
@@ -3084,6 +3090,12 @@ gnd_pin    = "B2"
 "C1" = "add0" # ADD0
 "C2" = "alert"# ALERT
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI TMP117 SNOSD82D (June 2018, rev. Sept 2022), https://www.ti.com/lit/ds/symlink/tmp117.pdf, sha256 4002364bdbb5c4c47e42b828939e12daf17f5249ae162866ca0a445b730f66c9.
+[models.pin_capability.open_drain]
+basis = "TI TMP117 SNOSD82D Rev. D PDF p.4 Table 5-1 Pin Functions: ALERT: \"Over temperature alert or data-ready signal. This open-drain output requires a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"C2" = "ALERT"
+
 [models.ratings]
 # Section 6.1 p.5: V+ -0.3 to 6 V; SCL, SDA, ALERT, ADD0 -0.3 to 6 V; TJ -55 to 155 C.
 max_voltage_v = 6.0
@@ -3607,6 +3619,12 @@ gnd_pin    = "3"           # GND
 "4" = "nc"    # NC
 "5" = "vdd"   # VDD
 "6" = "sda"   # SDA
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: ams TSL2591 datasheet ams163.5 (Apr 2013), https://cdn-shop.adafruit.com/datasheets/TSL25911_Datasheet_EN_v1.pdf, sha256 69f2872b09a6fbff0e0c3fd463bec6b493c0ae6e40a88a01b85564385be3f8b4.
+[models.pin_capability.open_drain]
+basis = "ams TSL2591 datasheet ams163.5 (Apr 2013) PDF p.3 Pin Description (Figure TSL2591 - 4): pin 2 INT: \"Interrupt — open drain output (active low).\""
+[models.pin_capability.open_drain.pads]
+"2" = "INT"
 
 [models.ratings]
 # Figure TSL2591-6 p.4: VDD 3.8 V; input and output terminals -0.5 to 3.8 V; storage -40 to 85 C.
@@ -4140,6 +4158,12 @@ gnd_pin    = "3"
 "5" = "int"   # INT
 "6" = "sda"   # SDA
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TAOS TSL2560/TSL2561 TAOS059N (March 2009), https://cdn-shop.adafruit.com/datasheets/TSL2561.pdf, sha256 619e949c78132c5b11c61700adea33f854f818c806979d99624ec61d3914e7dc.
+[models.pin_capability.open_drain]
+basis = "TAOS TSL2560/TSL2561 TAOS059N (March 2009) PDF p.3 Terminal Functions: INT: \"Level or SMB Alert interrupt — open drain.\""
+[models.pin_capability.open_drain.pads]
+"5" = "INT"
+
 [models.ratings]
 # Absolute Maximum Ratings p.3: VDD 3.8 V; digital outputs -0.5 to 3.8 V; storage -40 to 85 C.
 max_voltage_v = 3.8
@@ -4619,6 +4643,12 @@ gnd_pin    = "2"
 "4" = "scl"   # SCL
 "5" = "sda"   # SDA
 "6" = "int"   # INT
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: TAOS TSL2560/TSL2561 TAOS059N (March 2009), https://cdn-shop.adafruit.com/datasheets/TSL2561.pdf, sha256 619e949c78132c5b11c61700adea33f854f818c806979d99624ec61d3914e7dc.
+[models.pin_capability.open_drain]
+basis = "TAOS TSL2560/TSL2561 TAOS059N (March 2009) PDF p.3 Terminal Functions: INT: \"Level or SMB Alert interrupt — open drain.\""
+[models.pin_capability.open_drain.pads]
+"6" = "INT"
 
 [models.ratings]
 # Absolute Maximum Ratings p.3: VDD 3.8 V; digital outputs -0.5 to 3.8 V; storage -40 to 85 C.

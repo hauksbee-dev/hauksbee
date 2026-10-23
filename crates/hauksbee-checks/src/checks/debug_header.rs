@@ -36,6 +36,17 @@
 //!   net: a pin facing the adapter's `TXD` output must not carry a board
 //!   transmitter, and the one facing its `RXD` input must not carry a board
 //!   receiver.
+//! - **A UART header named by its own pins.** A 6-pin connector whose symbol
+//!   names its pins `GND`, a handshake line, a supply, `TXD`, `RXD`, a handshake
+//!   line in that order is the FTDI cable's header whatever the part is called,
+//!   and a 4-pin connector whose pins are `GND`, a supply, `TX` and `RX`, on a
+//!   part named for a USB-serial adapter (`FTDI`, `CH340`, `CP2102`, `USB` with
+//!   `serial`/`UART`/`TTL`), is that adapter's connector. Those names are the
+//!   adapter's own (the cable's `TXD` is its output), so the board's transmitter
+//!   on the `TX`/`TXD` pin or its receiver on the `RX`/`RXD` pin is flagged. A
+//!   4-pin header whose pin names say nothing about whose point of view they
+//!   are, or that no adapter word names, is not judged: a board's own `TX`
+//!   label usually means the board's transmit, and no document fixes that order.
 //! - **Two-row numbering is the standard's.** A symbol that counts down the
 //!   columns (`Top_Bottom`) numbers its pins differently from the standard, so
 //!   it is not judged.
@@ -397,6 +408,193 @@ fn wrong_pin_message(
     )
 }
 
+/// A pin name reduced to its letters and digits, upper case (`~{CTS}` is `CTS`,
+/// `+5V` is `5V`).
+fn pin_word(function: &str) -> String {
+    function
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+fn is_tx_word(w: &str) -> bool {
+    matches!(w, "TX" | "TXD")
+}
+
+fn is_rx_word(w: &str) -> bool {
+    matches!(w, "RX" | "RXD")
+}
+
+fn is_ground_word(w: &str) -> bool {
+    matches!(w, "GND" | "GROUND")
+}
+
+fn is_supply_word(w: &str) -> bool {
+    matches!(
+        w,
+        "VCC" | "VDD" | "VBUS" | "5V" | "5V0" | "3V3" | "33V" | "V33" | "VIN"
+    )
+}
+
+fn is_handshake_word(w: &str) -> bool {
+    matches!(
+        w,
+        "CTS" | "RTS" | "DTR" | "DSR" | "CTSN" | "RTSN" | "DTRN" | "DSRN"
+    )
+}
+
+/// Whether the connector's value, symbol or footprint names a USB-serial
+/// adapter (`FTDI`, `CH340`, `CP2102`, `USB` with `serial`, `UART` or `TTL`).
+fn names_a_serial_adapter(comp: &Component) -> bool {
+    let w = words(&format!(
+        "{} {} {}",
+        comp.value, comp.lib_id, comp.footprint
+    ));
+    let has = |x: &str| w.iter().any(|y| y == x);
+    [
+        "ftdi",
+        "ft232",
+        "ft232r",
+        "ft231x",
+        "ft230x",
+        "ch340",
+        "ch340g",
+        "ch341",
+        "cp2102",
+        "cp2102n",
+        "cp2104",
+        "cp2105",
+        "pl2303",
+        "usbserial",
+        "usb2ttl",
+        "usbttl",
+    ]
+    .iter()
+    .any(|x| has(x))
+        || (has("usb") && (has("serial") || has("uart") || has("ttl")))
+}
+
+/// The serial pads of a UART header that the symbol's own pin names pin down:
+/// each pad number with whether it is the adapter's transmit or receive. `None`
+/// for a connector those names do not identify (see the module docs).
+fn uart_by_pin_names(comp: &Component) -> Option<Vec<(String, HeaderSignal)>> {
+    let pins: BTreeSet<&str> = comp.pins.iter().map(|p| p.number.as_str()).collect();
+    if pins.len() != comp.pins.len() || comp.lib_id.to_ascii_lowercase().contains("top_bottom") {
+        return None;
+    }
+    match comp.pins.len() {
+        6 => {
+            let word = |number: &str| {
+                comp.pins
+                    .iter()
+                    .find(|p| p.number == number)
+                    .map(|p| pin_word(&p.function))
+            };
+            let w: Vec<String> = (1..=6)
+                .map(|i| word(&i.to_string()))
+                .collect::<Option<_>>()?;
+            let order = is_ground_word(&w[0])
+                && is_handshake_word(&w[1])
+                && is_supply_word(&w[2])
+                && is_tx_word(&w[3])
+                && is_rx_word(&w[4])
+                && is_handshake_word(&w[5]);
+            order.then(|| {
+                vec![
+                    ("4".to_string(), HeaderSignal::AdapterTransmit),
+                    ("5".to_string(), HeaderSignal::AdapterReceive),
+                ]
+            })
+        }
+        4 => {
+            if !names_a_serial_adapter(comp) {
+                return None;
+            }
+            let mut out = Vec::new();
+            let (mut ground, mut supply) = (0, 0);
+            for p in &comp.pins {
+                let w = pin_word(&p.function);
+                if is_ground_word(&w) {
+                    ground += 1;
+                } else if is_supply_word(&w) {
+                    supply += 1;
+                } else if is_tx_word(&w) {
+                    out.push((p.number.clone(), HeaderSignal::AdapterTransmit));
+                } else if is_rx_word(&w) {
+                    out.push((p.number.clone(), HeaderSignal::AdapterReceive));
+                }
+            }
+            let count = |signal| out.iter().filter(|(_, s)| *s == signal).count();
+            let one_each = ground == 1
+                && supply == 1
+                && count(HeaderSignal::AdapterTransmit) == 1
+                && count(HeaderSignal::AdapterReceive) == 1;
+            one_each.then_some(out)
+        }
+        _ => None,
+    }
+}
+
+/// A UART header the symbol's pin names identify, whose transmit and receive
+/// pins face the board's pin of the same direction.
+fn uart_by_pin_names_finding(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    comp: &Component,
+) -> Option<LintFinding> {
+    if AssemblyState::of(comp).fitted().is_none() || !is_connector_like(comp) {
+        return None;
+    }
+    let serial = uart_by_pin_names(comp)?;
+    let mut faults = Vec::new();
+    let mut nets = Vec::new();
+    for (number, expected) in &serial {
+        let Some(net) = comp
+            .pins
+            .iter()
+            .find(|p| p.number == *number)
+            .and_then(|p| p.net)
+            .filter(|id| *id != 0)
+        else {
+            continue;
+        };
+        if let Some(f) = serial_fault(board, lib, comp, number, net, *expected) {
+            faults.push(f);
+            nets.push(board.net(net).map_or_else(String::new, |n| n.name.clone()));
+        }
+    }
+    if faults.is_empty() {
+        return None;
+    }
+    let pad_of = |signal| {
+        serial
+            .iter()
+            .find(|(_, s)| *s == signal)
+            .map_or("?", |(n, _)| n.as_str())
+    };
+    Some(LintFinding {
+        check: LintCheck::DebugHeaderPinout,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) is a USB-serial adapter header (its pins are named for the adapter: the \
+             pin named TX/TXD is the adapter's transmit output, the one named RX/RXD its receive \
+             input) but is not wired for one: {}. An adapter plugged into it would meet transmit \
+             with transmit and receive with receive, so no serial data gets through. Cross the \
+             lines: put the board's transmit on pin {} (the adapter's RX) and the board's \
+             receive on pin {} (the adapter's TX), or, if the pin names are meant from the \
+             board's point of view, rename them so they are not read as the adapter's",
+            comp.reference,
+            comp.value.trim(),
+            faults.join("; "),
+            pad_of(HeaderSignal::AdapterReceive),
+            pad_of(HeaderSignal::AdapterTransmit),
+        ),
+        refs: vec![comp.reference.clone()],
+        nets,
+    })
+}
+
 /// Flag every named standard header whose pins carry something else.
 #[must_use]
 pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -409,6 +607,9 @@ pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
             continue;
         }
         let Some(header) = named_header(comp) else {
+            if let Some(f) = uart_by_pin_names_finding(board, lib, comp) {
+                report.findings.push(f);
+            }
             continue;
         };
         let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
@@ -588,6 +789,96 @@ mod tests {
         )
         .findings;
         assert_eq!(found.len(), 1, "{found:#?}");
+    }
+
+    /// `c` with its pins named by pad number (pad 1 takes `names[0]`).
+    fn with_pin_names(mut c: Component, names: &[&str]) -> Component {
+        for pin in &mut c.pins {
+            let at = pin.number.parse::<usize>().unwrap_or(0).wrapping_sub(1);
+            if let Some(name) = names.get(at) {
+                pin.function = (*name).into();
+            }
+        }
+        c
+    }
+
+    /// A 6-pin header the symbol names `GND CTS VCC TXD RXD DTR` is the FTDI
+    /// cable's whatever the part is called: the board's TX on the pin named
+    /// `TXD` is flagged, the crossed wiring is silent.
+    #[test]
+    fn a_six_pin_header_with_the_ftdi_pin_names_is_judged_without_the_ftdi_name() {
+        const NAMES: [&str; 6] = ["GND", "~{CTS}", "VCC", "TXD", "RXD", "~{DTR}"];
+        let uart = |tx_pad: &str, rx_pad: &str| {
+            let mut pads = vec![("1", GND), ("3", V5)];
+            pads.push((if tx_pad == "4" { "4" } else { "5" }, TX));
+            pads.push((if rx_pad == "4" { "4" } else { "5" }, RX));
+            with_pin_names(header("UART", &pads), &NAMES)
+        };
+        let found = run(vec![mcu(), uart("4", "5")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.check, LintCheck::DebugHeaderPinout);
+        assert_eq!(f.severity, Severity::Medium);
+        assert_eq!(f.nets, ["MCU_TX", "MCU_RX"]);
+        for want in [
+            "J1 (UART) is a USB-serial adapter header",
+            "pin 4 faces the adapter's TXD",
+            "pin 5 faces the adapter's RXD",
+            "put the board's transmit on pin 5 (the adapter's RX)",
+            "receive on pin 4 (the adapter's TX)",
+        ] {
+            assert!(f.message.contains(want), "{want}: {}", f.message);
+        }
+        assert!(
+            run(vec![mcu(), uart("5", "4")]).is_empty(),
+            "crossed is right"
+        );
+        // Without the handshake names the order is not the cable's: not judged.
+        let plain = with_pin_names(
+            header("UART", &[("1", GND), ("3", V5), ("4", TX), ("5", RX)]),
+            &["GND", "A", "VCC", "TXD", "RXD", "B"],
+        );
+        assert!(run(vec![mcu(), plain]).is_empty());
+    }
+
+    /// A 4-pin header is judged from its pin names only when a USB-serial adapter
+    /// word names the part, since a bare `TX` on a board's own header usually
+    /// means the board's transmit.
+    #[test]
+    fn a_four_pin_adapter_header_is_judged_from_its_pin_names_and_an_adapter_word() {
+        let four = |value: &str, names: &[&str], tx_pad: &str| {
+            let rx_pad = if tx_pad == "3" { "4" } else { "3" };
+            let c = part(
+                "J1",
+                value,
+                &[("1", GND), ("2", V5), (tx_pad, TX), (rx_pad, RX)],
+            );
+            with_pin_names(c, names)
+        };
+        let names = ["GND", "VCC", "TX", "RX"];
+        // The board's TX on the pin named TX of a CH340 adapter's connector.
+        let found = run(vec![mcu(), four("CH340 UART", &names, "3")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert!(
+            found[0].message.contains("pin 3 faces the adapter's TXD"),
+            "{}",
+            found[0].message
+        );
+        // Crossed, as an adapter's connector needs: silent.
+        assert!(run(vec![mcu(), four("CH340 UART", &names, "4")]).is_empty());
+        // No adapter word, or pin names that are not the four: not judged.
+        assert!(run(vec![mcu(), four("UART", &names, "3")]).is_empty());
+        assert!(run(vec![
+            mcu(),
+            four("USB-Serial", &["GND", "VCC", "TX", "TX"], "3")
+        ])
+        .is_empty());
+        assert!(run(vec![mcu(), four("FTDI", &["", "", "", ""], "3")]).is_empty());
+        // A symbol that counts down the columns numbers its pins its own way.
+        let mut columns = four("CH340 UART", &names, "3");
+        columns.lib_id = "Connector_Generic:Conn_02x02_Top_Bottom".into();
+        assert!(run(vec![mcu(), columns]).is_empty());
     }
 
     #[test]

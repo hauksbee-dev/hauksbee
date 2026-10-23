@@ -610,6 +610,93 @@ basis = "fixture datasheet section 8.3, p.13: 10 uF bulk recommended"
         assert!(fitted.is_empty(), "{fitted:?}");
     }
 
+    /// The shipped load-switch and motor-driver cards state their datasheet
+    /// capacitors: bare, each part is flagged on the rail the stated pin sits
+    /// on, and with the capacitors its datasheet shows the board is silent.
+    /// Each row is the part's value, its (pad, net) wiring (nets: 1 GND, 2 +5V
+    /// supply, 3 +3V3 output, 4 VLOGIC), the nets that must be flagged bare and
+    /// the capacitors (value, net) that satisfy every row.
+    #[test]
+    fn the_shipped_switch_and_driver_cards_demand_their_datasheet_capacitors() {
+        type Case = (
+            &'static str,
+            &'static [(&'static str, i64)],
+            &'static [&'static str],
+            &'static [(&'static str, i64)],
+        );
+        const CASES: [Case; 7] = [
+            // TPS22918 SLVSD76C PDF p.4: CIN 1 uF minimum.
+            (
+                "TPS22918DBVR",
+                &[("1", 2), ("2", 1), ("3", 4), ("6", 3)],
+                &["+5V"],
+                &[("1u", 2)],
+            ),
+            // TPS22919 SLVSEN5B PDF p.17: 1 uF input sufficient in most situations.
+            (
+                "TPS22919DCKR",
+                &[("1", 2), ("2", 1), ("3", 4), ("6", 3)],
+                &["+5V"],
+                &[("1u", 2)],
+            ),
+            // AP2281 DS31359: 1 uF in, 0.1 uF out.
+            (
+                "AP2281-1WG-7",
+                &[("1", 3), ("2", 1), ("3", 4), ("4", 2), ("5", 1), ("6", 2)],
+                &["+5V", "+3V3"],
+                &[("1u", 2), ("100n", 3)],
+            ),
+            // DRV8833 SLVSAR1E PDF p.3: VM 10 uF, VINT 2.2 uF.
+            (
+                "DRV8833PWP",
+                &[("12", 2), ("13", 1), ("14", 3)],
+                &["+5V", "+3V3"],
+                &[("10u", 2), ("2.2u", 3)],
+            ),
+            // DRV8825 SLVSA73F PDF p.3 and p.21: VMA/VMB 0.1 uF, V3P3OUT 0.47 uF.
+            (
+                "DRV8825PWP",
+                &[("4", 2), ("11", 2), ("14", 1), ("15", 3), ("28", 1)],
+                &["+5V", "+3V3"],
+                &[("100u", 2), ("470n", 3)],
+            ),
+            // A4988 4988-DS PDF p.10: VREG 0.22 uF; p.1: VDD 0.22 uF, VBB 100 uF.
+            (
+                "A4988SETTR",
+                &[("8", 3), ("15", 4), ("22", 2), ("28", 2), ("18", 1)],
+                &["+3V3"],
+                &[("100u", 2), ("220n", 3), ("220n", 4)],
+            ),
+            // TB6612FNG PDF p.7: C1/C2 10 uF on VM, C3 10 uF on VCC.
+            (
+                "TB6612FNG",
+                &[("20", 4), ("24", 2), ("13", 2), ("14", 2), ("18", 1)],
+                &["+5V", "VLOGIC"],
+                &[("10u", 2), ("10u", 4)],
+            ),
+        ];
+        let lib = ModelLibrary::builtin();
+        let nets = [(1, "GND"), (2, "+5V"), (3, "+3V3"), (4, "VLOGIC")];
+        for (value, pads, flagged, caps) in CASES {
+            let run = |caps: &[(&str, i64)]| {
+                let mut parts = vec![part("U1", value, pads)];
+                for (i, (v, net)) in caps.iter().enumerate() {
+                    parts.push(part(&format!("C{}", i + 1), v, &[("1", *net), ("2", 1)]));
+                }
+                supply_cap_lint(&board(&nets, parts), &lib).findings
+            };
+            let bare = run(&[]);
+            for net in flagged {
+                assert!(
+                    bare.iter().any(|f| f.nets == [*net]),
+                    "{value}: no finding on {net}: {bare:?}"
+                );
+            }
+            let fitted = run(caps);
+            assert!(fitted.is_empty(), "{value}: {fitted:?}");
+        }
+    }
+
     /// A capacitor on the far side of a ferrite bead or a 0 ohm link is on the
     /// pin's rail: the bead is a wire at DC. Behind a real resistor it is not.
     #[test]
