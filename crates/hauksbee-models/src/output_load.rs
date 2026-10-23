@@ -407,6 +407,25 @@ mod tests {
         assert_eq!(warned("vol = 0.4"), 0);
     }
 
+    /// Cards whose datasheet could not be read to re-state the level at its true
+    /// test current (see `every_builtin_digital_card_drives_its_rail_unloaded`).
+    const UNRESOLVED: [(&str, &str); 14] = [
+        ("bma423", "datasheet download returns 404; the 0.8 VDDIO level has no stated test current"),
+        ("cp2102n_qfn28", "manufacturer download blocked; level table not re-checked against the PDF"),
+        ("max3237e", "manufacturer download blocked; level table not re-checked against the PDF"),
+        ("bmp581", "Table 17 prints 80 % VDDIO with no test current; the drive-strength tables are images"),
+        ("lis3dh", "prints 0.9 VDDIO min with no test current"),
+        ("mcp23017_spdip_soic_ssop28", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23017_qfn28", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23s17_spdip_soic_ssop28", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23s17_qfn28", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23008_pdip_soic18", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23008_ssop20", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("mcp23008_qfn20", "the datasheet prints only the heavy-current rows (VOL 0.6 V at 8 mA, VOH VDD - 0.7 V at -3 mA) and no light-load row to re-state"),
+        ("pca9685_tssop28", "the datasheet prints the totem-pole VOH only at -10 mA (Table 14) and no light-load row to re-state"),
+        ("pca9685_hvqfn28", "the datasheet prints the totem-pole VOH only at -10 mA (Table 14) and no light-load row to re-state"),
+        ];
+
     /// The unloaded high level of every builtin push-pull digital card sits at its
     /// rail, and the lint finds nothing left to say about any of them.
     ///
@@ -425,13 +444,6 @@ mod tests {
     fn every_builtin_digital_card_drives_its_rail_unloaded() {
         const RAILS: [f64; 6] = [1.2, 1.8, 2.5, 3.3, 4.5, 5.0];
         const WITHIN_V: f64 = 0.3;
-        const UNRESOLVED: [(&str, &str); 5] = [
-            ("bma423", "datasheet download returns 404; the 0.8 VDDIO level has no stated test current"),
-            ("cp2102n_qfn28", "manufacturer download blocked; level table not re-checked against the PDF"),
-            ("max3237e", "manufacturer download blocked; level table not re-checked against the PDF"),
-            ("bmp581", "Table 17 prints 80 % VDDIO with no test current; the drive-strength tables are images"),
-            ("lis3dh", "prints 0.9 VDDIO min with no test current"),
-        ];
         let (mut checked, mut offenders) = (0, Vec::<(String, String)>::new());
         for (name, src) in crate::BUILTIN_TOML_FILES {
             let db: crate::schema::DbFile = toml::from_str(src).expect(name);

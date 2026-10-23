@@ -1,0 +1,1853 @@
+# Official built-in part library: sensors_power.
+#
+# Cards here are written from vendor datasheets only (every value carries a basis and a source).
+# See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+# -----------------------------------------------------------------------------
+# DS3231: Maxim Integrated (Analog Devices) extremely accurate I2C-integrated RTC with
+# TCXO and crystal, 16-pin SO 300 mil.
+#
+# Source: Maxim Integrated DS3231 datasheet 19-5170 Rev 10, 3/15. Absolute Maximum
+#   Ratings, Recommended Operating Conditions, Electrical Characteristics, Pin
+#   Description, Figure 1 Timekeeping Registers, the control, status, aging and
+#   temperature register descriptions, and the I2C Serial Data Bus section (slave
+#   address 1101000).
+#
+# FIXED ADDRESS 0x68 and no strap pin, so no address_select is used.
+#
+# THE CLOCK DOES NOT COUNT. The register map answers: time and date registers reset to
+# 01/01/00 01 00:00:00 and read back what firmware wrote; the oscillator, the alarm
+# match, the square-wave and 32 kHz outputs, the INT/SQW and RST pins, the 64-second
+# temperature conversion and the VBAT switchover are not modelled. The temperature
+# registers answer from the sensor input temp_c.
+#
+# OPEN-DRAIN OUTPUTS: SDA, INT/SQW and 32kHz sink only (a pull-up is required), so the
+# card has no VOH. VOL is 0.4 V at 3 mA. Logic levels are fractions of VCC (VIH 0.7 x
+# VCC, VIL 0.3 x VCC), evaluated at the typical VCC = 3.3 V. The part is also reachable
+# from VBAT alone (the I2C interface is accessible whenever either supply is valid), and
+# the supply coupling here keys on VCC only; the card does not model battery-only
+# operation. The RST pin is an open-drain I/O with an internal 50 kohm pull-up to VCC;
+# the five-pin groups marked N.C. (pins 5 to 12) "must be connected to ground".
+#
+# Currents are the printed MAXIMA at VCC = 3.63 V (ICCS standby 110 uA, ICCA active
+# 200 uA); the datasheet prints no typical VCC current.
+#
+# Not modelled: timekeeping, alarms, the square-wave, 32 kHz and RST pins, the aging
+# effect on frequency, the temperature conversion schedule (the temperature registers
+# read 0 degC until the first conversion on the real part) and BBSQW/EOSC battery
+# behaviour. The DS3231M (MEMS oscillator, 8-pin) is a different datasheet and is not
+# covered by this card.
+[[models]]
+id = "ds3231"
+kind = "digital"
+description = "Maxim/Analog Devices DS3231 I2C RTC with TCXO, SO-16 (I2C register map at 0x68: BCD time registers with their reset values, control/status resets, aging, temperature from the sensor input; open-drain SDA; pad map and supply draw)"
+
+[models.match]
+# Order codes: DS3231S, DS3231SN, with the # / + RoHS suffix and the tape-and-reel suffix. DS3231M and DS3231MZ are a different part.
+value_re = "(?i)^DS3231(SN?)?[#+]?(T&R|TR)?$"
+
+[models.params]
+vol   = 0.4      # Electrical Characteristics, VOL max for SDA, INT/SQW and 32kHz at IOL = 3 mA
+vih   = 2.31     # Recommended Operating Conditions, VIH 0.7 x VCC min for SDA, SCL at the typical VCC = 3.3 V
+vil   = 0.99     # Recommended Operating Conditions, VIL 0.3 x VCC max for SDA, SCL at the typical VCC = 3.3 V
+supply_static_ua = 110.0   # Electrical Characteristics, ICCS standby supply current MAX at VCC = 3.63 V (no typical is printed)
+supply_pin = "2"           # VCC
+gnd_pin    = "13"          # GND
+warning = "I2C register map only: time registers read back what was written and the clock does not count; alarms, outputs and VBAT operation are not modelled"
+
+[models.pins]
+# Pin Description / Pin Configuration, 16-pin SO.
+"1"  = "out_32khz"  # 32 kHz output, open drain
+"2"  = "vcc"
+"3"  = "int_sqw"    # active-low interrupt / square-wave output, open drain
+"4"  = "rst"        # active-low reset, open-drain I/O with an internal 50 kohm pull-up
+"5"  = "nc"         # N.C., must be connected to ground
+"6"  = "nc2"
+"7"  = "nc3"
+"8"  = "nc4"
+"9"  = "nc5"
+"10" = "nc6"
+"11" = "nc7"
+"12" = "nc8"
+"13" = "gnd"
+"14" = "vbat"       # backup supply input; connect to ground if unused
+"15" = "sda"
+"16" = "scl"
+
+[models.ratings]
+# Absolute Maximum Ratings: voltage on any pin relative to ground -0.3 V to +6.0 V; theta-JA 73 degC/W and theta-JC 23 degC/W (JESD51-7, four-layer board).
+max_voltage_v = 6.0
+theta_ja_c_per_w = 73.0
+theta_jc_c_per_w = 23.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Maxim DS3231 19-5170 Rev 10, Recommended Operating Conditions, supply voltage VCC 2.3 V min, 3.3 V typ, 5.5 V max; Absolute Maximum Ratings, voltage range on any pin relative to ground -0.3 V to +6.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Maxim DS3231 19-5170 Rev 10, Recommended Operating Conditions, supply voltage VBAT 2.3 V min, 3.0 V typ, 5.5 V max; Absolute Maximum Ratings, voltage range on any pin relative to ground -0.3 V to +6.0 V"
+
+# I2C Serial Data Bus: the 7-bit slave address is 1101000 (0x68).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "DS3231 register map"
+bus = "i2c"
+i2c_address = 0x68
+
+# Stimulus: die temperature in degC (25 degC, room temperature, is an ASSUMED default; the part itself reads 0 degC until its first
+# conversion).
+[[sensor.input]]
+name = "temp_c"
+default = 25.0
+
+# Figure 1 Timekeeping Registers, BCD. On first power-up the time and date reset to 01/01/00 01 00:00:00 (DD/MM/YY DOW HH:MM:SS), so
+# seconds, minutes and hours are 00h, day-of-week 01h, date 01h, month 01h and year 00h. The clock itself does not count: a
+# register reads back what firmware last wrote.
+# 00h Seconds, reset 00h
+[[sensor.write_register]]
+addr = 0x00
+encoding = "u8"
+store = "seconds"
+default = 0
+[[sensor.register]]
+addr = 0x00
+encoding = "u8"
+expr = "seconds"
+
+# 01h Minutes, reset 00h
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u8"
+store = "minutes"
+default = 0
+[[sensor.register]]
+addr = 0x01
+encoding = "u8"
+expr = "minutes"
+
+# 02h Hours (12/24 bit 6, AM/PM or 20 Hour bit 5), reset 00h
+[[sensor.write_register]]
+addr = 0x02
+encoding = "u8"
+store = "hours"
+default = 0
+[[sensor.register]]
+addr = 0x02
+encoding = "u8"
+expr = "hours"
+
+# 03h Day of week, reset 01h
+[[sensor.write_register]]
+addr = 0x03
+encoding = "u8"
+store = "day"
+default = 1
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "day"
+
+# 04h Date, reset 01h
+[[sensor.write_register]]
+addr = 0x04
+encoding = "u8"
+store = "date"
+default = 1
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "date"
+
+# 05h Month/Century (century bit 7), reset 01h
+[[sensor.write_register]]
+addr = 0x05
+encoding = "u8"
+store = "month"
+default = 1
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "month"
+
+# 06h Year, reset 00h
+[[sensor.write_register]]
+addr = 0x06
+encoding = "u8"
+store = "year"
+default = 0
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "year"
+
+# Alarm registers 07h to 0Dh: Figure 1 notes that unless specified the register state is not defined at power-up. 00h is ASSUMED.
+# 07h Alarm 1 Seconds, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u8"
+store = "alarm_07"
+default = 0
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "alarm_07"
+
+# 08h Alarm 1 Minutes, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x08
+encoding = "u8"
+store = "alarm_08"
+default = 0
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "alarm_08"
+
+# 09h Alarm 1 Hours, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x09
+encoding = "u8"
+store = "alarm_09"
+default = 0
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "alarm_09"
+
+# 0Ah Alarm 1 Day/Date, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x0A
+encoding = "u8"
+store = "alarm_0a"
+default = 0
+[[sensor.register]]
+addr = 0x0A
+encoding = "u8"
+expr = "alarm_0a"
+
+# 0Bh Alarm 2 Minutes, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x0B
+encoding = "u8"
+store = "alarm_0b"
+default = 0
+[[sensor.register]]
+addr = 0x0B
+encoding = "u8"
+expr = "alarm_0b"
+
+# 0Ch Alarm 2 Hours, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x0C
+encoding = "u8"
+store = "alarm_0c"
+default = 0
+[[sensor.register]]
+addr = 0x0C
+encoding = "u8"
+expr = "alarm_0c"
+
+# 0Dh Alarm 2 Day/Date, ASSUMED 00h (not defined at power-up)
+[[sensor.write_register]]
+addr = 0x0D
+encoding = "u8"
+store = "alarm_0d"
+default = 0
+[[sensor.register]]
+addr = 0x0D
+encoding = "u8"
+expr = "alarm_0d"
+
+# Control (0Eh), POR 00011100b = 1Ch: EOSC bit 7, BBSQW bit 6, CONV bit 5 (reads back clear once the conversion is done), RS2/RS1 bits 4:3, INTCN bit 2, A2IE bit 1, A1IE bit 0
+[[sensor.write_register]]
+addr = 0x0E
+encoding = "u8"
+store = "control"
+default = 28
+[[sensor.write_register.field]]
+name = "eosc"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "conv"
+bits = [5, 5]
+
+[[sensor.register]]
+addr = 0x0E
+encoding = "u8"
+expr = "control - 32.0 * conv"
+
+# Control/Status (0Fh), POR 1000 1xxxb: OSF bit 7 = 1, EN32kHz bit 3 = 1; BSY, A2F and A1F are X at power-up and are ASSUMED 0 (88h)
+[[sensor.write_register]]
+addr = 0x0F
+encoding = "u8"
+store = "status"
+default = 136
+[[sensor.write_register.field]]
+name = "osf"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "en32khz"
+bits = [3, 3]
+[[sensor.register]]
+addr = 0x0F
+encoding = "u8"
+expr = "status"
+
+# Aging Offset (10h), POR 00h (two's complement)
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "aging"
+default = 0
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "aging"
+
+# Temperature (11h, 12h): a 10-bit two's-complement code, 0.25 degC per LSB; the integer part is 11h and the fraction is the upper two
+# bits of 12h (00011001 01b = +25.25 degC). Read-only.
+[[sensor.register]]
+addr = 0x11
+encoding = "u8"
+expr = "if(temp_c < 0.0, 256.0 + floor(temp_c), floor(temp_c))"
+
+[[sensor.register]]
+addr = 0x12
+encoding = "u8"
+expr = "(floor(temp_c * 4.0) - 4.0 * floor(temp_c)) * 64.0"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.3    # Recommended Operating Conditions, VCC min (the power-fail voltage VPF is 2.45 V to 2.70 V)
+idle_a = 0.00011              # Electrical Characteristics, ICCS max, VCC = 3.63 V
+read_a = 0.0002               # Electrical Characteristics, ICCA max, VCC = 3.63 V, SCL at 400 kHz
+write_a = 0.0002
+low_power_a = 0.00011
+
+[models.coverage]
+implements = ["pin_roles", "open_drain_sda_vol", "logic_levels_at_3v3", "standby_supply_current", "absolute_ratings", "thermal_resistance", "supply_ranges", "i2c_fixed_address", "register_map", "reset_values", "time_register_readback", "control_register_readback", "conv_bit_self_clear", "temperature_registers_from_input", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["timekeeping_counting", "alarms", "square_wave_and_32khz_outputs", "rst_pin_and_pushbutton", "vbat_battery_operation", "temperature_conversion_schedule", "aging_offset_effect", "oscillator_stop_flag_logic", "alarm_register_power_up_state_not_defined", "ds3231m_variant"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/DS3231.pdf"
+title = "Maxim Integrated DS3231 Extremely Accurate I2C-Integrated RTC/TCXO/Crystal, 19-5170; Rev 10; 3/15"
+locator = "Absolute Maximum Ratings; Recommended Operating Conditions; Electrical Characteristics; Pin Description; Figure 1 Timekeeping Registers; Control, Status, Aging Offset and Temperature registers; I2C Serial Data Bus"
+sha256 = "dc81cd89bee82d0c57b654d6315e03dec913fb8fe753cc80b2a3f1cca71cbb34"
+
+# Recommended Operating Conditions as printed, in fractions of VCC.
+[[models.source.characteristic]]
+parameter = "VIH logic 1 input SDA, SCL"
+min = 0.7
+unit = "VCC"
+conditions = "SDA, SCL"
+basis = "Recommended Operating Conditions, 0.7 x VCC min"
+
+[[models.source.characteristic]]
+parameter = "VIL logic 0 input SDA, SCL"
+max = 0.3
+unit = "VCC"
+conditions = "SDA, SCL"
+basis = "Recommended Operating Conditions, 0.3 x VCC max"
+
+# -----------------------------------------------------------------------------
+# DS1307: Maxim Integrated (Analog Devices) 64 x 8, serial I2C real-time clock with 56
+# bytes of battery-backed SRAM. 8-pin PDIP (300 mils) and 8-pin SO (150 mils), same pin
+# order.
+#
+# Source: Maxim Integrated DS1307 datasheet, "REV: 3/15". Ordering Information, Absolute
+#   Maximum Ratings, Recommended DC Operating Conditions, DC Electrical
+#   Characteristics, Pin Description, Table 2 Timekeeper Registers, the Control Register
+#   section and the I2C slave address (1101000).
+#
+# FIXED ADDRESS 0x68, no strap pin. The DS1307 and DS3231 and the MPU-6050 default
+# address all share 0x68; the card's address is what a bus-address check reads.
+#
+# THE CLOCK DOES NOT COUNT. The register map answers: seconds reset to 80h (CH set), the
+# date registers reset to 01/01/00 01, the control register to 03h, and the 56 RAM bytes
+# (08h to 3Fh) hold what firmware writes. The oscillator, the square-wave output, the
+# power-fail switchover and the 3Fh to 00h address wrap are not modelled.
+#
+# OPEN-DRAIN OUTPUTS: SDA and SQW/OUT sink only (a pull-up is required), so the card has
+# no VOH. VOL is 0.4 V at IOL = 5 mA, which is a heavy-load figure and is therefore not
+# cited as a characteristic row. The 5 V part has TTL-level inputs (VIH 2.2 V, VIL 0.8
+# V), so it reads a 3.3 V bus as logic high; VCC itself must be 4.5 V to 5.5 V and a 3.3 V
+# supply is out of the recommended range (the supply envelope reports it).
+#
+# Currents are the printed MAXIMA (ICCS standby 200 uA, ICCA active 1.5 mA at fSCL = 100
+# kHz); no typical is printed. The datasheet prints no thermal resistance.
+#
+# Not modelled: timekeeping, the CH oscillator control, SQW/OUT, X1/X2 crystal pins,
+# VBAT operation and the VPF power-fail threshold (1.25 x VBAT).
+[[models]]
+id = "ds1307"
+kind = "digital"
+description = "Maxim/Analog Devices DS1307 I2C RTC with 56-byte RAM, PDIP-8 / SO-8 (I2C register map at 0x68: seconds reset 80h, date reset 01/01/00, control 03h, battery RAM; open-drain SDA; pad map and supply draw)"
+
+[models.match]
+# Order codes: DS1307+, DS1307N+, DS1307Z+, DS1307ZN+ and the Z+T&R / ZN+T&R tape-and-reel codes. Sibling RTCs (DS1302, DS1305, DS1337, DS1338, DS1340) are different parts.
+value_re = "(?i)^DS1307(Z|N|ZN)?[#+]?(T&R|TR)?$"
+
+[models.params]
+vol   = 0.4      # DC Electrical Characteristics, VOL max for SDA and SQW/OUT at IOL = 5 mA
+vih   = 2.2      # Recommended DC Operating Conditions, VIH min
+vil   = 0.8      # Recommended DC Operating Conditions, VIL max
+supply_static_ua = 200.0   # DC Electrical Characteristics, ICCS standby supply current MAX (VCC = 5.0 V, SDA and SCL = 5.0 V; no typical is printed)
+supply_pin = "8"           # VCC
+gnd_pin    = "4"           # GND
+warning = "I2C register map only: time registers read back what was written and the clock does not count; SQW/OUT and VBAT operation are not modelled"
+
+[models.pins]
+# Pin Description / Pin Configurations, PDIP and SO.
+"1" = "x1"       # 32.768 kHz crystal input
+"2" = "x2"       # crystal output
+"3" = "vbat"     # backup supply, ground it if unused
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "sqw_out"  # square wave / output driver, open drain
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings: voltage on any pin relative to ground -0.5 V to +7.0 V. No thermal resistance is printed.
+max_voltage_v = 7.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Maxim DS1307 REV 3/15, Recommended DC Operating Conditions, supply voltage VCC 4.5 V min, 5.0 V typ, 5.5 V max; Absolute Maximum Ratings, voltage range on any pin relative to ground -0.5 V to +7.0 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbat"
+min_v = 2.0
+max_v = 3.5
+abs_max_v = 7.0
+basis = "Maxim DS1307 REV 3/15, Recommended DC Operating Conditions, VBAT battery voltage 2.0 V min, 3 V typ, 3.5 V max; Absolute Maximum Ratings, voltage range on any pin relative to ground -0.5 V to +7.0 V"
+
+# Slave address byte: the 7-bit DS1307 address is 1101000 (0x68).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "DS1307 register map"
+bus = "i2c"
+i2c_address = 0x68
+
+# Table 2 Timekeeper Registers, BCD. On first application of power the time and date registers are typically reset to
+# 01/01/00 01 00:00:00 (MM/DD/YY DOW HH:MM:SS) and the CH bit in the seconds register is set to 1, so the seconds register
+# reads 80h. The clock does not count: a register reads back what firmware last wrote.
+# 00h Seconds (CH bit 7 = 1: oscillator halted), reset 80h
+[[sensor.write_register]]
+addr = 0x00
+encoding = "u8"
+store = "seconds"
+default = 128
+[[sensor.register]]
+addr = 0x00
+encoding = "u8"
+expr = "seconds"
+
+# 01h Minutes, reset 00h
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u8"
+store = "minutes"
+default = 0
+[[sensor.register]]
+addr = 0x01
+encoding = "u8"
+expr = "minutes"
+
+# 02h Hours (12/24 bit 6, AM/PM or 20 Hour bit 5), reset 00h
+[[sensor.write_register]]
+addr = 0x02
+encoding = "u8"
+store = "hours"
+default = 0
+[[sensor.register]]
+addr = 0x02
+encoding = "u8"
+expr = "hours"
+
+# 03h Day of week, reset 01h
+[[sensor.write_register]]
+addr = 0x03
+encoding = "u8"
+store = "day"
+default = 1
+[[sensor.register]]
+addr = 0x03
+encoding = "u8"
+expr = "day"
+
+# 04h Date, reset 01h
+[[sensor.write_register]]
+addr = 0x04
+encoding = "u8"
+store = "date"
+default = 1
+[[sensor.register]]
+addr = 0x04
+encoding = "u8"
+expr = "date"
+
+# 05h Month, reset 01h
+[[sensor.write_register]]
+addr = 0x05
+encoding = "u8"
+store = "month"
+default = 1
+[[sensor.register]]
+addr = 0x05
+encoding = "u8"
+expr = "month"
+
+# 06h Year, reset 00h
+[[sensor.write_register]]
+addr = 0x06
+encoding = "u8"
+store = "year"
+default = 0
+[[sensor.register]]
+addr = 0x06
+encoding = "u8"
+expr = "year"
+
+# Control (07h): OUT bit 7, SQWE bit 4, RS1/RS0 bits 1:0; initial power-up OUT = 0, SQWE = 0, RS = 11 (typically), so 03h. Bits 6, 5, 3, 2 always read 0 on the part and read back as written here
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u8"
+store = "control"
+default = 3
+[[sensor.write_register.field]]
+name = "out"
+bits = [7, 7]
+[[sensor.write_register.field]]
+name = "sqwe"
+bits = [4, 4]
+[[sensor.write_register.field]]
+name = "rs"
+bits = [1, 0]
+[[sensor.register]]
+addr = 0x07
+encoding = "u8"
+expr = "control"
+
+# 08h to 3Fh: 56 bytes of battery-backed RAM, 00h to FFh. The datasheet gives no power-up contents; 00h is ASSUMED.
+[[sensor.write_register]]
+addr = 0x08
+encoding = "u8"
+store = "ram_08"
+default = 0
+[[sensor.register]]
+addr = 0x08
+encoding = "u8"
+expr = "ram_08"
+
+[[sensor.write_register]]
+addr = 0x09
+encoding = "u8"
+store = "ram_09"
+default = 0
+[[sensor.register]]
+addr = 0x09
+encoding = "u8"
+expr = "ram_09"
+
+[[sensor.write_register]]
+addr = 0x0A
+encoding = "u8"
+store = "ram_0a"
+default = 0
+[[sensor.register]]
+addr = 0x0A
+encoding = "u8"
+expr = "ram_0a"
+
+[[sensor.write_register]]
+addr = 0x0B
+encoding = "u8"
+store = "ram_0b"
+default = 0
+[[sensor.register]]
+addr = 0x0B
+encoding = "u8"
+expr = "ram_0b"
+
+[[sensor.write_register]]
+addr = 0x0C
+encoding = "u8"
+store = "ram_0c"
+default = 0
+[[sensor.register]]
+addr = 0x0C
+encoding = "u8"
+expr = "ram_0c"
+
+[[sensor.write_register]]
+addr = 0x0D
+encoding = "u8"
+store = "ram_0d"
+default = 0
+[[sensor.register]]
+addr = 0x0D
+encoding = "u8"
+expr = "ram_0d"
+
+[[sensor.write_register]]
+addr = 0x0E
+encoding = "u8"
+store = "ram_0e"
+default = 0
+[[sensor.register]]
+addr = 0x0E
+encoding = "u8"
+expr = "ram_0e"
+
+[[sensor.write_register]]
+addr = 0x0F
+encoding = "u8"
+store = "ram_0f"
+default = 0
+[[sensor.register]]
+addr = 0x0F
+encoding = "u8"
+expr = "ram_0f"
+
+[[sensor.write_register]]
+addr = 0x10
+encoding = "u8"
+store = "ram_10"
+default = 0
+[[sensor.register]]
+addr = 0x10
+encoding = "u8"
+expr = "ram_10"
+
+[[sensor.write_register]]
+addr = 0x11
+encoding = "u8"
+store = "ram_11"
+default = 0
+[[sensor.register]]
+addr = 0x11
+encoding = "u8"
+expr = "ram_11"
+
+[[sensor.write_register]]
+addr = 0x12
+encoding = "u8"
+store = "ram_12"
+default = 0
+[[sensor.register]]
+addr = 0x12
+encoding = "u8"
+expr = "ram_12"
+
+[[sensor.write_register]]
+addr = 0x13
+encoding = "u8"
+store = "ram_13"
+default = 0
+[[sensor.register]]
+addr = 0x13
+encoding = "u8"
+expr = "ram_13"
+
+[[sensor.write_register]]
+addr = 0x14
+encoding = "u8"
+store = "ram_14"
+default = 0
+[[sensor.register]]
+addr = 0x14
+encoding = "u8"
+expr = "ram_14"
+
+[[sensor.write_register]]
+addr = 0x15
+encoding = "u8"
+store = "ram_15"
+default = 0
+[[sensor.register]]
+addr = 0x15
+encoding = "u8"
+expr = "ram_15"
+
+[[sensor.write_register]]
+addr = 0x16
+encoding = "u8"
+store = "ram_16"
+default = 0
+[[sensor.register]]
+addr = 0x16
+encoding = "u8"
+expr = "ram_16"
+
+[[sensor.write_register]]
+addr = 0x17
+encoding = "u8"
+store = "ram_17"
+default = 0
+[[sensor.register]]
+addr = 0x17
+encoding = "u8"
+expr = "ram_17"
+
+[[sensor.write_register]]
+addr = 0x18
+encoding = "u8"
+store = "ram_18"
+default = 0
+[[sensor.register]]
+addr = 0x18
+encoding = "u8"
+expr = "ram_18"
+
+[[sensor.write_register]]
+addr = 0x19
+encoding = "u8"
+store = "ram_19"
+default = 0
+[[sensor.register]]
+addr = 0x19
+encoding = "u8"
+expr = "ram_19"
+
+[[sensor.write_register]]
+addr = 0x1A
+encoding = "u8"
+store = "ram_1a"
+default = 0
+[[sensor.register]]
+addr = 0x1A
+encoding = "u8"
+expr = "ram_1a"
+
+[[sensor.write_register]]
+addr = 0x1B
+encoding = "u8"
+store = "ram_1b"
+default = 0
+[[sensor.register]]
+addr = 0x1B
+encoding = "u8"
+expr = "ram_1b"
+
+[[sensor.write_register]]
+addr = 0x1C
+encoding = "u8"
+store = "ram_1c"
+default = 0
+[[sensor.register]]
+addr = 0x1C
+encoding = "u8"
+expr = "ram_1c"
+
+[[sensor.write_register]]
+addr = 0x1D
+encoding = "u8"
+store = "ram_1d"
+default = 0
+[[sensor.register]]
+addr = 0x1D
+encoding = "u8"
+expr = "ram_1d"
+
+[[sensor.write_register]]
+addr = 0x1E
+encoding = "u8"
+store = "ram_1e"
+default = 0
+[[sensor.register]]
+addr = 0x1E
+encoding = "u8"
+expr = "ram_1e"
+
+[[sensor.write_register]]
+addr = 0x1F
+encoding = "u8"
+store = "ram_1f"
+default = 0
+[[sensor.register]]
+addr = 0x1F
+encoding = "u8"
+expr = "ram_1f"
+
+[[sensor.write_register]]
+addr = 0x20
+encoding = "u8"
+store = "ram_20"
+default = 0
+[[sensor.register]]
+addr = 0x20
+encoding = "u8"
+expr = "ram_20"
+
+[[sensor.write_register]]
+addr = 0x21
+encoding = "u8"
+store = "ram_21"
+default = 0
+[[sensor.register]]
+addr = 0x21
+encoding = "u8"
+expr = "ram_21"
+
+[[sensor.write_register]]
+addr = 0x22
+encoding = "u8"
+store = "ram_22"
+default = 0
+[[sensor.register]]
+addr = 0x22
+encoding = "u8"
+expr = "ram_22"
+
+[[sensor.write_register]]
+addr = 0x23
+encoding = "u8"
+store = "ram_23"
+default = 0
+[[sensor.register]]
+addr = 0x23
+encoding = "u8"
+expr = "ram_23"
+
+[[sensor.write_register]]
+addr = 0x24
+encoding = "u8"
+store = "ram_24"
+default = 0
+[[sensor.register]]
+addr = 0x24
+encoding = "u8"
+expr = "ram_24"
+
+[[sensor.write_register]]
+addr = 0x25
+encoding = "u8"
+store = "ram_25"
+default = 0
+[[sensor.register]]
+addr = 0x25
+encoding = "u8"
+expr = "ram_25"
+
+[[sensor.write_register]]
+addr = 0x26
+encoding = "u8"
+store = "ram_26"
+default = 0
+[[sensor.register]]
+addr = 0x26
+encoding = "u8"
+expr = "ram_26"
+
+[[sensor.write_register]]
+addr = 0x27
+encoding = "u8"
+store = "ram_27"
+default = 0
+[[sensor.register]]
+addr = 0x27
+encoding = "u8"
+expr = "ram_27"
+
+[[sensor.write_register]]
+addr = 0x28
+encoding = "u8"
+store = "ram_28"
+default = 0
+[[sensor.register]]
+addr = 0x28
+encoding = "u8"
+expr = "ram_28"
+
+[[sensor.write_register]]
+addr = 0x29
+encoding = "u8"
+store = "ram_29"
+default = 0
+[[sensor.register]]
+addr = 0x29
+encoding = "u8"
+expr = "ram_29"
+
+[[sensor.write_register]]
+addr = 0x2A
+encoding = "u8"
+store = "ram_2a"
+default = 0
+[[sensor.register]]
+addr = 0x2A
+encoding = "u8"
+expr = "ram_2a"
+
+[[sensor.write_register]]
+addr = 0x2B
+encoding = "u8"
+store = "ram_2b"
+default = 0
+[[sensor.register]]
+addr = 0x2B
+encoding = "u8"
+expr = "ram_2b"
+
+[[sensor.write_register]]
+addr = 0x2C
+encoding = "u8"
+store = "ram_2c"
+default = 0
+[[sensor.register]]
+addr = 0x2C
+encoding = "u8"
+expr = "ram_2c"
+
+[[sensor.write_register]]
+addr = 0x2D
+encoding = "u8"
+store = "ram_2d"
+default = 0
+[[sensor.register]]
+addr = 0x2D
+encoding = "u8"
+expr = "ram_2d"
+
+[[sensor.write_register]]
+addr = 0x2E
+encoding = "u8"
+store = "ram_2e"
+default = 0
+[[sensor.register]]
+addr = 0x2E
+encoding = "u8"
+expr = "ram_2e"
+
+[[sensor.write_register]]
+addr = 0x2F
+encoding = "u8"
+store = "ram_2f"
+default = 0
+[[sensor.register]]
+addr = 0x2F
+encoding = "u8"
+expr = "ram_2f"
+
+[[sensor.write_register]]
+addr = 0x30
+encoding = "u8"
+store = "ram_30"
+default = 0
+[[sensor.register]]
+addr = 0x30
+encoding = "u8"
+expr = "ram_30"
+
+[[sensor.write_register]]
+addr = 0x31
+encoding = "u8"
+store = "ram_31"
+default = 0
+[[sensor.register]]
+addr = 0x31
+encoding = "u8"
+expr = "ram_31"
+
+[[sensor.write_register]]
+addr = 0x32
+encoding = "u8"
+store = "ram_32"
+default = 0
+[[sensor.register]]
+addr = 0x32
+encoding = "u8"
+expr = "ram_32"
+
+[[sensor.write_register]]
+addr = 0x33
+encoding = "u8"
+store = "ram_33"
+default = 0
+[[sensor.register]]
+addr = 0x33
+encoding = "u8"
+expr = "ram_33"
+
+[[sensor.write_register]]
+addr = 0x34
+encoding = "u8"
+store = "ram_34"
+default = 0
+[[sensor.register]]
+addr = 0x34
+encoding = "u8"
+expr = "ram_34"
+
+[[sensor.write_register]]
+addr = 0x35
+encoding = "u8"
+store = "ram_35"
+default = 0
+[[sensor.register]]
+addr = 0x35
+encoding = "u8"
+expr = "ram_35"
+
+[[sensor.write_register]]
+addr = 0x36
+encoding = "u8"
+store = "ram_36"
+default = 0
+[[sensor.register]]
+addr = 0x36
+encoding = "u8"
+expr = "ram_36"
+
+[[sensor.write_register]]
+addr = 0x37
+encoding = "u8"
+store = "ram_37"
+default = 0
+[[sensor.register]]
+addr = 0x37
+encoding = "u8"
+expr = "ram_37"
+
+[[sensor.write_register]]
+addr = 0x38
+encoding = "u8"
+store = "ram_38"
+default = 0
+[[sensor.register]]
+addr = 0x38
+encoding = "u8"
+expr = "ram_38"
+
+[[sensor.write_register]]
+addr = 0x39
+encoding = "u8"
+store = "ram_39"
+default = 0
+[[sensor.register]]
+addr = 0x39
+encoding = "u8"
+expr = "ram_39"
+
+[[sensor.write_register]]
+addr = 0x3A
+encoding = "u8"
+store = "ram_3a"
+default = 0
+[[sensor.register]]
+addr = 0x3A
+encoding = "u8"
+expr = "ram_3a"
+
+[[sensor.write_register]]
+addr = 0x3B
+encoding = "u8"
+store = "ram_3b"
+default = 0
+[[sensor.register]]
+addr = 0x3B
+encoding = "u8"
+expr = "ram_3b"
+
+[[sensor.write_register]]
+addr = 0x3C
+encoding = "u8"
+store = "ram_3c"
+default = 0
+[[sensor.register]]
+addr = 0x3C
+encoding = "u8"
+expr = "ram_3c"
+
+[[sensor.write_register]]
+addr = 0x3D
+encoding = "u8"
+store = "ram_3d"
+default = 0
+[[sensor.register]]
+addr = 0x3D
+encoding = "u8"
+expr = "ram_3d"
+
+[[sensor.write_register]]
+addr = 0x3E
+encoding = "u8"
+store = "ram_3e"
+default = 0
+[[sensor.register]]
+addr = 0x3E
+encoding = "u8"
+expr = "ram_3e"
+
+[[sensor.write_register]]
+addr = 0x3F
+encoding = "u8"
+store = "ram_3f"
+default = 0
+[[sensor.register]]
+addr = 0x3F
+encoding = "u8"
+expr = "ram_3f"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 4.5    # Recommended DC Operating Conditions, VCC min
+idle_a = 0.0002               # DC Electrical Characteristics, ICCS max
+read_a = 0.0015               # DC Electrical Characteristics, ICCA max, fSCL = 100 kHz
+write_a = 0.0015
+low_power_a = 0.0002
+
+[models.coverage]
+implements = ["pin_roles", "open_drain_sda", "ttl_logic_levels", "standby_supply_current", "absolute_ratings", "supply_ranges", "i2c_fixed_address", "register_map", "reset_values", "time_register_readback", "control_register_readback", "battery_ram_readback", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["timekeeping_counting", "clock_halt_oscillator_control", "square_wave_output", "vbat_battery_operation", "power_fail_threshold", "address_pointer_wrap_3fh_to_00h", "control_register_zero_bits", "ram_power_up_contents_not_printed", "thermal_resistance_not_printed"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.analog.com/media/en/technical-documentation/data-sheets/DS1307.pdf"
+title = "Maxim Integrated DS1307 64 x 8, Serial, I2C Real-Time Clock, REV: 3/15"
+locator = "Ordering Information; Absolute Maximum Ratings; Recommended DC Operating Conditions; DC Electrical Characteristics; Pin Description; Table 2 Timekeeper Registers; Control Register; Clock and Calendar"
+sha256 = "c81233053aa1da1571258d117bf4ce7bcef8f6225e6895259add55809189516a"
+
+[[models.source.characteristic]]
+parameter = "VIH logic 1 input"
+min = 2.2
+unit = "V"
+conditions = "VCC = 4.5 V to 5.5 V"
+basis = "Recommended DC Operating Conditions, VIH min 2.2 V, max VCC + 0.3 V"
+
+[[models.source.characteristic]]
+parameter = "VIL logic 0 input"
+max = 0.8
+unit = "V"
+conditions = "VCC = 4.5 V to 5.5 V"
+basis = "Recommended DC Operating Conditions, VIL min -0.3 V, max +0.8 V"
+
+# -----------------------------------------------------------------------------
+# INA226: Texas Instruments 36 V, 16-bit, I2C output current, voltage and power monitor
+# with alert, DGS (VSSOP-10, 3.00 mm x 4.90 mm).
+#
+# Source: TI "INA226 36V, 16-Bit, Ultra-Precise I2C Output Current, Voltage, and Power
+#   Monitor With Alert", SBOS547C, June 2011, revised August 2026 (the revision printed
+#   on the PDF). Pin Configuration and Functions (Table 4-1, Figure 4-1), 5.1 Absolute
+#   Maximum Ratings, 5.3 Recommended Operating Conditions, 5.4 Thermal Information, 5.5
+#   Electrical Characteristics, 6.5.5.1 Serial Bus Address (Table 6-2), 7.1 Register
+#   Maps (Tables 7-1 to 7-15), Equations 3 and 4.
+#
+# THE SHUNT IS EXTERNAL. IN+ and IN- sense across a board resistor; leaving them
+# high-impedance here does not open the measured power path. The 6 V ceiling is the
+# supply (VS) and SDA pin: IN+, IN- (common mode) and VBUS are rated -0.3 V to 40 V, and
+# a `digital` card's max_voltage_v is not watched per pin, so the sensing pins may sit
+# on rails far above 6 V.
+#
+# ADDRESS: Table 6-2 has 16 addresses from four levels (GND, VS, SDA, SCL) on each of
+# A0 and A1, all listed as printed (1000000b = 0x40 to 1001111b = 0x4F). A strap the
+# binder cannot read as one of the four binds the spec default 0x40 marked assumed.
+# The device samples A0/A1 on every bus communication and the pins must be connected
+# to one of the four nets, so a floating strap is flagged.
+#
+# REGISTERS (Table 7-1): CONFIG 00h resets to 4127h and its RST bit self-clears;
+# SHUNT 01h, BUS 02h, POWER 03h, CURRENT 04h answer from the sensor inputs shunt_mv
+# and bus_v through the printed LSB sizes (2.5 uV and 1.25 mV) and Equations 3 and 4;
+# CALIBRATION 05h, MASK/ENABLE 06h and ALERT LIMIT 07h reset to 0; MANUFACTURER ID FEh
+# = 5449h and DIE ID FFh = 2260h, MSB first. The Current and Power registers read 0
+# until the Calibration register is written.
+#
+# ASSUMED: the model does not run the conversion state machine. The triggered modes read
+# the same as the continuous ones, the Conversion Ready Flag (bit 3 of 06h) is set
+# whenever a measurement mode is selected and never clears on read, the alert engine
+# does not run (AFF and OVF read 0), averaging is ignored and a reset clears the
+# registers only while RST is the stored configuration value.
+#
+# LOGIC LEVELS are VS fractions (VIH 0.7 x VS min, VIL 0.3 x VS max), evaluated at the
+# 3.3 V recommended supply. SDA and Alert are open drain, so no VOH; VOL is 0.4 V max at
+# IOL = 3 mA. Currents are IQ typical 330 uA (420 uA max) and shutdown 0.5 uA typical
+# (2 uA max).
+[[models]]
+id = "ina226"
+kind = "digital"
+description = "TI INA226 36V 16-bit I2C current/power monitor, VSSOP-10 (I2C register map at the 16 strapped addresses: configuration with reset, shunt/bus/power/current from sensor inputs, calibration, mask/enable, manufacturer and die ID; pad map, logic levels and supply draw)"
+
+[models.match]
+# Orderable codes INA226AIDGSR (reel) and INA226AIDGST (small reel), plus the bare INA226. INA226A/B suffix families are not in this revision. INA219/INA220/INA228/INA229/INA230/INA231 and INA233 are different parts.
+value_re = "(?i)^INA226(AIDGS[RT]?)?$"
+
+[models.params]
+vol   = 0.4      # 5.5 Electrical Characteristics, VOL max, SDA and Alert at IOL = 3 mA
+vih   = 2.31     # 5.5 VIH 0.7 x VS min at the 3.3 V recommended supply
+vil   = 0.99     # 5.5 VIL 0.3 x VS max at the 3.3 V recommended supply
+supply_static_ua = 330.0   # 5.5 IQ typical quiescent current (420 uA max)
+supply_pin = "6"           # VS
+gnd_pin    = "7"           # GND
+warning = "I2C register map with the measurement registers fed from sensor inputs; the conversion state machine, averaging, triggered-mode timing and the alert engine are not modelled"
+must_not_float_roles = "a0,a1"
+
+[models.pins]
+"1" = "a1"
+"2" = "a0"
+"3" = "alert"
+"4" = "sda"
+"5" = "scl"
+"6" = "vs"
+"7" = "gnd"
+"8" = "vbus"
+"9" = "in_n"
+"10" = "in_p"
+
+[models.ratings]
+# 5.1 Absolute Maximum Ratings: VS 6 V; SDA GND-0.3 V to 6 V; input current into any pin 5 mA; TJ 150 degC. 5.4 Thermal Information, DGS: RthetaJA 144.6, RthetaJC(top) 53.3 degC/W.
+max_voltage_v = 6.0
+max_pin_current_a = 0.005
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 144.6
+theta_jc_c_per_w = 53.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vs"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SBOS547C, 5.5 Electrical Characteristics, operating supply range 2.7 V to 5.5 V; 5.1 Absolute Maximum Ratings, VVS 6 V"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "INA226 register map"
+bus = "i2c"
+i2c_address = 0x40
+
+# Pin Configuration and Functions, DGS (VSSOP-10); the same pad map as [models.pins].
+[sensor.pins]
+1 = "a1"
+2 = "a0"
+3 = "alert"
+4 = "sda"
+5 = "scl"
+6 = "vs"
+7 = "gnd"
+8 = "vbus"
+9 = "in_n"
+10 = "in_p"
+
+# Table 6-2, rows in printed order (GND = "low", VS = "high"): 1000000b = 0x40 to 1001111b = 0x4F.
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
+
+# Stimuli: the shunt drop VSENSE = VIN+ - VIN- in mV and the bus voltage at VBUS in V (the part itself measures these).
+[[sensor.input]]
+name = "shunt_mv"
+default = 0.0
+
+[[sensor.input]]
+name = "bus_v"
+default = 0.0
+
+# Configuration Register (00h), POR 0100 0001 0010 0111b = 4127h: RST bit 15 (self-clearing: a stored RST reads the POR value), AVG bits 11:9,
+# VBUSCT bits 8:6, VSHCT bits 5:3, MODE bits 2:0 (111 = shunt and bus, continuous).
+[[sensor.write_register]]
+addr = 0x00
+encoding = "u16_be"
+store = "config"
+default = 16679
+[[sensor.write_register.field]]
+name = "rst"
+bits = [15, 15]
+[[sensor.write_register.field]]
+name = "mode"
+bits = [2, 0]
+
+# RST reads back as the POR value (reset is not an observable state)
+[[sensor.register]]
+addr = 0x00
+encoding = "u16_be"
+expr = "if(rst == 1.0, 16679.0, config)"
+
+# Shunt Voltage Register (01h): LSB 2.5 uV, two's complement, full scale 81.92 mV. The triggered modes are treated as continuous.
+[[sensor.register]]
+addr = 0x01
+encoding = "i16_be"
+expr = "if(rst == 1.0, 0.0, if((mode == 1.0 || mode == 3.0 || mode == 5.0 || mode == 7.0), max(-32768.0, min(32767.0, shunt_mv * 400.0)), 0.0))"
+
+# Bus Voltage Register (02h): LSB 1.25 mV, bit 15 always 0, full scale 40.96 V.
+[[sensor.register]]
+addr = 0x02
+encoding = "u16_be"
+expr = "if(rst == 1.0, 0.0, if((mode == 2.0 || mode == 3.0 || mode == 6.0 || mode == 7.0), max(0.0, min(32767.0, bus_v * 800.0)), 0.0))"
+
+# Power Register (03h) = Current x Bus / 20000 (Equation 4); Current Register (04h) = Shunt x Calibration / 2048 (Equation 3).
+# Both read 0 until the Calibration Register is written (footnote 2 of Table 7-1).
+[[sensor.register]]
+addr = 0x03
+encoding = "u16_be"
+expr = "if(rst == 1.0, 0.0, if((mode == 1.0 || mode == 3.0 || mode == 5.0 || mode == 7.0) && (mode == 2.0 || mode == 3.0 || mode == 6.0 || mode == 7.0), max(0.0, min(65535.0, max(-32768.0, min(32767.0, max(-32768.0, min(32767.0, shunt_mv * 400.0)) * cal / 2048.0)) * max(0.0, min(32767.0, bus_v * 800.0)) / 20000.0)), 0.0))"
+
+[[sensor.register]]
+addr = 0x04
+encoding = "i16_be"
+expr = "if(rst == 1.0, 0.0, if((mode == 1.0 || mode == 3.0 || mode == 5.0 || mode == 7.0), max(-32768.0, min(32767.0, max(-32768.0, min(32767.0, shunt_mv * 400.0)) * cal / 2048.0)), 0.0))"
+
+# Calibration Register (05h), POR 0000h; bit 15 is not used.
+[[sensor.write_register]]
+addr = 0x05
+encoding = "u16_be"
+store = "cal"
+default = 0
+
+[[sensor.register]]
+addr = 0x05
+encoding = "u16_be"
+expr = "if(rst == 1.0, 0.0, if(cal > 32767.0, cal - 32768.0, cal))"
+
+# Mask/Enable Register (06h), POR 0000h: function bits SOL..CNVR 15:10, APOL bit 1, LEN bit 0 read back as written. CVRF (bit 3) is read-only
+# and is ASSUMED set whenever a measurement mode is selected, so a driver polling for 'conversion ready' completes; AFF (bit 4) and
+# OVF (bit 2) read 0 (the alert engine is not modelled).
+[[sensor.write_register]]
+addr = 0x06
+encoding = "u16_be"
+store = "mask"
+default = 0
+[[sensor.write_register.field]]
+name = "m_fn"
+bits = [15, 10]
+[[sensor.write_register.field]]
+name = "m_apol"
+bits = [1, 1]
+[[sensor.write_register.field]]
+name = "m_len"
+bits = [0, 0]
+
+[[sensor.register]]
+addr = 0x06
+encoding = "u16_be"
+expr = "if(rst == 1.0, 0.0, m_fn * 1024.0 + m_apol * 2.0 + m_len + if(mode == 0.0 || mode == 4.0, 0.0, 8.0))"
+
+# Alert Limit Register (07h), POR 0000h.
+[[sensor.write_register]]
+addr = 0x07
+encoding = "u16_be"
+store = "alert_limit"
+default = 0
+[[sensor.register]]
+addr = 0x07
+encoding = "u16_be"
+expr = "alert_limit"
+
+# Manufacturer ID Register (FEh) = 5449h ('TI'), MSB first (Table 7-1). Die ID Register (FFh) = 2260h (DID 226h, RID 0h; 2261h is the other
+# die COO printed in footnote 3).
+[[sensor.register]]
+addr = 0xFE
+const = [0x54, 0x49]
+
+[[sensor.register]]
+addr = 0xFF
+const = [0x22, 0x60]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vs"
+return_role = "gnd"
+power_on_threshold_v = 2.7    # 5.5 operating supply range minimum (VPOR is 2 V typical; the interface is specified from 2.7 V)
+idle_a = 0.00033              # 5.5 IQ typical
+read_a = 0.00033
+write_a = 0.00033
+low_power_a = 0.0000005       # 5.5 quiescent current, power-down (shutdown) mode, typical
+
+[models.coverage]
+implements = ["pin_roles", "open_drain_sda_alert_vol", "logic_levels_at_3v3", "active_supply_current", "absolute_ratings", "thermal_resistance", "supply_ranges", "i2c_address_strap", "four_level_address_pins", "register_map", "reset_values", "configuration_readback", "shunt_bus_current_power_from_inputs", "calibration_readback", "manufacturer_id_read", "die_id_read", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing", "averaging", "triggered_mode_one_shot", "alert_engine", "conversion_ready_flag_clear_on_read", "reset_clears_other_registers_after_rst_stored", "die_id_2261_variant", "sense_pin_ratings", "smbus_timeout", "high_speed_mode"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina226.pdf"
+title = "Texas Instruments INA226 36V, 16-Bit, Ultra-Precise I2C Output Current, Voltage, and Power Monitor With Alert, SBOS547C, June 2011, revised August 2026"
+locator = "Table 4-1 Pin Functions; Sections 5.1, 5.3, 5.4, 5.5; Section 6.5.5.1 Table 6-2; Section 7.1 Tables 7-1 to 7-15; Equations 3 and 4"
+sha256 = "c9b67f886d4a5241a5e070723f7b61867409eeb27eed768b9cdd9cb17e03ca2d"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VVS"
+conditions = "SDA, SCL, A0, A1, Alert"
+basis = "5.5 Electrical Characteristics, DIGITAL INPUT/OUTPUT, VIH 0.7 x VVS min, 6 V max"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VVS"
+conditions = "SDA, SCL, A0, A1, Alert"
+basis = "5.5 Electrical Characteristics, DIGITAL INPUT/OUTPUT, VIL -0.5 V min, 0.3 x VVS max"
+
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 330.0
+max = 420.0
+unit = "uA"
+conditions = "TA = 25 degC, VS = 3.3 V, VIN+ = 12 V, VSENSE = 0 mV, VVBUS = 12 V"
+basis = "5.5 Electrical Characteristics, POWER SUPPLY"
+
+# -----------------------------------------------------------------------------
+# ACS712 x05B: Allegro MicroSystems fully integrated Hall-effect linear current sensor
+# IC with 2.4 kVrms isolation and a 1.2 mohm primary conductor, SOIC-8 (suffix LC),
+# +-5 A, 185 mV/A.
+#
+# Source: Allegro ACS712-DS, Rev. 22, February 13, 2024 (MCO-0000197). Selection Guide,
+#   Absolute Maximum Ratings, Isolation Characteristics, Terminal List, Common
+#   Operating Characteristics, Common Thermal Characteristics, x05B Performance
+#   Characteristics.
+#
+# THE PART IS ANALOG, NOT A BUS DEVICE: there is no register map. VIOUT (pin 7) sits at
+# VCC x 0.5 with no primary current (ratiometric: the zero-current output is half the
+# supply, and the sensitivity scales with VCC / 5 V) and moves 185 mV/A, positive
+# slope, with the current flowing IP+ (pins 1, 2) to IP- (pins 3, 4). The model does not
+# drive VIOUT from a current (there is no analog-output transducer card kind): it is a
+# supply, ratings and pad-map card, so a board that powers it from 3.3 V, loads VIOUT
+# with under 4.7 kohm or hangs a supply on the primary pins is checked, and the
+# sensitivity and offset live in the cited characteristic rows.
+#
+# THE PRIMARY PINS ARE ISOLATED FROM THE SIGNAL PINS. Pins 1 to 4 carry the measured
+# current through a 1.2 mohm conductor and are galvanically separate from pins 5 to 8
+# (2.4 kVrms withstand for 60 s, 420 V peak working voltage for basic isolation). They
+# are named ip_p1, ip_p2, ip_n1 and ip_n2 and are not given the 8 V supply rating, which
+# belongs to VCC and VIOUT only. The primary conductor survives a 100 A, 100 ms pulse.
+#
+# SUPPLY: VCC 4.5 V to 5.5 V (5.0 V typical), ICC 10 mA typ, 13 mA max, output open.
+# The output needs RLOAD >= 4.7 kohm to GND and CLOAD <= 10 nF; it sources at most 3 mA
+# and sinks 10 mA (absolute maximum). The reverse supply and output limit is -0.1 V.
+#
+# SIBLINGS: this card covers the x05B orderables only (ACS712ELCTR-05B-T (the only 05B orderable in the selection guide)). The x20A and 30A
+# variants have their own cards and sensitivities; the bare ACS712 is ambiguous (no range
+# or sensitivity) and does not resolve. ACS711, ACS714, ACS723, ACS724, ACS758 and
+# ACS37xxx are different parts.
+[[models]]
+id = "acs712_05b"
+kind = "digital"
+description = "Allegro ACS712 x05B Hall-effect current sensor, +-5 A, 185 mV/A, SOIC-8 (analog VIOUT = VCC/2 + sensitivity x IP; supply, ratings and pad map only, no bus model)"
+
+[models.match]
+# ACS712ELCTR-05B-T (the only 05B orderable in the selection guide).
+value_re = "(?i)^ACS712(ELC(TR)?)?[- ]?05B(-T)?$"
+
+[models.params]
+supply_static_ua = 10000.0   # Common Operating Characteristics, ICC typ, VCC = 5.0 V, output open (13 mA max)
+supply_pin = "8"             # VCC
+gnd_pin    = "5"             # GND
+warning = "analog output only: VIOUT (VCC/2 at zero current, 185 mV/A) is not driven from the primary current; the primary pins 1 to 4 are an isolated 1.2 mohm conductor and are not checked"
+
+[models.pins]
+# Terminal List / Pinout Diagram, 8-lead SOIC.
+"1" = "ip_p1"    # IP+, fused internally with pin 2
+"2" = "ip_p2"    # IP+
+"3" = "ip_n1"    # IP-, fused internally with pin 4
+"4" = "ip_n2"    # IP-
+"5" = "gnd"
+"6" = "filter"   # external capacitor to GND sets the bandwidth
+"7" = "viout"    # analog output
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings: supply voltage 8 V, output voltage 8 V; TJ(max) 165 degC. Common Thermal Characteristics: RthetaJA 23 degC/W on the Allegro 85-0322 evaluation board (includes the power consumed by the board), RthetaJL 5 degC/W.
+max_voltage_v = 8.0
+max_junction_temp_c = 165.0
+theta_ja_c_per_w = 23.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 8.0
+basis = "Allegro ACS712-DS Rev. 22, Common Operating Characteristics, supply voltage VCC 4.5 V min, 5.0 V typ, 5.5 V max; Absolute Maximum Ratings, supply voltage 8 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "absolute_ratings", "thermal_resistance", "supply_ranges", "supply_voltage_gating"]
+missing = ["analog_output_vout_vs_current", "ratiometric_output_with_vcc", "zero_current_offset_vcc_half", "filter_pin_bandwidth", "output_load_limits_4k7_10nf", "output_source_sink_current_limits", "primary_conductor_resistance", "overcurrent_transient_tolerance", "isolation_withstand_rating", "temperature_drift_of_offset_and_sensitivity", "supply_voltage_reverse_limit", "-S_and_-T_variants_identical"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.allegromicro.com/-/media/files/datasheets/acs712-datasheet.pdf"
+title = "Allegro MicroSystems ACS712 Fully Integrated, Hall-Effect-Based Linear Current Sensor IC with 2.4 kVRMS Isolation and a Low-Resistance Current Conductor, ACS712-DS, Rev. 22, February 13, 2024"
+locator = "Selection Guide; Absolute Maximum Ratings; Isolation Characteristics; Terminal List; Common Operating Characteristics; Common Thermal Characteristics; x05B Performance Characteristics"
+sha256 = "21b345f7a98d36947d5562218b0bc730b80609b614e9fc4374f56993011466b9"
+
+[[models.source.characteristic]]
+parameter = "Sens sensitivity, x05B"
+min = 180
+typ = 185
+max = 190
+unit = "mV/A"
+conditions = "over the full range of IP, TA = 25 degC, CF = 1 nF, VCC = 5 V"
+basis = "x05B Performance Characteristics, Sensitivity"
+
+[[models.source.characteristic]]
+parameter = "VIOUT(Q) zero-current output voltage"
+typ = 0.5
+unit = "VCC"
+conditions = "bidirectional, IP = 0 A, TA = 25 degC"
+basis = "Common Operating Characteristics, Zero Current Output Voltage VCC x 0.5"
+
+[[models.source.characteristic]]
+parameter = "VCC supply voltage"
+min = 4.5
+typ = 5.0
+max = 5.5
+unit = "V"
+conditions = "full range of TA"
+basis = "Common Operating Characteristics, Supply Voltage"
+
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+typ = 10.0
+max = 13.0
+unit = "mA"
+conditions = "VCC = 5.0 V, output open"
+basis = "Common Operating Characteristics, Supply Current"
+
+[[models.source.characteristic]]
+parameter = "RLOAD output resistive load"
+min = 4.7
+unit = "kohm"
+conditions = "VIOUT to GND"
+basis = "Common Operating Characteristics, Output Resistive Load"
+
+
+# -----------------------------------------------------------------------------
+# ACS712 x20A: Allegro MicroSystems fully integrated Hall-effect linear current sensor
+# IC with 2.4 kVrms isolation and a 1.2 mohm primary conductor, SOIC-8 (suffix LC),
+# +-20 A, 100 mV/A.
+#
+# Source: Allegro ACS712-DS, Rev. 22, February 13, 2024 (MCO-0000197). Selection Guide,
+#   Absolute Maximum Ratings, Isolation Characteristics, Terminal List, Common
+#   Operating Characteristics, Common Thermal Characteristics, x20A Performance
+#   Characteristics.
+#
+# THE PART IS ANALOG, NOT A BUS DEVICE: there is no register map. VIOUT (pin 7) sits at
+# VCC x 0.5 with no primary current (ratiometric: the zero-current output is half the
+# supply, and the sensitivity scales with VCC / 5 V) and moves 100 mV/A, positive
+# slope, with the current flowing IP+ (pins 1, 2) to IP- (pins 3, 4). The model does not
+# drive VIOUT from a current (there is no analog-output transducer card kind): it is a
+# supply, ratings and pad-map card, so a board that powers it from 3.3 V, loads VIOUT
+# with under 4.7 kohm or hangs a supply on the primary pins is checked, and the
+# sensitivity and offset live in the cited characteristic rows.
+#
+# THE PRIMARY PINS ARE ISOLATED FROM THE SIGNAL PINS. Pins 1 to 4 carry the measured
+# current through a 1.2 mohm conductor and are galvanically separate from pins 5 to 8
+# (2.4 kVrms withstand for 60 s, 420 V peak working voltage for basic isolation). They
+# are named ip_p1, ip_p2, ip_n1 and ip_n2 and are not given the 8 V supply rating, which
+# belongs to VCC and VIOUT only. The primary conductor survives a 100 A, 100 ms pulse.
+#
+# SUPPLY: VCC 4.5 V to 5.5 V (5.0 V typical), ICC 10 mA typ, 13 mA max, output open.
+# The output needs RLOAD >= 4.7 kohm to GND and CLOAD <= 10 nF; it sources at most 3 mA
+# and sinks 10 mA (absolute maximum). The reverse supply and output limit is -0.1 V.
+#
+# SIBLINGS: this card covers the x20A orderables only (ACS712ELCTR-20A-S and ACS712ELCTR-20A-T). The x05B and 30A
+# variants have their own cards and sensitivities; the bare ACS712 is ambiguous (no range
+# or sensitivity) and does not resolve. ACS711, ACS714, ACS723, ACS724, ACS758 and
+# ACS37xxx are different parts.
+[[models]]
+id = "acs712_20a"
+kind = "digital"
+description = "Allegro ACS712 x20A Hall-effect current sensor, +-20 A, 100 mV/A, SOIC-8 (analog VIOUT = VCC/2 + sensitivity x IP; supply, ratings and pad map only, no bus model)"
+
+[models.match]
+# ACS712ELCTR-20A-S and ACS712ELCTR-20A-T.
+value_re = "(?i)^ACS712(ELC(TR)?)?[- ]?20A(-[ST])?$"
+
+[models.params]
+supply_static_ua = 10000.0   # Common Operating Characteristics, ICC typ, VCC = 5.0 V, output open (13 mA max)
+supply_pin = "8"             # VCC
+gnd_pin    = "5"             # GND
+warning = "analog output only: VIOUT (VCC/2 at zero current, 100 mV/A) is not driven from the primary current; the primary pins 1 to 4 are an isolated 1.2 mohm conductor and are not checked"
+
+[models.pins]
+# Terminal List / Pinout Diagram, 8-lead SOIC.
+"1" = "ip_p1"    # IP+, fused internally with pin 2
+"2" = "ip_p2"    # IP+
+"3" = "ip_n1"    # IP-, fused internally with pin 4
+"4" = "ip_n2"    # IP-
+"5" = "gnd"
+"6" = "filter"   # external capacitor to GND sets the bandwidth
+"7" = "viout"    # analog output
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings: supply voltage 8 V, output voltage 8 V; TJ(max) 165 degC. Common Thermal Characteristics: RthetaJA 23 degC/W on the Allegro 85-0322 evaluation board (includes the power consumed by the board), RthetaJL 5 degC/W.
+max_voltage_v = 8.0
+max_junction_temp_c = 165.0
+theta_ja_c_per_w = 23.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 8.0
+basis = "Allegro ACS712-DS Rev. 22, Common Operating Characteristics, supply voltage VCC 4.5 V min, 5.0 V typ, 5.5 V max; Absolute Maximum Ratings, supply voltage 8 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "absolute_ratings", "thermal_resistance", "supply_ranges", "supply_voltage_gating"]
+missing = ["analog_output_vout_vs_current", "ratiometric_output_with_vcc", "zero_current_offset_vcc_half", "filter_pin_bandwidth", "output_load_limits_4k7_10nf", "output_source_sink_current_limits", "primary_conductor_resistance", "overcurrent_transient_tolerance", "isolation_withstand_rating", "temperature_drift_of_offset_and_sensitivity", "supply_voltage_reverse_limit", "-S_and_-T_variants_identical"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.allegromicro.com/-/media/files/datasheets/acs712-datasheet.pdf"
+title = "Allegro MicroSystems ACS712 Fully Integrated, Hall-Effect-Based Linear Current Sensor IC with 2.4 kVRMS Isolation and a Low-Resistance Current Conductor, ACS712-DS, Rev. 22, February 13, 2024"
+locator = "Selection Guide; Absolute Maximum Ratings; Isolation Characteristics; Terminal List; Common Operating Characteristics; Common Thermal Characteristics; x20A Performance Characteristics"
+sha256 = "21b345f7a98d36947d5562218b0bc730b80609b614e9fc4374f56993011466b9"
+
+[[models.source.characteristic]]
+parameter = "Sens sensitivity, x20A"
+min = 96
+typ = 100
+max = 104
+unit = "mV/A"
+conditions = "over the full range of IP, TA = 25 degC, CF = 1 nF, VCC = 5 V"
+basis = "x20A Performance Characteristics, Sensitivity"
+
+[[models.source.characteristic]]
+parameter = "VIOUT(Q) zero-current output voltage"
+typ = 0.5
+unit = "VCC"
+conditions = "bidirectional, IP = 0 A, TA = 25 degC"
+basis = "Common Operating Characteristics, Zero Current Output Voltage VCC x 0.5"
+
+[[models.source.characteristic]]
+parameter = "VCC supply voltage"
+min = 4.5
+typ = 5.0
+max = 5.5
+unit = "V"
+conditions = "full range of TA"
+basis = "Common Operating Characteristics, Supply Voltage"
+
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+typ = 10.0
+max = 13.0
+unit = "mA"
+conditions = "VCC = 5.0 V, output open"
+basis = "Common Operating Characteristics, Supply Current"
+
+[[models.source.characteristic]]
+parameter = "RLOAD output resistive load"
+min = 4.7
+unit = "kohm"
+conditions = "VIOUT to GND"
+basis = "Common Operating Characteristics, Output Resistive Load"
+
+
+# -----------------------------------------------------------------------------
+# ACS712 x30A: Allegro MicroSystems fully integrated Hall-effect linear current sensor
+# IC with 2.4 kVrms isolation and a 1.2 mohm primary conductor, SOIC-8 (suffix LC),
+# +-30 A, 66 mV/A.
+#
+# Source: Allegro ACS712-DS, Rev. 22, February 13, 2024 (MCO-0000197). Selection Guide,
+#   Absolute Maximum Ratings, Isolation Characteristics, Terminal List, Common
+#   Operating Characteristics, Common Thermal Characteristics, x30A Performance
+#   Characteristics.
+#
+# THE PART IS ANALOG, NOT A BUS DEVICE: there is no register map. VIOUT (pin 7) sits at
+# VCC x 0.5 with no primary current (ratiometric: the zero-current output is half the
+# supply, and the sensitivity scales with VCC / 5 V) and moves 66 mV/A, positive
+# slope, with the current flowing IP+ (pins 1, 2) to IP- (pins 3, 4). The model does not
+# drive VIOUT from a current (there is no analog-output transducer card kind): it is a
+# supply, ratings and pad-map card, so a board that powers it from 3.3 V, loads VIOUT
+# with under 4.7 kohm or hangs a supply on the primary pins is checked, and the
+# sensitivity and offset live in the cited characteristic rows.
+#
+# THE PRIMARY PINS ARE ISOLATED FROM THE SIGNAL PINS. Pins 1 to 4 carry the measured
+# current through a 1.2 mohm conductor and are galvanically separate from pins 5 to 8
+# (2.4 kVrms withstand for 60 s, 420 V peak working voltage for basic isolation). They
+# are named ip_p1, ip_p2, ip_n1 and ip_n2 and are not given the 8 V supply rating, which
+# belongs to VCC and VIOUT only. The primary conductor survives a 100 A, 100 ms pulse.
+#
+# SUPPLY: VCC 4.5 V to 5.5 V (5.0 V typical), ICC 10 mA typ, 13 mA max, output open.
+# The output needs RLOAD >= 4.7 kohm to GND and CLOAD <= 10 nF; it sources at most 3 mA
+# and sinks 10 mA (absolute maximum). The reverse supply and output limit is -0.1 V.
+#
+# SIBLINGS: this card covers the x30A orderables only (ACS712ELCTR-30A-S and ACS712ELCTR-30A-T). The x05B and 20A
+# variants have their own cards and sensitivities; the bare ACS712 is ambiguous (no range
+# or sensitivity) and does not resolve. ACS711, ACS714, ACS723, ACS724, ACS758 and
+# ACS37xxx are different parts.
+[[models]]
+id = "acs712_30a"
+kind = "digital"
+description = "Allegro ACS712 x30A Hall-effect current sensor, +-30 A, 66 mV/A, SOIC-8 (analog VIOUT = VCC/2 + sensitivity x IP; supply, ratings and pad map only, no bus model)"
+
+[models.match]
+# ACS712ELCTR-30A-S and ACS712ELCTR-30A-T.
+value_re = "(?i)^ACS712(ELC(TR)?)?[- ]?30A(-[ST])?$"
+
+[models.params]
+supply_static_ua = 10000.0   # Common Operating Characteristics, ICC typ, VCC = 5.0 V, output open (13 mA max)
+supply_pin = "8"             # VCC
+gnd_pin    = "5"             # GND
+warning = "analog output only: VIOUT (VCC/2 at zero current, 66 mV/A) is not driven from the primary current; the primary pins 1 to 4 are an isolated 1.2 mohm conductor and are not checked"
+
+[models.pins]
+# Terminal List / Pinout Diagram, 8-lead SOIC.
+"1" = "ip_p1"    # IP+, fused internally with pin 2
+"2" = "ip_p2"    # IP+
+"3" = "ip_n1"    # IP-, fused internally with pin 4
+"4" = "ip_n2"    # IP-
+"5" = "gnd"
+"6" = "filter"   # external capacitor to GND sets the bandwidth
+"7" = "viout"    # analog output
+"8" = "vcc"
+
+[models.ratings]
+# Absolute Maximum Ratings: supply voltage 8 V, output voltage 8 V; TJ(max) 165 degC. Common Thermal Characteristics: RthetaJA 23 degC/W on the Allegro 85-0322 evaluation board (includes the power consumed by the board), RthetaJL 5 degC/W.
+max_voltage_v = 8.0
+max_junction_temp_c = 165.0
+theta_ja_c_per_w = 23.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 8.0
+basis = "Allegro ACS712-DS Rev. 22, Common Operating Characteristics, supply voltage VCC 4.5 V min, 5.0 V typ, 5.5 V max; Absolute Maximum Ratings, supply voltage 8 V"
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "absolute_ratings", "thermal_resistance", "supply_ranges", "supply_voltage_gating"]
+missing = ["analog_output_vout_vs_current", "ratiometric_output_with_vcc", "zero_current_offset_vcc_half", "filter_pin_bandwidth", "output_load_limits_4k7_10nf", "output_source_sink_current_limits", "primary_conductor_resistance", "overcurrent_transient_tolerance", "isolation_withstand_rating", "temperature_drift_of_offset_and_sensitivity", "supply_voltage_reverse_limit", "-S_and_-T_variants_identical"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.allegromicro.com/-/media/files/datasheets/acs712-datasheet.pdf"
+title = "Allegro MicroSystems ACS712 Fully Integrated, Hall-Effect-Based Linear Current Sensor IC with 2.4 kVRMS Isolation and a Low-Resistance Current Conductor, ACS712-DS, Rev. 22, February 13, 2024"
+locator = "Selection Guide; Absolute Maximum Ratings; Isolation Characteristics; Terminal List; Common Operating Characteristics; Common Thermal Characteristics; x30A Performance Characteristics"
+sha256 = "21b345f7a98d36947d5562218b0bc730b80609b614e9fc4374f56993011466b9"
+
+[[models.source.characteristic]]
+parameter = "Sens sensitivity, x30A"
+min = 63
+typ = 66
+max = 69
+unit = "mV/A"
+conditions = "over the full range of IP, TA = 25 degC, CF = 1 nF, VCC = 5 V"
+basis = "x30A Performance Characteristics, Sensitivity"
+
+[[models.source.characteristic]]
+parameter = "VIOUT(Q) zero-current output voltage"
+typ = 0.5
+unit = "VCC"
+conditions = "bidirectional, IP = 0 A, TA = 25 degC"
+basis = "Common Operating Characteristics, Zero Current Output Voltage VCC x 0.5"
+
+[[models.source.characteristic]]
+parameter = "VCC supply voltage"
+min = 4.5
+typ = 5.0
+max = 5.5
+unit = "V"
+conditions = "full range of TA"
+basis = "Common Operating Characteristics, Supply Voltage"
+
+[[models.source.characteristic]]
+parameter = "ICC supply current"
+typ = 10.0
+max = 13.0
+unit = "mA"
+conditions = "VCC = 5.0 V, output open"
+basis = "Common Operating Characteristics, Supply Current"
+
+[[models.source.characteristic]]
+parameter = "RLOAD output resistive load"
+min = 4.7
+unit = "kohm"
+conditions = "VIOUT to GND"
+basis = "Common Operating Characteristics, Output Resistive Load"
+

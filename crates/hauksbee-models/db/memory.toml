@@ -1,0 +1,761 @@
+# Official built-in part library: memory (I2C serial EEPROM).
+#
+# Cards here are written from vendor datasheets only (every value carries a basis and a source).
+# See target/launch/official-parts-20261022/ranking.md for the batch plan.
+#
+# Shape and executable subset follow the existing at24c64d_8pin card in digital.toml: the typed
+# `i2c_eeprom` peripheral answers at the fixed 7-bit address 0x50 (A2:A0 = 000). The device-address
+# strap pins (A0..A2) are not read, so a board that straps them answers elsewhere (SCHEMA GAP: the
+# i2c_eeprom kind has no address-strap input). Write-cycle timing, ACK polling and WP enforcement
+# are not modelled. Currents are datasheet MAXIMA at the worst listed condition, never typical.
+#
+# One card per distinct pin numbering (8-pin SOIC/TSSOP/UDFN/XDFN/PDIP versus 5-lead SOT23, and for
+# the 24xx256 the MSOP-8 whose A0/A1 are no-connects). The Atmel VFBGA ball-map packages are NOT
+# modelled: their datasheet figures number the balls in a bottom view, but a fitted ball footprint
+# names them by grid reference, so a pad map keyed by the printed numbers would bind on a guess. The
+# 24AA256 chip-scale package is modelled because its datasheet Table 2-1 gives a ball number for
+# every function; a footprint that names balls by grid reference will not match that map.
+# Exposed pads of DFN/TDFN packages are left unmapped (the datasheet allows VSS or floating).
+#
+# Register-level behaviour was cross-checked against the shape of Renode's GenericI2cEeprom
+# (MIT, Antmicro, renode-infrastructure src/Emulator/Peripherals/Peripherals/I2C); no code was copied
+# and every value below is from the vendor PDF named in the card's references.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT24C02D 2-Kbit (256 x 8) I2C EEPROM, 8-lead SOIC / TSSOP / UDFN / PDIP.
+#
+# Source: Microchip (Atmel) "AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM 1-Kbit
+#   (128 x 8) or 2-Kbit (256 x 8) DATASHEET", Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017.
+#   PDF page numbers equal printed page numbers.
+# A0/A1/A2/WP are pulled to GND internally when undriven (Table 1-1 note 1, p.2), so a floating
+# strap reads as logic 0 and no must-not-float role is declared.
+[[models]]
+id = "at24c02d_8pin"
+kind = "digital"
+description = "Microchip AT24C02D 2-Kbit I2C EEPROM, 8-lead SOIC/TSSOP/UDFN/PDIP (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet.pdf"
+title = "Microchip/Atmel AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM, Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017 (revision F, January 2017)"
+locator = "Table 1-1 Pin Descriptions and package pinouts p.2; 4 Memory Organization and 4.1 Device Addressing, Table 4-1 and Table 4-2 p.7; 8.1 Absolute Maximum Ratings, Table 8-1 and Table 8-2 p.13; 9 Ordering Code Detail p.16; 10 Ordering Information p.17"
+sha256 = "397ff061aa7a4ae36864592813831e9386e9467f10049064d7f139f26be6475e"
+[[models.source.pinout]]
+package = "8-lead SOIC / 8-lead TSSOP / 8-pad UDFN / 8-lead PDIP"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "GND", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.16-17): AT24C02D-<pkg><grade>[-<carrier>]; SSHM = SOIC, XHM = TSSOP, MAHM = UDFN,
+# PUM = PDIP; -T/-B/-E carrier. The 5-lead SOT23 (-STUM) has its own pad map and card; the
+# 8-ball VFBGA (-CUM) is not modelled. Excludes AT24C01D (different density), AT24C02C, AT24C02
+# and AT24CS02 (serial-number part).
+value_re = "(?i)^AT24C02D(-(SSHM|XHM|MAHM|PUM)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 256-byte array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at the worst listed condition (VCC = 3.6 V, 1 MHz)"
+
+[models.pins]
+# Table 1-1 Pin Descriptions (p.2), identical for SOIC, TSSOP, UDFN and PDIP.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints temperature under bias (-55 to +125 C) and
+# storage temperature, not a junction limit, and no thermal resistance.
+max_voltage_v = 4.1   # 8.1 Absolute Maximum Ratings p.13: supply voltage with respect to ground -0.5 V to +4.10 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.1
+basis = "Microchip/Atmel AT24C01D/02D Atmel-8871F, Table 8-2 DC Characteristics p.13 VCC 1.7 V to 3.6 V; 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground +4.10 V"
+abs_max_basis = "Atmel-8871F 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground -0.5 V to +4.10 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (4.1 Device Addressing, Table 4-1 p.7)
+size_bytes = 256        # 2-Kbit, 256 x 8 (first page of the datasheet)
+page_size = 8           # 32 pages of 8 bytes (4 Memory Organization p.7)
+word_address_bytes = 1  # one 8-bit word-address byte (Table 4-2 p.7)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 8-2 p.13 VCC minimum
+idle_a = 0.8e-6              # Table 8-2 p.13 ISB max, VCC = 3.6 V
+read_a = 0.5e-3              # Table 8-2 p.13 ICC1 max, read at 1 MHz, VCC = 3.6 V
+write_a = 1.0e-3             # Table 8-2 p.13 ICC2 max, write at 1 MHz, VCC = 3.6 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# AT24C02D 5-lead SOT23 (-STUM). The A2/A1/A0 pads are not bonded out; Table 4-1 p.7 states the
+# device answers only with the address bits at logic 0, so the fixed address 0x50 is the real one.
+[[models]]
+id = "at24c02d_sot23_5"
+kind = "digital"
+description = "Microchip AT24C02D 2-Kbit I2C EEPROM, 5-lead SOT23 (executable primary array at the fixed address 0x50)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet.pdf"
+title = "Microchip/Atmel AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM, Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017 (revision F, January 2017)"
+locator = "5-lead SOT23 pinout p.2; 4.1 Device Addressing and Table 4-1 (SOT23 row) p.7; 8.1 Absolute Maximum Ratings, Table 8-1 and Table 8-2 p.13; 10 Ordering Information p.17 (AT24C02D-STUM-T, package 5TS1)"
+sha256 = "397ff061aa7a4ae36864592813831e9386e9467f10049064d7f139f26be6475e"
+[[models.source.pinout]]
+package = "5-lead SOT23"
+pins = { "1" = "SCL", "2" = "GND", "3" = "SDA", "4" = "VCC", "5" = "WP" }
+
+[models.match]
+# AT24C02D-STUM-T only (5TS1). A bare "AT24C02D" with no package suffix binds the 8-pin card unless
+# the footprint is a SOT-23-5, in which case this card scores higher (footprint rule matched).
+value_re = "(?i)^AT24C02D(-STUM(-T)?)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 256-byte array at fixed address 0x50 is executable (the SOT23 has no address pins and answers only with A2:A0 = 000); WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at the worst listed condition (VCC = 3.6 V, 1 MHz)"
+
+[models.pins]
+# 5-lead SOT23 package figure p.2 (Top View).
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 4.1   # 8.1 Absolute Maximum Ratings p.13: supply voltage with respect to ground -0.5 V to +4.10 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.1
+basis = "Microchip/Atmel AT24C01D/02D Atmel-8871F, Table 8-2 DC Characteristics p.13 VCC 1.7 V to 3.6 V; 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground +4.10 V"
+abs_max_basis = "Atmel-8871F 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground -0.5 V to +4.10 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # SOT23 row of Table 4-1 p.7: 1010 000
+size_bytes = 256
+page_size = 8
+word_address_bytes = 1
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 8-2 p.13 VCC minimum
+idle_a = 0.8e-6              # Table 8-2 p.13 ISB max, VCC = 3.6 V
+read_a = 0.5e-3              # Table 8-2 p.13 ICC1 max, read at 1 MHz, VCC = 3.6 V
+write_a = 1.0e-3             # Table 8-2 p.13 ICC2 max, write at 1 MHz, VCC = 3.6 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT24C32D 32-Kbit (4096 x 8) I2C EEPROM, 8-lead SOIC / TSSOP, 8-pad UDFN / XDFN.
+#
+# Source: Microchip "AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit", DS20006047A (2018,
+#   obtained as the makerguides.com copy of the Microchip PDF because the Microchip site is not
+#   reachable by curl). PDF page numbers equal the printed DS20006047A page numbers.
+# A0/A1/A2/WP are pulled to GND internally when undriven (Table 2-1 note 2, p.5), so no
+# must-not-float role is declared.
+[[models]]
+id = "at24c32d_8pin"
+kind = "digital"
+description = "Microchip AT24C32D 32-Kbit I2C EEPROM, 8-lead SOIC/TSSOP, 8-pad UDFN/XDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.makerguides.com/wp-content/uploads/2024/12/AT24C32D-datasheet.pdf"
+title = "Microchip AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit Data Sheet, DS20006047A (2018)"
+locator = "1 Package Types p.4; Table 2-1 Pin Function Table p.5; 4.1 Absolute Maximum Ratings, Table 4-1 and Table 4-2 p.9; 4.5.1 Power-up Requirements p.11; 6 Memory Organization and 6.1 Device Addressing, Table 6-1 p.16; Product Identification System p.38"
+sha256 = "5d626a1bec7f0c525323f9251abaa890c37fe009036ffcef27218880c8251ca4"
+[[models.source.pinout]]
+package = "8-lead SOIC / 8-lead TSSOP / 8-pad UDFN / 8-pad XDFN"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "GND", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.38): AT24C32D-<pkg>HM-<carrier>; SSHM = SOIC, XHM = TSSOP, MAHM = UDFN,
+# MEHM = XDFN; -T/-B/-E carrier. The 5-lead SOT23 (-STUM) has its own card; the 8-ball VFBGA
+# (-CUM) is not modelled. Excludes AT24C32E (a different die and datasheet), AT24C32 and AT24CS32.
+value_re = "(?i)^AT24C32D(-(SSHM|XHM|MAHM|MEHM)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 4 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.0 V, 400 kHz"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.5), SOIC / TSSOP / UDFN / XDFN columns.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints temperature under bias (-55 to +125 C) and
+# storage temperature, not a junction limit, and no thermal resistance.
+max_voltage_v = 6.25   # 4.1 Absolute Maximum Ratings p.9: VCC 6.25 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Microchip AT24C32D DS20006047A, Table 4-1 DC and AC Operating Range p.9 VCC 1.7 V to 5.5 V; 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+abs_max_basis = "DS20006047A 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (6.1 Device Addressing, Table 6-1 p.16)
+size_bytes = 4096       # 32-Kbit, 4096 x 8: 128 pages of 32 bytes (6 Memory Organization p.16)
+page_size = 32
+word_address_bytes = 2  # two word-address bytes carrying a 12-bit address (6.1 p.16)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 4-1 p.9 VCC minimum (Table 4-4 p.11: VPOR 1.5 V max)
+idle_a = 6.0e-6              # Table 4-2 p.9 ISB1 max, VCC = 5.0 V
+read_a = 1.0e-3              # Table 4-2 p.9 ICC1 max, read at 400 kHz, VCC = 5.0 V
+write_a = 3.0e-3             # Table 4-2 p.9 ICC2 max, write at 400 kHz, VCC = 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# AT24C32D 5-lead SOT23 (-STUM). A2/A1/A0 are not bonded out; Table 6-1 p.16 fixes them at 0.
+[[models]]
+id = "at24c32d_sot23_5"
+kind = "digital"
+description = "Microchip AT24C32D 32-Kbit I2C EEPROM, 5-lead SOT23 (executable primary array at the fixed address 0x50)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.makerguides.com/wp-content/uploads/2024/12/AT24C32D-datasheet.pdf"
+title = "Microchip AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit Data Sheet, DS20006047A (2018)"
+locator = "1 Package Types (5-lead SOT23) p.4; Table 2-1 Pin Function Table p.5; 4.1 Absolute Maximum Ratings, Table 4-1 and Table 4-2 p.9; 6.1 Device Addressing, Table 6-1 SOT23 row p.16; Product Identification System p.38 (AT24C32D-STUM-T, package 5TS1)"
+sha256 = "5d626a1bec7f0c525323f9251abaa890c37fe009036ffcef27218880c8251ca4"
+[[models.source.pinout]]
+package = "5-lead SOT23"
+pins = { "1" = "SCL", "2" = "GND", "3" = "SDA", "4" = "VCC", "5" = "WP" }
+
+[models.match]
+# AT24C32D-STUM-T only (5TS1). A bare "AT24C32D" binds the 8-pin card unless the footprint is a
+# SOT-23-5, in which case this card scores higher (footprint rule matched).
+value_re = "(?i)^AT24C32D(-STUM(-T)?)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 4 KiB array at fixed address 0x50 is executable (the SOT23 has no address pins and answers only with A2:A0 = 000); WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.0 V, 400 kHz"
+
+[models.pins]
+# Table 2-1 (p.5) 5-lead SOT23 column.
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 6.25   # 4.1 Absolute Maximum Ratings p.9: VCC 6.25 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Microchip AT24C32D DS20006047A, Table 4-1 DC and AC Operating Range p.9 VCC 1.7 V to 5.5 V; 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+abs_max_basis = "DS20006047A 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # SOT23 row of Table 6-1 p.16: 1010 000
+size_bytes = 4096
+page_size = 32
+word_address_bytes = 2
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 4-1 p.9 VCC minimum
+idle_a = 6.0e-6              # Table 4-2 p.9 ISB1 max, VCC = 5.0 V
+read_a = 1.0e-3              # Table 4-2 p.9 ICC1 max, read at 400 kHz, VCC = 5.0 V
+write_a = 3.0e-3             # Table 4-2 p.9 ICC2 max, write at 400 kHz, VCC = 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT24C256C 256-Kbit (32,768 x 8) I2C EEPROM, 8-lead SOIC / TSSOP, 8-pad UDFN.
+#
+# Source: Microchip (Atmel) "AT24C256C ... DATASHEET", Atmel-8568F-SEEPROM-AT24C256C-Datasheet_012015.
+#   PDF page numbers equal printed page numbers.
+# A0/A1/A2/WP are pulled to GND internally when left floating (4 Pin Descriptions p.3), so no
+# must-not-float role is declared (Atmel only recommends tying them to a known state).
+[[models]]
+id = "at24c256c_8pin"
+kind = "digital"
+description = "Microchip AT24C256C 256-Kbit I2C EEPROM, 8-lead SOIC/TSSOP, 8-pad UDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8568-SEEPROM-AT24C256C-Datasheet.pdf"
+title = "Microchip/Atmel AT24C256C I2C-Compatible (2-Wire) Serial EEPROM 256-Kbit (32,768 x 8) Datasheet, Atmel-8568F-SEEPROM-AT24C256C-Datasheet_012015 (revision F, January 2015)"
+locator = "1 Pin Configurations and Pinouts, Table 1-1 p.2; 2 Absolute Maximum Ratings p.2; 4 Pin Descriptions p.3; 5 Memory Organization p.4; 5.2 DC Characteristics, Table 5-2 p.4; 7 Device Addressing p.9; 10 Ordering Code Detail p.13; 12 Ordering Information p.15"
+sha256 = "60d5cadc56737978e0f90127a95fb32bd347ed2415ef101cb23526126daf986e"
+[[models.source.pinout]]
+package = "8-lead SOIC / 8-lead TSSOP / 8-pad UDFN"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "GND", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.13, p.15): AT24C256C-<pkg>HL-<carrier>; SSHL = SOIC, XHL = TSSOP, MAHL = UDFN;
+# -B/-T/-E carrier. The 8-ball VFBGA (-CUL) is not modelled. Excludes AT24C256, AT24C256B, AT24CS256.
+value_re = "(?i)^AT24C256C(-(SSHL|XHL|MAHL)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.0 V, 400 kHz"
+
+[models.pins]
+# Table 1-1 Pin Configuration (p.2), identical for SOIC, TSSOP and UDFN.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.25   # 2 Absolute Maximum Ratings p.2: Maximum Operating Voltage 6.25 V (voltage on any pin -1.0 V to +7.0 V)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Atmel-8568F Table 5-2 DC Characteristics p.4 VCC1 supply voltage 1.7 V to 5.5 V; 2 Absolute Maximum Ratings p.2, Maximum Operating Voltage 6.25 V"
+abs_max_basis = "Atmel-8568F 2 Absolute Maximum Ratings p.2, Maximum Operating Voltage 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (7 Device Addressing p.9)
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 512 pages of 64 bytes; 5 Memory Organization p.4, 15-bit data word address
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 5-2 p.4 VCC1 minimum
+idle_a = 6.0e-6              # Table 5-2 p.4 ISB1 max, VCC = 5.0 V (1.0 uA max at VCC = 1.7 V)
+read_a = 2.0e-3              # Table 5-2 p.4 ICC1 max, read at 400 kHz, VCC = 5.0 V
+write_a = 3.0e-3              # Table 5-2 p.4 ICC2 max, write at 400 kHz, VCC = 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24AA256 / 24FC256 256-Kbit I2C EEPROM, 1.7 V to 5.5 V, 8-lead PDIP / SOIC / SOIJ / TSSOP / DFN / TDFN.
+#
+# Source: Microchip "24AA256/24LC256/24FC256 256K I2C Serial EEPROM", DS20001203W (2019), obtained as the
+#   Farnell copy (Microchip PCN SYST-06AKMT595 on PDF pages 1-5; the data sheet proper starts at PDF
+#   page 6 = printed page 1, so printed page n = PDF page n+5).
+# A0/A1/A2 and WP "must be connected to either VSS or VCC" (2.1 and 2.4, p.7), so those roles are
+# must-not-float. Currents: ICC read and write and ISB are the Table 1-1 D8/D9 maxima; ISB is the
+# E-temperature figure (5 uA at 5.5 V) because the ordering codes include the E grade.
+[[models]]
+id = "24aa256_8pin"
+kind = "digital"
+description = "Microchip 24AA256 / 24FC256 256-Kbit I2C EEPROM, 1.7 V to 5.5 V, 8-lead PDIP/SOIC/SOIJ/TSSOP/DFN/TDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/2864302.pdf"
+title = "Microchip 24AA256/24LC256/24FC256 256K I2C Serial EEPROM Data Sheet, DS20001203W (2019), as the Farnell copy that carries Microchip PCN SYST-06AKMT595 (7 Aug 2019) on its first five pages"
+locator = "Device Selection Table and Package Types p.1 (PDF p.6); 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.3 (PDF p.8); Table 2-1 Pin Function Table and 2.1 p.7 (PDF p.12); Product Identification System p.40 (PDF p.45). DS20001203W page n is PDF page n+5"
+sha256 = "48ba5ace395dbe7b070914acf982e366cbe1a2e44ec036d63903471646b26ec7"
+[[models.source.pinout]]
+package = "8-lead PDIP / SOIC / SOIJ / TSSOP / DFN / TDFN"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.40): 24AA256[T]-<I|E>/<pkg> and 24FC256[T]-<I|E>/<pkg>; pkg MF = DFN, P = PDIP, SN = SOIC,
+# SM = SOIJ, MNY = TDFN, ST = TSSOP; T = tape and reel. The MSOP (/MS) and chip-scale (CS16K) packages
+# have their own cards. Excludes 24LC256 (2.5 V part), 24AA256UID and 24AA256SC (different parts).
+value_re = "(?i)^24(AA|FC)256T?(-[IE]/(MF|P|SN|SM|MNY|ST))?$"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing, ACK polling and the 24FC256 1 MHz clock are not modelled; supply currents are datasheet maxima at VCC = 5.5 V"
+must_not_float_roles = "a0,a1,a2,wp"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.7), PDIP/SOIC/SOIJ/TSSOP/DFN/TDFN columns.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8): VCC 6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20001203W Table 1-1 DC Characteristics p.3 (PDF p.8) VCC 1.7 V to 5.5 V; Device Selection Table p.1: 24AA256 and 24FC256 1.7 V to 5.5 V; Absolute Maximum Ratings p.3 VCC 6.5 V"
+abs_max_basis = "DS20001203W 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8), VCC 6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (control code 1010 plus chip-select bits, p.10 (PDF p.15))
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 64-byte page write buffer, p.1 (PDF p.6); 15-bit word address in two bytes
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Device Selection Table p.1 (PDF p.6) VCC range 1.7 V to 5.5 V
+idle_a = 5.0e-6              # Table 1-1 D9 ICCS max, SDA = SCL = VCC = 5.5 V, A0/A1/A2/WP = VSS, E-temp (I-temp is 1.5 uA at 5.5 V)
+read_a = 400e-6              # Table 1-1 D8 ICC read max, VCC = 5.5 V, SCL = 400 kHz
+write_a = 3.0e-3              # Table 1-1 D8 ICC write max, VCC = 5.5 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# 24AA256 / 24FC256 8-lead MSOP (-I/MS, -E/MS): pins 1 and 2 (A0, A1) are no-connects, so only A2
+# selects the address (two devices per bus, 2.1 p.7). A bare ordering value on an MSOP footprint
+# resolves here (footprint rule), otherwise to the 8-pin card.
+[[models]]
+id = "24aa256_msop8"
+kind = "digital"
+description = "Microchip 24AA256 / 24FC256 256-Kbit I2C EEPROM, 1.7 V to 5.5 V, 8-lead MSOP (A0/A1 not connected)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/2864302.pdf"
+title = "Microchip 24AA256/24LC256/24FC256 256K I2C Serial EEPROM Data Sheet, DS20001203W (2019), as the Farnell copy that carries Microchip PCN SYST-06AKMT595 (7 Aug 2019) on its first five pages"
+locator = "Device Selection Table and Package Types p.1 (PDF p.6); 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.3 (PDF p.8); Table 2-1 Pin Function Table and 2.1 p.7 (PDF p.12); Product Identification System p.40 (PDF p.45). DS20001203W page n is PDF page n+5"
+sha256 = "48ba5ace395dbe7b070914acf982e366cbe1a2e44ec036d63903471646b26ec7"
+[[models.source.pinout]]
+package = "8-lead MSOP"
+pins = { "1" = "NC", "2" = "NC", "3" = "A2", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.40): 24AA256[T]-<I|E>/MS and 24FC256[T]-<I|E>/MS (MS = MSOP).
+value_re = "(?i)^24(AA|FC)256T?(-[IE]/MS)?$"
+footprint_re = "(?i)MSOP"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2 = 0; A0 and A1 are not connected on the MSOP) is executable; the A2 strap is not read, and WP enforcement, tWR write-cycle timing, ACK polling and the 24FC256 1 MHz clock are not modelled; supply currents are datasheet maxima at VCC = 5.5 V"
+must_not_float_roles = "a2,wp"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.7), MSOP column: A0 and A1 are not connected ("For the MSOP package only, pins A0 and A1 are not connected", 2.1 p.7).
+"1" = "nc"
+"2" = "nc"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8): VCC 6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20001203W Table 1-1 DC Characteristics p.3 (PDF p.8) VCC 1.7 V to 5.5 V; Device Selection Table p.1: 24AA256 and 24FC256 1.7 V to 5.5 V; Absolute Maximum Ratings p.3 VCC 6.5 V"
+abs_max_basis = "DS20001203W 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8), VCC 6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (control code 1010 plus chip-select bits, p.10 (PDF p.15))
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 64-byte page write buffer, p.1 (PDF p.6); 15-bit word address in two bytes
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Device Selection Table p.1 (PDF p.6) VCC range 1.7 V to 5.5 V
+idle_a = 5.0e-6              # Table 1-1 D9 ICCS max, SDA = SCL = VCC = 5.5 V, A0/A1/A2/WP = VSS, E-temp (I-temp is 1.5 uA at 5.5 V)
+read_a = 400e-6              # Table 1-1 D8 ICC read max, VCC = 5.5 V, SCL = 400 kHz
+write_a = 3.0e-3              # Table 1-1 D8 ICC write max, VCC = 5.5 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# 24AA256 8-ball chip-scale package (24AA256T-I/CS16K). The ball numbers are those of Table 2-1
+# (p.7), CSP column; they are not a pin-order top-to-bottom numbering, and a footprint that names the
+# balls by grid reference (A1, B2, ...) will not match this map.
+[[models]]
+id = "24aa256_csp8"
+kind = "digital"
+description = "Microchip 24AA256 256-Kbit I2C EEPROM, 1.7 V to 5.5 V, 8-ball chip-scale package (CS16K)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/2864302.pdf"
+title = "Microchip 24AA256/24LC256/24FC256 256K I2C Serial EEPROM Data Sheet, DS20001203W (2019), as the Farnell copy that carries Microchip PCN SYST-06AKMT595 (7 Aug 2019) on its first five pages"
+locator = "Device Selection Table and Package Types p.1 (PDF p.6); 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.3 (PDF p.8); Table 2-1 Pin Function Table and 2.1 p.7 (PDF p.12); Product Identification System p.40 (PDF p.45). DS20001203W page n is PDF page n+5"
+sha256 = "48ba5ace395dbe7b070914acf982e366cbe1a2e44ec036d63903471646b26ec7"
+[[models.source.pinout]]
+package = "8-ball CSP"
+pins = { "1" = "VCC", "2" = "A1", "3" = "A0", "4" = "WP", "5" = "A2", "6" = "SDA", "7" = "SCL", "8" = "VSS" }
+
+[models.match]
+# Ordering (p.40): 24AA256T-I/CS16K (the Product Identification example also prints 24AA256T-CS16K);
+# the 24LC256 and 24FC256 are not offered in CSP (Device Selection Table p.1).
+value_re = "(?i)^24AA256T?(-[IE])?[-/]CS16K$"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.5 V"
+must_not_float_roles = "a0,a1,a2,wp"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.7), CSP column.
+"1" = "vcc"
+"2" = "a1"
+"3" = "a0"
+"4" = "wp"
+"5" = "a2"
+"6" = "sda"
+"7" = "scl"
+"8" = "gnd"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8): VCC 6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20001203W Table 1-1 DC Characteristics p.3 (PDF p.8) VCC 1.7 V to 5.5 V; Device Selection Table p.1: 24AA256 1.7 V to 5.5 V; Absolute Maximum Ratings p.3 VCC 6.5 V"
+abs_max_basis = "DS20001203W 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8), VCC 6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (control code 1010 plus chip-select bits, p.10 (PDF p.15))
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 64-byte page write buffer, p.1 (PDF p.6); 15-bit word address in two bytes
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Device Selection Table p.1 (PDF p.6) VCC range 1.7 V to 5.5 V
+idle_a = 5.0e-6              # Table 1-1 D9 ICCS max, SDA = SCL = VCC = 5.5 V, A0/A1/A2/WP = VSS, E-temp (I-temp is 1.5 uA at 5.5 V)
+read_a = 400e-6              # Table 1-1 D8 ICC read max, VCC = 5.5 V, SCL = 400 kHz
+write_a = 3.0e-3              # Table 1-1 D8 ICC write max, VCC = 5.5 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24LC256 256-Kbit I2C EEPROM, 2.5 V to 5.5 V, 8-lead PDIP / SOIC / SOIJ / TSSOP / DFN / TDFN.
+#
+# Source: Microchip "24AA256/24LC256/24FC256 256K I2C Serial EEPROM", DS20001203W (2019), obtained as the
+#   Farnell copy (Microchip PCN SYST-06AKMT595 on PDF pages 1-5; the data sheet proper starts at PDF
+#   page 6 = printed page 1, so printed page n = PDF page n+5).
+# A0/A1/A2 and WP "must be connected to either VSS or VCC" (2.1 and 2.4, p.7), so those roles are
+# must-not-float. Currents: ICC read and write and ISB are the Table 1-1 D8/D9 maxima; ISB is the
+# E-temperature figure (5 uA at 5.5 V) because the ordering codes include the E grade.
+[[models]]
+id = "24lc256_8pin"
+kind = "digital"
+description = "Microchip 24LC256 256-Kbit I2C EEPROM, 2.5 V to 5.5 V, 8-lead PDIP/SOIC/SOIJ/TSSOP/DFN/TDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/2864302.pdf"
+title = "Microchip 24AA256/24LC256/24FC256 256K I2C Serial EEPROM Data Sheet, DS20001203W (2019), as the Farnell copy that carries Microchip PCN SYST-06AKMT595 (7 Aug 2019) on its first five pages"
+locator = "Device Selection Table and Package Types p.1 (PDF p.6); 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.3 (PDF p.8); Table 2-1 Pin Function Table and 2.1 p.7 (PDF p.12); Product Identification System p.40 (PDF p.45). DS20001203W page n is PDF page n+5"
+sha256 = "48ba5ace395dbe7b070914acf982e366cbe1a2e44ec036d63903471646b26ec7"
+[[models.source.pinout]]
+package = "8-lead PDIP / SOIC / SOIJ / TSSOP / DFN / TDFN"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.40): 24LC256[T]-<I|E>/<pkg>; pkg MF = DFN, P = PDIP, SN = SOIC, SM = SOIJ, MNY = TDFN,
+# ST = TSSOP; T = tape and reel. The MSOP (/MS) has its own card. Excludes 24AA256 / 24FC256 (1.7 V
+# parts), 24LC256 variants such as 24LC256SC, and the 24LC025/24LC65/24LC128/24LC512 densities.
+value_re = "(?i)^24LC256T?(-[IE]/(MF|P|SN|SM|MNY|ST))?$"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.5 V"
+must_not_float_roles = "a0,a1,a2,wp"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.7), PDIP/SOIC/SOIJ/TSSOP/DFN/TDFN columns.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8): VCC 6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20001203W Device Selection Table p.1 (PDF p.6): 24LC256 VCC 2.5 V to 5.5 V; Table 1-1 DC Characteristics p.3 upper limit 5.5 V; Absolute Maximum Ratings p.3 VCC 6.5 V"
+abs_max_basis = "DS20001203W 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8), VCC 6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (control code 1010 plus chip-select bits, p.10 (PDF p.15))
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 64-byte page write buffer, p.1 (PDF p.6); 15-bit word address in two bytes
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.5   # Device Selection Table p.1 (PDF p.6) 24LC256 VCC range 2.5 V to 5.5 V
+idle_a = 5.0e-6              # Table 1-1 D9 ICCS max, SDA = SCL = VCC = 5.5 V, A0/A1/A2/WP = VSS, E-temp (I-temp is 1.5 uA at 5.5 V)
+read_a = 400e-6              # Table 1-1 D8 ICC read max, VCC = 5.5 V, SCL = 400 kHz
+write_a = 3.0e-3              # Table 1-1 D8 ICC write max, VCC = 5.5 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# 24LC256 8-lead MSOP (-I/MS, -E/MS): pins 1 and 2 (A0, A1) are no-connects, only A2 selects the
+# address (2.1 p.7).
+[[models]]
+id = "24lc256_msop8"
+kind = "digital"
+description = "Microchip 24LC256 256-Kbit I2C EEPROM, 2.5 V to 5.5 V, 8-lead MSOP (A0/A1 not connected)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/2864302.pdf"
+title = "Microchip 24AA256/24LC256/24FC256 256K I2C Serial EEPROM Data Sheet, DS20001203W (2019), as the Farnell copy that carries Microchip PCN SYST-06AKMT595 (7 Aug 2019) on its first five pages"
+locator = "Device Selection Table and Package Types p.1 (PDF p.6); 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.3 (PDF p.8); Table 2-1 Pin Function Table and 2.1 p.7 (PDF p.12); Product Identification System p.40 (PDF p.45). DS20001203W page n is PDF page n+5"
+sha256 = "48ba5ace395dbe7b070914acf982e366cbe1a2e44ec036d63903471646b26ec7"
+[[models.source.pinout]]
+package = "8-lead MSOP"
+pins = { "1" = "NC", "2" = "NC", "3" = "A2", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.40): 24LC256[T]-<I|E>/MS (MS = MSOP).
+value_re = "(?i)^24LC256T?(-[IE]/MS)?$"
+footprint_re = "(?i)MSOP"
+
+[models.params]
+warning = "primary 32 KiB array at fixed address 0x50 (A2 = 0; A0 and A1 are not connected on the MSOP) is executable; the A2 strap is not read, and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.5 V"
+must_not_float_roles = "a2,wp"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.7), MSOP column: A0 and A1 are not connected ("For the MSOP package only, pins A0 and A1 are not connected", 2.1 p.7).
+"1" = "nc"
+"2" = "nc"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8): VCC 6.5 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20001203W Device Selection Table p.1 (PDF p.6): 24LC256 VCC 2.5 V to 5.5 V; Table 1-1 DC Characteristics p.3 upper limit 5.5 V; Absolute Maximum Ratings p.3 VCC 6.5 V"
+abs_max_basis = "DS20001203W 1.0 Electrical Characteristics, Absolute Maximum Ratings p.3 (PDF p.8), VCC 6.5 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (control code 1010 plus chip-select bits, p.10 (PDF p.15))
+size_bytes = 32768      # 256-Kbit, 32,768 x 8
+page_size = 64          # 64-byte page write buffer, p.1 (PDF p.6); 15-bit word address in two bytes
+word_address_bytes = 2  # 15-bit word address sent as two bytes
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.5   # Device Selection Table p.1 (PDF p.6) 24LC256 VCC range 2.5 V to 5.5 V
+idle_a = 5.0e-6              # Table 1-1 D9 ICCS max, SDA = SCL = VCC = 5.5 V, A0/A1/A2/WP = VSS, E-temp (I-temp is 1.5 uA at 5.5 V)
+read_a = 400e-6              # Table 1-1 D8 ICC read max, VCC = 5.5 V, SCL = 400 kHz
+write_a = 3.0e-3              # Table 1-1 D8 ICC write max, VCC = 5.5 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]

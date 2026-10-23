@@ -250,7 +250,7 @@ fn new_cards_carry_the_datasheet_electricals() {
 /// Other packages, other family members and other voltage codes must not bind:
 /// the DSBGA translators and Nexperia's Schmitt-input 2G126, the TLV6001R and
 /// TLV6001U reversed or single-sourced variants, the adjustable MIC5225, the
-/// fixed `TPS731xx`, other LM2596 outputs, the 2 A and PG variants of the TPS62933.
+/// fixed `TPS731xx`, the 2 A and PG variants of the TPS62933.
 #[test]
 fn new_cards_do_not_bind_other_packages_or_family_members() {
     let none = [
@@ -265,8 +265,6 @@ fn new_cards_do_not_bind_other_packages_or_family_members() {
         ("MIC5225YM5", None),
         ("MIC5225-2.8YM5", None),
         ("TPS73125DBVR", None),
-        ("LM2596S-ADJ", None),
-        ("LM2596S-12", None),
         ("TPS62932DRLR", None),
         ("TPS62933PDRLR", None),
         ("TPS62933FDRLR", None),

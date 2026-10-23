@@ -1,0 +1,4426 @@
+# Official built-in part library: converters.
+#
+# Cards here are written from vendor datasheets only (every value carries a basis and a source).
+# See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+[[models]]
+id = "ads1115_rug"
+kind = "digital"
+description = "TI ADS1115 16-bit 4-channel I2C delta-sigma ADC with PGA and comparator (strapped I2C register map: config, thresholds, mux/PGA-steered conversion; pad map and supply draw) in X2QFN-10 (RUG)"
+variant_of = "ads1115"
+
+[models.match]
+# Family match: a bare ADS1115 (or an "ADC_" library category prefix) names the same die.
+# The ADS1113 and ADS1114 (no AIN2/AIN3, NC pins) are different parts with their own pin table
+# and are excluded by the anchored number. This member's orderable code: ADS1115IRUGR, ADS1115IRUGT or ADS1115IRUGTG4.
+value_re = "(?i)^(ADC_)?ADS1115"
+
+[models.variant]
+orderable_re = "(?i)^(ADC_)?ADS1115I?RUG"
+orderable = ["ADS1115IRUGR", "ADS1115IRUGT", "ADS1115IRUGTG4"]
+package = "X2QFN-10 (RUG)"
+basis = "TI ADS1115 SBAS444E, Package Information p.1 and the Package Option Addendum: RUG is X2QFN-10 (RUG)"
+
+[models.params]
+vol = { typ = 0.15, max = 0.4, unit = "V", conditions = "IOL = 3 mA, VDD = 3.3 V", basis = "5.5 Electrical Characteristics p.5, VOL 0.15 V typ, 0.4 V max at IOL = 3 mA (open-drain ALERT/RDY and SDA)" }
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.7 x 3.3 V: 5.5 Electrical Characteristics p.5, VIH 0.7 VDD min (5.5 V max), SDA, SCL, ADDR" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.3 x 3.3 V: 5.5 Electrical Characteristics p.5, VIL GND min, 0.3 VDD max, SDA, SCL, ADDR" }
+supply_static_ua = 150.0   # 5.5 Electrical Characteristics p.6, IVDD operating typ, VDD = 3.3 V (200 max at 25 C, 300 max over temperature)
+supply_pin = "8"           # VDD
+gnd_pin = "3"              # GND
+warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.pins]
+# Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.
+# SDA and SCL are named in the bus vocabulary.
+"1" = "addr"
+"2" = "alert_rdy"
+"3" = "gnd"
+"4" = "ain0"
+"5" = "ain1"
+"6" = "ain2"
+"7" = "ain3"
+"8" = "vdd"
+"9" = "sda"
+"10" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
+max_pin_current_a = 0.01       # 5.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
+max_junction_temp_c = 150.0    # 5.1 p.4, junction temperature TJ max
+theta_ja_c_per_w = 245.2       # 5.4 Thermal Information p.4, RθJA RUG
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, power supply VDD to GND 2 V to 5.5 V; 5.1 Absolute Maximum Ratings p.4, VDD to GND 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "addr", "alert_rdy"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, digital input voltage VDIG GND to 5.5 V"
+abs_max_basis = "TI ADS1115 SBAS444E, 5.1 Absolute Maximum Ratings p.4, digital input voltage SDA, SCL, ADDR, ALERT/RDY GND - 0.3 V to 5.5 V"
+
+# Table 7-2 (p.20): ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b.
+# "The state of address pin ADDR is sampled continuously." A strap the binder cannot read as
+# one of the four (floating, or on another net) binds the spec default 0x48 marked assumed.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ADS1115 registers"
+bus = "i2c"
+i2c_address = 0x48
+
+# Table 4-1 Pin Functions p.3, the same pad map as [models.pins].
+[sensor.pins]
+1 = "addr"
+2 = "alert_rdy"
+3 = "gnd"
+4 = "ain0"
+5 = "ain1"
+6 = "ain2"
+7 = "ain3"
+8 = "vdd"
+9 = "sda"
+10 = "scl"
+
+[[sensor.address_select]]
+address = 0x48
+straps = { addr = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { addr = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { addr = "scl" }
+
+# Volts at AIN0..AIN3, driven by the harness (not bound to net voltages).
+[[sensor.input]]
+name = "a0"
+default = 0.0
+[[sensor.input]]
+name = "a1"
+default = 0.0
+[[sensor.input]]
+name = "a2"
+default = 0.0
+[[sensor.input]]
+name = "a3"
+default = 0.0
+
+# Config register (P[1:0] = 01b), reset 8583h = 34179: OS = 1, MUX = 000, PGA = 010
+# (+-2.048 V), MODE = 1, DR = 100, COMP_QUE = 11. MUX[14:12] and PGA[11:9] steer the
+# conversion register below.
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 34179.0
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Lo_thresh (P[1:0] = 10b) reset 8000h; Hi_thresh (P[1:0] = 11b) reset 7FFFh.
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "lo_thresh"
+default = -32768.0
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "hi_thresh"
+default = 32767.0
+
+# Conversion register (P[1:0] = 00b): Vin x 32768 / FSR (Section 7.5.4: LSB = FSR / 2^15, +FS = 7FFFh, -FS = 8000h; the i16_be encoding clips at those codes).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 32768 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))"
+
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config"
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "lo_thresh"
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0     # 5.3 Recommended Operating Conditions, VDD min (no POR voltage is published)
+idle_a = 0.00015               # 5.5 p.6, IVDD operating typ, continuous-conversion
+read_a = 0.00015
+write_a = 0.00015
+low_power_a = 0.0000005        # 5.5 p.6, IVDD power-down typ at 25 C (2 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "digital_input_tolerance", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "config_register_write_readback", "threshold_register_write_readback", "mux_and_pga_steered_conversion_register", "full_scale_clipping", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing_and_data_rate", "single_shot_os_bit_handshake", "comparator_and_alert_rdy_pin", "general_call_reset", "continuous_vs_single_shot_mode", "analog_input_net_sampling", "analog_input_vdd_plus_0v3_limit", "input_impedance_loading", "offset_gain_and_noise_errors", "power_down_state_current_gating"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads1115.pdf"
+title = "Texas Instruments ADS1113, ADS1114, ADS1115 Ultra-Small, Low-Power, I2C-Compatible, 860SPS, 16-Bit ADCs With Internal Reference, Oscillator, and Programmable Comparator, SBAS444E, May 2009, revised December 2024"
+locator = "Table 4-1 Pin Functions p.3; 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information p.4; 5.5 Electrical Characteristics pp.5-6; 5.6 Timing Requirements p.6; Table 7-1 Full-Scale Range p.15; 7.5.1.1 Table 7-2 ADDR pin p.20; 7.5.4 Data Format p.23; 8.1.2 Conversion Register p.24; 8.1.3 Config Register p.25 and Table 8-3"
+sha256 = "eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834"
+
+[[models.source.pinout]]
+package = "X2QFN-10 (RUG)"
+pins = { "1" = "ADDR", "2" = "ALERT/RDY", "3" = "GND", "4" = "AIN0", "5" = "AIN1", "6" = "AIN2", "7" = "AIN3", "8" = "VDD", "9" = "SDA", "10" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage, upper limit"
+max = 5.5
+unit = "V"
+conditions = "SDA, SCL, ADDR; the lower limit is 0.7 VDD (a supply-relative limit); VIL is GND to 0.3 VDD"
+basis = "5.5 Electrical Characteristics p.5, DIGITAL INPUT/OUTPUT, VIH 0.7 VDD min, 5.5 V max"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+typ = 0.15
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA, VDD = 3.3 V"
+basis = "5.5 Electrical Characteristics p.5, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "GND < VDIG < VDD"
+basis = "5.5 Electrical Characteristics p.5, digital input leakage"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, power-down"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (5 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD power-down"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, operating"
+typ = 150.0
+max = 200.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (300 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD operating"
+
+[[models.source.characteristic]]
+parameter = "fSCL SCL clock frequency, fast mode"
+min = 0.01
+max = 0.4
+unit = "MHz"
+conditions = "VDD = 2.0 V to 5.5 V, I2C fast mode (high-speed mode 0.01 to 3.4 MHz)"
+basis = "5.6 Timing Requirements: I2C, fSCL"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 245.2
+unit = "°C/W"
+conditions = "RUG 10 pins"
+package = "X2QFN-10 (RUG)"
+basis = "5.4 Thermal Information p.4, RθJA RUG"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ads1115_dyn"
+kind = "digital"
+description = "TI ADS1115 16-bit 4-channel I2C delta-sigma ADC with PGA and comparator (strapped I2C register map: config, thresholds, mux/PGA-steered conversion; pad map and supply draw) in SOT-10 (DYN)"
+variant_of = "ads1115"
+
+[models.match]
+# Family match: a bare ADS1115 (or an "ADC_" library category prefix) names the same die.
+# The ADS1113 and ADS1114 (no AIN2/AIN3, NC pins) are different parts with their own pin table
+# and are excluded by the anchored number. This member's orderable code: ADS1115IDYNR.
+value_re = "(?i)^(ADC_)?ADS1115"
+
+[models.variant]
+orderable_re = "(?i)^(ADC_)?ADS1115I?DYN"
+orderable = ["ADS1115IDYNR"]
+package = "SOT-10 (DYN)"
+basis = "TI ADS1115 SBAS444E, Package Information p.1 and the Package Option Addendum: DYN is SOT-10 (DYN)"
+
+[models.params]
+vol = { typ = 0.15, max = 0.4, unit = "V", conditions = "IOL = 3 mA, VDD = 3.3 V", basis = "5.5 Electrical Characteristics p.5, VOL 0.15 V typ, 0.4 V max at IOL = 3 mA (open-drain ALERT/RDY and SDA)" }
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.7 x 3.3 V: 5.5 Electrical Characteristics p.5, VIH 0.7 VDD min (5.5 V max), SDA, SCL, ADDR" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.3 x 3.3 V: 5.5 Electrical Characteristics p.5, VIL GND min, 0.3 VDD max, SDA, SCL, ADDR" }
+supply_static_ua = 150.0   # 5.5 Electrical Characteristics p.6, IVDD operating typ, VDD = 3.3 V (200 max at 25 C, 300 max over temperature)
+supply_pin = "8"           # VDD
+gnd_pin = "3"              # GND
+warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.pins]
+# Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.
+# SDA and SCL are named in the bus vocabulary.
+"1" = "addr"
+"2" = "alert_rdy"
+"3" = "gnd"
+"4" = "ain0"
+"5" = "ain1"
+"6" = "ain2"
+"7" = "ain3"
+"8" = "vdd"
+"9" = "sda"
+"10" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
+max_pin_current_a = 0.01       # 5.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
+max_junction_temp_c = 150.0    # 5.1 p.4, junction temperature TJ max
+theta_ja_c_per_w = 147.1       # 5.4 Thermal Information p.4, RθJA DYN
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, power supply VDD to GND 2 V to 5.5 V; 5.1 Absolute Maximum Ratings p.4, VDD to GND 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "addr", "alert_rdy"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, digital input voltage VDIG GND to 5.5 V"
+abs_max_basis = "TI ADS1115 SBAS444E, 5.1 Absolute Maximum Ratings p.4, digital input voltage SDA, SCL, ADDR, ALERT/RDY GND - 0.3 V to 5.5 V"
+
+# Table 7-2 (p.20): ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b.
+# "The state of address pin ADDR is sampled continuously." A strap the binder cannot read as
+# one of the four (floating, or on another net) binds the spec default 0x48 marked assumed.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ADS1115 registers"
+bus = "i2c"
+i2c_address = 0x48
+
+# Table 4-1 Pin Functions p.3, the same pad map as [models.pins].
+[sensor.pins]
+1 = "addr"
+2 = "alert_rdy"
+3 = "gnd"
+4 = "ain0"
+5 = "ain1"
+6 = "ain2"
+7 = "ain3"
+8 = "vdd"
+9 = "sda"
+10 = "scl"
+
+[[sensor.address_select]]
+address = 0x48
+straps = { addr = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { addr = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { addr = "scl" }
+
+# Volts at AIN0..AIN3, driven by the harness (not bound to net voltages).
+[[sensor.input]]
+name = "a0"
+default = 0.0
+[[sensor.input]]
+name = "a1"
+default = 0.0
+[[sensor.input]]
+name = "a2"
+default = 0.0
+[[sensor.input]]
+name = "a3"
+default = 0.0
+
+# Config register (P[1:0] = 01b), reset 8583h = 34179: OS = 1, MUX = 000, PGA = 010
+# (+-2.048 V), MODE = 1, DR = 100, COMP_QUE = 11. MUX[14:12] and PGA[11:9] steer the
+# conversion register below.
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 34179.0
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Lo_thresh (P[1:0] = 10b) reset 8000h; Hi_thresh (P[1:0] = 11b) reset 7FFFh.
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "lo_thresh"
+default = -32768.0
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "hi_thresh"
+default = 32767.0
+
+# Conversion register (P[1:0] = 00b): Vin x 32768 / FSR (Section 7.5.4: LSB = FSR / 2^15, +FS = 7FFFh, -FS = 8000h; the i16_be encoding clips at those codes).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 32768 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))"
+
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config"
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "lo_thresh"
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0     # 5.3 Recommended Operating Conditions, VDD min (no POR voltage is published)
+idle_a = 0.00015               # 5.5 p.6, IVDD operating typ, continuous-conversion
+read_a = 0.00015
+write_a = 0.00015
+low_power_a = 0.0000005        # 5.5 p.6, IVDD power-down typ at 25 C (2 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "digital_input_tolerance", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "config_register_write_readback", "threshold_register_write_readback", "mux_and_pga_steered_conversion_register", "full_scale_clipping", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing_and_data_rate", "single_shot_os_bit_handshake", "comparator_and_alert_rdy_pin", "general_call_reset", "continuous_vs_single_shot_mode", "analog_input_net_sampling", "analog_input_vdd_plus_0v3_limit", "input_impedance_loading", "offset_gain_and_noise_errors", "power_down_state_current_gating"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads1115.pdf"
+title = "Texas Instruments ADS1113, ADS1114, ADS1115 Ultra-Small, Low-Power, I2C-Compatible, 860SPS, 16-Bit ADCs With Internal Reference, Oscillator, and Programmable Comparator, SBAS444E, May 2009, revised December 2024"
+locator = "Table 4-1 Pin Functions p.3; 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information p.4; 5.5 Electrical Characteristics pp.5-6; 5.6 Timing Requirements p.6; Table 7-1 Full-Scale Range p.15; 7.5.1.1 Table 7-2 ADDR pin p.20; 7.5.4 Data Format p.23; 8.1.2 Conversion Register p.24; 8.1.3 Config Register p.25 and Table 8-3"
+sha256 = "eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834"
+
+[[models.source.pinout]]
+package = "SOT-10 (DYN)"
+pins = { "1" = "ADDR", "2" = "ALERT/RDY", "3" = "GND", "4" = "AIN0", "5" = "AIN1", "6" = "AIN2", "7" = "AIN3", "8" = "VDD", "9" = "SDA", "10" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage, upper limit"
+max = 5.5
+unit = "V"
+conditions = "SDA, SCL, ADDR; the lower limit is 0.7 VDD (a supply-relative limit); VIL is GND to 0.3 VDD"
+basis = "5.5 Electrical Characteristics p.5, DIGITAL INPUT/OUTPUT, VIH 0.7 VDD min, 5.5 V max"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+typ = 0.15
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA, VDD = 3.3 V"
+basis = "5.5 Electrical Characteristics p.5, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "GND < VDIG < VDD"
+basis = "5.5 Electrical Characteristics p.5, digital input leakage"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, power-down"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (5 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD power-down"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, operating"
+typ = 150.0
+max = 200.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (300 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD operating"
+
+[[models.source.characteristic]]
+parameter = "fSCL SCL clock frequency, fast mode"
+min = 0.01
+max = 0.4
+unit = "MHz"
+conditions = "VDD = 2.0 V to 5.5 V, I2C fast mode (high-speed mode 0.01 to 3.4 MHz)"
+basis = "5.6 Timing Requirements: I2C, fSCL"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 147.1
+unit = "°C/W"
+conditions = "DYN 10 pins"
+package = "SOT-10 (DYN)"
+basis = "5.4 Thermal Information p.4, RθJA DYN"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ads1115_dgs"
+kind = "digital"
+description = "TI ADS1115 16-bit 4-channel I2C delta-sigma ADC with PGA and comparator (strapped I2C register map: config, thresholds, mux/PGA-steered conversion; pad map and supply draw) in VSSOP-10 (DGS)"
+variant_of = "ads1115"
+
+[models.match]
+# Family match: a bare ADS1115 (or an "ADC_" library category prefix) names the same die.
+# The ADS1113 and ADS1114 (no AIN2/AIN3, NC pins) are different parts with their own pin table
+# and are excluded by the anchored number. This member's orderable code: ADS1115IDGSR or ADS1115IDGST.
+value_re = "(?i)^(ADC_)?ADS1115"
+
+[models.variant]
+orderable_re = "(?i)^(ADC_)?ADS1115I?DGS"
+orderable = ["ADS1115IDGSR", "ADS1115IDGST"]
+package = "VSSOP-10 (DGS)"
+basis = "TI ADS1115 SBAS444E, Package Information p.1 and the Package Option Addendum: DGS is VSSOP-10 (DGS)"
+
+[models.params]
+vol = { typ = 0.15, max = 0.4, unit = "V", conditions = "IOL = 3 mA, VDD = 3.3 V", basis = "5.5 Electrical Characteristics p.5, VOL 0.15 V typ, 0.4 V max at IOL = 3 mA (open-drain ALERT/RDY and SDA)" }
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.7 x 3.3 V: 5.5 Electrical Characteristics p.5, VIH 0.7 VDD min (5.5 V max), SDA, SCL, ADDR" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.3 x 3.3 V: 5.5 Electrical Characteristics p.5, VIL GND min, 0.3 VDD max, SDA, SCL, ADDR" }
+supply_static_ua = 150.0   # 5.5 Electrical Characteristics p.6, IVDD operating typ, VDD = 3.3 V (200 max at 25 C, 300 max over temperature)
+supply_pin = "8"           # VDD
+gnd_pin = "3"              # GND
+warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.pins]
+# Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.
+# SDA and SCL are named in the bus vocabulary.
+"1" = "addr"
+"2" = "alert_rdy"
+"3" = "gnd"
+"4" = "ain0"
+"5" = "ain1"
+"6" = "ain2"
+"7" = "ain3"
+"8" = "vdd"
+"9" = "sda"
+"10" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
+max_pin_current_a = 0.01       # 5.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
+max_junction_temp_c = 150.0    # 5.1 p.4, junction temperature TJ max
+theta_ja_c_per_w = 182.7       # 5.4 Thermal Information p.4, RθJA DGS
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, power supply VDD to GND 2 V to 5.5 V; 5.1 Absolute Maximum Ratings p.4, VDD to GND 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "addr", "alert_rdy"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "TI ADS1115 SBAS444E, 5.3 Recommended Operating Conditions p.4, digital input voltage VDIG GND to 5.5 V"
+abs_max_basis = "TI ADS1115 SBAS444E, 5.1 Absolute Maximum Ratings p.4, digital input voltage SDA, SCL, ADDR, ALERT/RDY GND - 0.3 V to 5.5 V"
+
+# Table 7-2 (p.20): ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b.
+# "The state of address pin ADDR is sampled continuously." A strap the binder cannot read as
+# one of the four (floating, or on another net) binds the spec default 0x48 marked assumed.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ADS1115 registers"
+bus = "i2c"
+i2c_address = 0x48
+
+# Table 4-1 Pin Functions p.3, the same pad map as [models.pins].
+[sensor.pins]
+1 = "addr"
+2 = "alert_rdy"
+3 = "gnd"
+4 = "ain0"
+5 = "ain1"
+6 = "ain2"
+7 = "ain3"
+8 = "vdd"
+9 = "sda"
+10 = "scl"
+
+[[sensor.address_select]]
+address = 0x48
+straps = { addr = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { addr = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { addr = "scl" }
+
+# Volts at AIN0..AIN3, driven by the harness (not bound to net voltages).
+[[sensor.input]]
+name = "a0"
+default = 0.0
+[[sensor.input]]
+name = "a1"
+default = 0.0
+[[sensor.input]]
+name = "a2"
+default = 0.0
+[[sensor.input]]
+name = "a3"
+default = 0.0
+
+# Config register (P[1:0] = 01b), reset 8583h = 34179: OS = 1, MUX = 000, PGA = 010
+# (+-2.048 V), MODE = 1, DR = 100, COMP_QUE = 11. MUX[14:12] and PGA[11:9] steer the
+# conversion register below.
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 34179.0
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Lo_thresh (P[1:0] = 10b) reset 8000h; Hi_thresh (P[1:0] = 11b) reset 7FFFh.
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "lo_thresh"
+default = -32768.0
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "hi_thresh"
+default = 32767.0
+
+# Conversion register (P[1:0] = 00b): Vin x 32768 / FSR (Section 7.5.4: LSB = FSR / 2^15, +FS = 7FFFh, -FS = 8000h; the i16_be encoding clips at those codes).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 32768 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))"
+
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config"
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "lo_thresh"
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0     # 5.3 Recommended Operating Conditions, VDD min (no POR voltage is published)
+idle_a = 0.00015               # 5.5 p.6, IVDD operating typ, continuous-conversion
+read_a = 0.00015
+write_a = 0.00015
+low_power_a = 0.0000005        # 5.5 p.6, IVDD power-down typ at 25 C (2 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "digital_input_tolerance", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "config_register_write_readback", "threshold_register_write_readback", "mux_and_pga_steered_conversion_register", "full_scale_clipping", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing_and_data_rate", "single_shot_os_bit_handshake", "comparator_and_alert_rdy_pin", "general_call_reset", "continuous_vs_single_shot_mode", "analog_input_net_sampling", "analog_input_vdd_plus_0v3_limit", "input_impedance_loading", "offset_gain_and_noise_errors", "power_down_state_current_gating"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads1115.pdf"
+title = "Texas Instruments ADS1113, ADS1114, ADS1115 Ultra-Small, Low-Power, I2C-Compatible, 860SPS, 16-Bit ADCs With Internal Reference, Oscillator, and Programmable Comparator, SBAS444E, May 2009, revised December 2024"
+locator = "Table 4-1 Pin Functions p.3; 5.1 Absolute Maximum Ratings p.4; 5.3 Recommended Operating Conditions p.4; 5.4 Thermal Information p.4; 5.5 Electrical Characteristics pp.5-6; 5.6 Timing Requirements p.6; Table 7-1 Full-Scale Range p.15; 7.5.1.1 Table 7-2 ADDR pin p.20; 7.5.4 Data Format p.23; 8.1.2 Conversion Register p.24; 8.1.3 Config Register p.25 and Table 8-3"
+sha256 = "eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834"
+
+[[models.source.pinout]]
+package = "VSSOP-10 (DGS)"
+pins = { "1" = "ADDR", "2" = "ALERT/RDY", "3" = "GND", "4" = "AIN0", "5" = "AIN1", "6" = "AIN2", "7" = "AIN3", "8" = "VDD", "9" = "SDA", "10" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage, upper limit"
+max = 5.5
+unit = "V"
+conditions = "SDA, SCL, ADDR; the lower limit is 0.7 VDD (a supply-relative limit); VIL is GND to 0.3 VDD"
+basis = "5.5 Electrical Characteristics p.5, DIGITAL INPUT/OUTPUT, VIH 0.7 VDD min, 5.5 V max"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+typ = 0.15
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA, VDD = 3.3 V"
+basis = "5.5 Electrical Characteristics p.5, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "GND < VDIG < VDD"
+basis = "5.5 Electrical Characteristics p.5, digital input leakage"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, power-down"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (5 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD power-down"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, operating"
+typ = 150.0
+max = 200.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (300 uA max over -40 to 125 C)"
+basis = "5.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD operating"
+
+[[models.source.characteristic]]
+parameter = "fSCL SCL clock frequency, fast mode"
+min = 0.01
+max = 0.4
+unit = "MHz"
+conditions = "VDD = 2.0 V to 5.5 V, I2C fast mode (high-speed mode 0.01 to 3.4 MHz)"
+basis = "5.6 Timing Requirements: I2C, fSCL"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 182.7
+unit = "°C/W"
+conditions = "DGS 10 pins"
+package = "VSSOP-10 (DGS)"
+basis = "5.4 Thermal Information p.4, RθJA DGS"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ads1015_rug"
+kind = "digital"
+description = "TI ADS1015 12-bit 4-channel I2C delta-sigma ADC with PGA and comparator (strapped I2C register map: config, thresholds, mux/PGA-steered left-justified conversion; pad map and supply draw) in X2QFN-10 (RUG)"
+variant_of = "ads1015"
+
+[models.match]
+# Family match: a bare ADS1015 (or an "ADC_" library category prefix) names the same die.
+# The ADS1013 and ADS1014 (no AIN2/AIN3, NC pins) are different parts with their own pin table
+# and are excluded by the anchored number. This member's orderable code: ADS1015IRUGR, ADS1015IRUGT or ADS1015IRUGTG4.
+value_re = "(?i)^(ADC_)?ADS1015"
+
+[models.variant]
+orderable_re = "(?i)^(ADC_)?ADS1015I?RUG"
+orderable = ["ADS1015IRUGR", "ADS1015IRUGT", "ADS1015IRUGTG4"]
+package = "X2QFN-10 (RUG)"
+basis = "TI ADS1015 SBAS473F, Package Information p.1 and the Package Option Addendum: RUG is X2QFN-10 (RUG)"
+
+[models.params]
+vol = { typ = 0.15, max = 0.4, unit = "V", conditions = "IOL = 3 mA, VDD = 3.3 V", basis = "6.5 Electrical Characteristics p.5, VOL 0.15 V typ, 0.4 V max at IOL = 3 mA (open-drain ALERT/RDY and SDA)" }
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.7 x 3.3 V: 6.5 Electrical Characteristics p.5, VIH 0.7 VDD min (5.5 V max), SDA, SCL, ADDR" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.3 x 3.3 V: 6.5 Electrical Characteristics p.5, VIL GND min, 0.3 VDD max, SDA, SCL, ADDR" }
+supply_static_ua = 150.0   # 6.5 Electrical Characteristics p.6, IVDD operating typ, VDD = 3.3 V (200 max at 25 C, 300 max over temperature)
+supply_pin = "8"           # VDD
+gnd_pin = "3"              # GND
+warning = "configuration, threshold and conversion registers are executable (12-bit result left-justified in the 16-bit register, code = Vin x 2048 / FSR clipped at 7FFh / 800h, low four bits 0); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.pins]
+# Table 5-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1015 column.
+# SDA and SCL are named in the bus vocabulary.
+"1" = "addr"
+"2" = "alert_rdy"
+"3" = "gnd"
+"4" = "ain0"
+"5" = "ain1"
+"6" = "ain2"
+"7" = "ain3"
+"8" = "vdd"
+"9" = "sda"
+"10" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0            # 6.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
+max_pin_current_a = 0.01       # 6.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
+max_junction_temp_c = 150.0    # 6.1 p.4, junction temperature TJ max
+theta_ja_c_per_w = 245.2       # 6.4 Thermal Information p.4, RθJA RUG
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI ADS1015 SBAS473F, 6.3 Recommended Operating Conditions p.4, power supply VDD to GND 2 V to 5.5 V; 6.1 Absolute Maximum Ratings p.4, VDD to GND 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "addr", "alert_rdy"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "TI ADS1015 SBAS473F, 6.3 Recommended Operating Conditions p.4, digital input voltage VDIG GND to 5.5 V"
+abs_max_basis = "TI ADS1015 SBAS473F, 6.1 Absolute Maximum Ratings p.4, digital input voltage SDA, SCL, ADDR, ALERT/RDY GND - 0.3 V to 5.5 V"
+
+# Table 7-2 (p.16): ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b.
+# "The state of address pin ADDR is sampled continuously." A strap the binder cannot read as
+# one of the four (floating, or on another net) binds the spec default 0x48 marked assumed.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ADS1015 registers"
+bus = "i2c"
+i2c_address = 0x48
+
+# Table 5-1 Pin Functions p.3, the same pad map as [models.pins].
+[sensor.pins]
+1 = "addr"
+2 = "alert_rdy"
+3 = "gnd"
+4 = "ain0"
+5 = "ain1"
+6 = "ain2"
+7 = "ain3"
+8 = "vdd"
+9 = "sda"
+10 = "scl"
+
+[[sensor.address_select]]
+address = 0x48
+straps = { addr = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { addr = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { addr = "scl" }
+
+# Volts at AIN0..AIN3, driven by the harness (not bound to net voltages).
+[[sensor.input]]
+name = "a0"
+default = 0.0
+[[sensor.input]]
+name = "a1"
+default = 0.0
+[[sensor.input]]
+name = "a2"
+default = 0.0
+[[sensor.input]]
+name = "a3"
+default = 0.0
+
+# Config register (P[1:0] = 01b), reset 8583h = 34179: OS = 1, MUX = 000, PGA = 010
+# (+-2.048 V), MODE = 1, DR = 100, COMP_QUE = 11. MUX[14:12] and PGA[11:9] steer the
+# conversion register below.
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 34179.0
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Lo_thresh (P[1:0] = 10b) reset 8000h; Hi_thresh (P[1:0] = 11b) reset 7FFFh.
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "lo_thresh"
+default = -32768.0
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "hi_thresh"
+default = 32767.0
+
+# Conversion register (P[1:0] = 00b): 12-bit two's-complement result left-justified (Section 7.5.4, Table 7-3 and Table 8-3: D[11:0] in bits 15:4, bits 3:0 always read 0, +FS = 7FFh, -FS = 800h).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "max(-2048.0, min(2047.0, round(if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 2048 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))))) * 16"
+
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config"
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "lo_thresh"
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0     # 6.3 Recommended Operating Conditions, VDD min (no POR voltage is published)
+idle_a = 0.00015               # 6.5 p.6, IVDD operating typ, continuous-conversion
+read_a = 0.00015
+write_a = 0.00015
+low_power_a = 0.0000005        # 6.5 p.6, IVDD power-down typ at 25 C (2 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "digital_input_tolerance", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "config_register_write_readback", "threshold_register_write_readback", "mux_and_pga_steered_conversion_register", "full_scale_clipping", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing_and_data_rate", "single_shot_os_bit_handshake", "comparator_and_alert_rdy_pin", "general_call_reset", "continuous_vs_single_shot_mode", "analog_input_net_sampling", "analog_input_vdd_plus_0v3_limit", "input_impedance_loading", "offset_gain_and_noise_errors", "power_down_state_current_gating"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads1015.pdf"
+title = "Texas Instruments ADS1013, ADS1014, ADS1015 Ultra-Small, Low-Power, I2C-Compatible, 3.3kSPS, 12-Bit ADCs With Internal Reference, Oscillator, and Programmable Comparator, SBAS473F, May 2009, revised January 2025"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.3 Recommended Operating Conditions p.4; 6.4 Thermal Information p.4; 6.5 Electrical Characteristics pp.5-6; 6.6 Timing Requirements p.6; Table 7-1 Full-Scale Range p.11; 7.5.1.1 Table 7-2 ADDR pin p.16; 7.5.4 Data Format p.19 and Table 7-3; Conversion Register p.20 and Table 8-3; Config Register p.21 and Table 8-4"
+sha256 = "4617aa3843b16d23264f5eff63b90b1afffefff7af97ae29f0eb8c5a153156d4"
+
+[[models.source.pinout]]
+package = "X2QFN-10 (RUG)"
+pins = { "1" = "ADDR", "2" = "ALERT/RDY", "3" = "GND", "4" = "AIN0", "5" = "AIN1", "6" = "AIN2", "7" = "AIN3", "8" = "VDD", "9" = "SDA", "10" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage, upper limit"
+max = 5.5
+unit = "V"
+conditions = "SDA, SCL, ADDR; the lower limit is 0.7 VDD (a supply-relative limit); VIL is GND to 0.3 VDD"
+basis = "6.5 Electrical Characteristics p.5, DIGITAL INPUT/OUTPUT, VIH 0.7 VDD min, 5.5 V max"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+typ = 0.15
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA, VDD = 3.3 V"
+basis = "6.5 Electrical Characteristics p.5, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "GND < VDIG < VDD"
+basis = "6.5 Electrical Characteristics p.5, digital input leakage"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, power-down"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (5 uA max over -40 to 125 C)"
+basis = "6.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD power-down"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, operating"
+typ = 150.0
+max = 200.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (300 uA max over -40 to 125 C)"
+basis = "6.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD operating"
+
+[[models.source.characteristic]]
+parameter = "fSCL SCL clock frequency, fast mode"
+min = 0.01
+max = 0.4
+unit = "MHz"
+conditions = "VDD = 2.0 V to 5.5 V, I2C fast mode (high-speed mode 0.01 to 3.4 MHz)"
+basis = "6.6 Timing Requirements: I2C, fSCL"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 245.2
+unit = "°C/W"
+conditions = "RUG 10 pins"
+package = "X2QFN-10 (RUG)"
+basis = "6.4 Thermal Information p.4, RθJA RUG"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ads1015_dgs"
+kind = "digital"
+description = "TI ADS1015 12-bit 4-channel I2C delta-sigma ADC with PGA and comparator (strapped I2C register map: config, thresholds, mux/PGA-steered left-justified conversion; pad map and supply draw) in VSSOP-10 (DGS)"
+variant_of = "ads1015"
+
+[models.match]
+# Family match: a bare ADS1015 (or an "ADC_" library category prefix) names the same die.
+# The ADS1013 and ADS1014 (no AIN2/AIN3, NC pins) are different parts with their own pin table
+# and are excluded by the anchored number. This member's orderable code: ADS1015IDGSR or ADS1015IDGST.
+value_re = "(?i)^(ADC_)?ADS1015"
+
+[models.variant]
+orderable_re = "(?i)^(ADC_)?ADS1015I?DGS"
+orderable = ["ADS1015IDGSR", "ADS1015IDGST"]
+package = "VSSOP-10 (DGS)"
+basis = "TI ADS1015 SBAS473F, Package Information p.1 and the Package Option Addendum: DGS is VSSOP-10 (DGS)"
+
+[models.params]
+vol = { typ = 0.15, max = 0.4, unit = "V", conditions = "IOL = 3 mA, VDD = 3.3 V", basis = "6.5 Electrical Characteristics p.5, VOL 0.15 V typ, 0.4 V max at IOL = 3 mA (open-drain ALERT/RDY and SDA)" }
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.7 x 3.3 V: 6.5 Electrical Characteristics p.5, VIH 0.7 VDD min (5.5 V max), SDA, SCL, ADDR" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V, the Electrical Characteristics test supply", basis = "DERIVED 0.3 x 3.3 V: 6.5 Electrical Characteristics p.5, VIL GND min, 0.3 VDD max, SDA, SCL, ADDR" }
+supply_static_ua = 150.0   # 6.5 Electrical Characteristics p.6, IVDD operating typ, VDD = 3.3 V (200 max at 25 C, 300 max over temperature)
+supply_pin = "8"           # VDD
+gnd_pin = "3"              # GND
+warning = "configuration, threshold and conversion registers are executable (12-bit result left-justified in the 16-bit register, code = Vin x 2048 / FSR clipped at 7FFh / 800h, low four bits 0); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.pins]
+# Table 5-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1015 column.
+# SDA and SCL are named in the bus vocabulary.
+"1" = "addr"
+"2" = "alert_rdy"
+"3" = "gnd"
+"4" = "ain0"
+"5" = "ain1"
+"6" = "ain2"
+"7" = "ain3"
+"8" = "vdd"
+"9" = "sda"
+"10" = "scl"
+
+[models.ratings]
+max_voltage_v = 7.0            # 6.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
+max_pin_current_a = 0.01       # 6.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
+max_junction_temp_c = 150.0    # 6.1 p.4, junction temperature TJ max
+theta_ja_c_per_w = 182.7       # 6.4 Thermal Information p.4, RθJA DGS
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.0
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI ADS1015 SBAS473F, 6.3 Recommended Operating Conditions p.4, power supply VDD to GND 2 V to 5.5 V; 6.1 Absolute Maximum Ratings p.4, VDD to GND 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "addr", "alert_rdy"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "TI ADS1015 SBAS473F, 6.3 Recommended Operating Conditions p.4, digital input voltage VDIG GND to 5.5 V"
+abs_max_basis = "TI ADS1015 SBAS473F, 6.1 Absolute Maximum Ratings p.4, digital input voltage SDA, SCL, ADDR, ALERT/RDY GND - 0.3 V to 5.5 V"
+
+# Table 7-2 (p.16): ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b.
+# "The state of address pin ADDR is sampled continuously." A strap the binder cannot read as
+# one of the four (floating, or on another net) binds the spec default 0x48 marked assumed.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "ADS1015 registers"
+bus = "i2c"
+i2c_address = 0x48
+
+# Table 5-1 Pin Functions p.3, the same pad map as [models.pins].
+[sensor.pins]
+1 = "addr"
+2 = "alert_rdy"
+3 = "gnd"
+4 = "ain0"
+5 = "ain1"
+6 = "ain2"
+7 = "ain3"
+8 = "vdd"
+9 = "sda"
+10 = "scl"
+
+[[sensor.address_select]]
+address = 0x48
+straps = { addr = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { addr = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { addr = "scl" }
+
+# Volts at AIN0..AIN3, driven by the harness (not bound to net voltages).
+[[sensor.input]]
+name = "a0"
+default = 0.0
+[[sensor.input]]
+name = "a1"
+default = 0.0
+[[sensor.input]]
+name = "a2"
+default = 0.0
+[[sensor.input]]
+name = "a3"
+default = 0.0
+
+# Config register (P[1:0] = 01b), reset 8583h = 34179: OS = 1, MUX = 000, PGA = 010
+# (+-2.048 V), MODE = 1, DR = 100, COMP_QUE = 11. MUX[14:12] and PGA[11:9] steer the
+# conversion register below.
+[[sensor.write_register]]
+addr = 0x01
+encoding = "u16_be"
+store = "config"
+default = 34179.0
+[[sensor.write_register.field]]
+name = "mux"
+bits = [14, 12]
+[[sensor.write_register.field]]
+name = "pga"
+bits = [11, 9]
+
+# Lo_thresh (P[1:0] = 10b) reset 8000h; Hi_thresh (P[1:0] = 11b) reset 7FFFh.
+[[sensor.write_register]]
+addr = 0x02
+encoding = "i16_be"
+store = "lo_thresh"
+default = -32768.0
+[[sensor.write_register]]
+addr = 0x03
+encoding = "i16_be"
+store = "hi_thresh"
+default = 32767.0
+
+# Conversion register (P[1:0] = 00b): 12-bit two's-complement result left-justified (Section 7.5.4, Table 7-3 and Table 8-3: D[11:0] in bits 15:4, bits 3:0 always read 0, +FS = 7FFh, -FS = 800h).
+[[sensor.register]]
+addr = 0x00
+encoding = "i16_be"
+expr = "max(-2048.0, min(2047.0, round(if(mux == 4.0, a0, if(mux == 5.0, a1, if(mux == 6.0, a2, if(mux == 7.0, a3, if(mux == 0.0, a0 - a1, if(mux == 1.0, a0 - a3, if(mux == 2.0, a1 - a3, a2 - a3))))))) * 2048 / if(pga == 0.0, 6.144, if(pga == 1.0, 4.096, if(pga == 2.0, 2.048, if(pga == 3.0, 1.024, if(pga == 4.0, 0.512, 0.256)))))))) * 16"
+
+[[sensor.register]]
+addr = 0x01
+encoding = "u16_be"
+expr = "config"
+[[sensor.register]]
+addr = 0x02
+encoding = "i16_be"
+expr = "lo_thresh"
+[[sensor.register]]
+addr = 0x03
+encoding = "i16_be"
+expr = "hi_thresh"
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0     # 6.3 Recommended Operating Conditions, VDD min (no POR voltage is published)
+idle_a = 0.00015               # 6.5 p.6, IVDD operating typ, continuous-conversion
+read_a = 0.00015
+write_a = 0.00015
+low_power_a = 0.0000005        # 6.5 p.6, IVDD power-down typ at 25 C (2 uA max)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "digital_input_tolerance", "thermal_resistance", "i2c_address_strap", "four_level_address_pin", "register_map", "config_register_write_readback", "threshold_register_write_readback", "mux_and_pga_steered_conversion_register", "full_scale_clipping", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["conversion_timing_and_data_rate", "single_shot_os_bit_handshake", "comparator_and_alert_rdy_pin", "general_call_reset", "continuous_vs_single_shot_mode", "analog_input_net_sampling", "analog_input_vdd_plus_0v3_limit", "input_impedance_loading", "offset_gain_and_noise_errors", "power_down_state_current_gating"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ads1015.pdf"
+title = "Texas Instruments ADS1013, ADS1014, ADS1015 Ultra-Small, Low-Power, I2C-Compatible, 3.3kSPS, 12-Bit ADCs With Internal Reference, Oscillator, and Programmable Comparator, SBAS473F, May 2009, revised January 2025"
+locator = "Table 5-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings p.4; 6.3 Recommended Operating Conditions p.4; 6.4 Thermal Information p.4; 6.5 Electrical Characteristics pp.5-6; 6.6 Timing Requirements p.6; Table 7-1 Full-Scale Range p.11; 7.5.1.1 Table 7-2 ADDR pin p.16; 7.5.4 Data Format p.19 and Table 7-3; Conversion Register p.20 and Table 8-3; Config Register p.21 and Table 8-4"
+sha256 = "4617aa3843b16d23264f5eff63b90b1afffefff7af97ae29f0eb8c5a153156d4"
+
+[[models.source.pinout]]
+package = "VSSOP-10 (DGS)"
+pins = { "1" = "ADDR", "2" = "ALERT/RDY", "3" = "GND", "4" = "AIN0", "5" = "AIN1", "6" = "AIN2", "7" = "AIN3", "8" = "VDD", "9" = "SDA", "10" = "SCL" }
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage, upper limit"
+max = 5.5
+unit = "V"
+conditions = "SDA, SCL, ADDR; the lower limit is 0.7 VDD (a supply-relative limit); VIL is GND to 0.3 VDD"
+basis = "6.5 Electrical Characteristics p.5, DIGITAL INPUT/OUTPUT, VIH 0.7 VDD min, 5.5 V max"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+typ = 0.15
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA, VDD = 3.3 V"
+basis = "6.5 Electrical Characteristics p.5, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "GND < VDIG < VDD"
+basis = "6.5 Electrical Characteristics p.5, digital input leakage"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, power-down"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (5 uA max over -40 to 125 C)"
+basis = "6.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD power-down"
+
+[[models.source.characteristic]]
+parameter = "IVDD supply current, operating"
+typ = 150.0
+max = 200.0
+unit = "uA"
+conditions = "TA = 25 C, VDD = 3.3 V (300 uA max over -40 to 125 C)"
+basis = "6.5 Electrical Characteristics p.6, POWER-SUPPLY, IVDD operating"
+
+[[models.source.characteristic]]
+parameter = "fSCL SCL clock frequency, fast mode"
+min = 0.01
+max = 0.4
+unit = "MHz"
+conditions = "VDD = 2.0 V to 5.5 V, I2C fast mode (high-speed mode 0.01 to 3.4 MHz)"
+basis = "6.6 Timing Requirements: I2C, fSCL"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 182.7
+unit = "°C/W"
+conditions = "DGS 10 pins"
+package = "VSSOP-10 (DGS)"
+basis = "6.4 Thermal Information p.4, RθJA DGS"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4725_a0"
+kind = "digital"
+description = "Microchip MCP4725 12-bit I2C DAC with EEPROM, address option A0 (A2 A1 = 00 hard-wired, A0 from the pin, so 0x60 / 0x61): strapped I2C register map (fast write, write DAC register, write DAC register and EEPROM, read-back; output = code / 4096 x VDD), pad map and supply draw, SOT-23-6 (CH)"
+variant_of = "mcp4725"
+
+[models.match]
+# Family match: every address option shares one die and pad map; the options differ only in the
+# hard-wired A2 A1 address bits printed in the part number (MCP4725A0T-E/CH ... MCP4725A3T-E/CH).
+# This member's orderable code: MCP4725A0T-E/CH.
+value_re = "(?i)^MCP4725"
+
+[models.variant]
+orderable_re = "(?i)^MCP4725A0"
+orderable = ["MCP4725A0T-E/CH"]
+package = "SOT-23-6 (CH)"
+basis = "Microchip MCP4725 DS22039D, Product Identification System p.47 (address option A0 = A2 A1 00, A0 External) and 10.1 Package Marking Information p.43 (A0, CH = SOT-23-6)"
+
+[models.params]
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.7 x 3.3 V: p.4 Electrical Characteristics, VIH SDA and SCL 0.7 VDD min" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.3 x 3.3 V: p.4 Electrical Characteristics, VIL SDA and SCL 0.3 VDD max" }
+supply_static_ua = 210.0   # p.3 Electrical Characteristics, IDD typ, code 000h, VOUT unloaded, digital inputs grounded (400 uA max)
+supply_pin = "3"           # VDD
+gnd_pin = "2"              # VSS
+warning = "write commands (fast, write DAC register, write DAC register and EEPROM) and the read-back frame are executable and VOUT follows code / 4096 x VDD (0 V in power-down, where the datasheet gives a 1 k, 100 k or 500 k pull-down to ground); the model has no net-voltage binding for the supply, so the VDD used by the output law is a harness input that defaults to an assumed 3.3 V, not the board rail. EEPROM write time, the RDY/BSY wait that blocks new writes, the general-call reset and wake-up, and the POR status bit meaning are not modelled (the datasheet prints no meaning for the POR bit, so it reads 0); the DAC register powers up from the factory EEPROM default of 800h (mid-scale) and EEPROM contents are not retained across a power cycle"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.13: SOT-23 pads 1..6.
+"1" = "vout"
+"2" = "vss"
+"3" = "vdd"
+"4" = "sda"
+"5" = "scl"
+"6" = "a0"
+
+[models.ratings]
+max_voltage_v = 6.5            # p.3 Absolute Maximum Ratings, VDD 6.5 V
+max_pin_current_a = 0.025      # p.3 Absolute Maximum Ratings, current at output pins +-25 mA (input pins +-2 mA, supply pins +-50 mA are per-class and not expressible in one scalar)
+max_junction_temp_c = 150.0    # p.3 Absolute Maximum Ratings, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 190.5       # p.5 Thermal Package Resistances, thermal resistance 6L-SOT-23, typ
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4725 DS22039D, p.3 Electrical Characteristics, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4725 DS22039D, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings),
+# a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+
+# p.27 Section 7.2 Device Addressing: device code 1100, then A2 A1 (hard-wired at the factory, option A0 = 00) and A0 from the A0 pin
+# ("the logic state of the A0 pin is compared with the A0 address bit received", tied to VSS = 0, VDD = 1).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MCP4725 DAC"
+bus = "i2c"
+i2c_address = 0x60
+channels = 1
+
+# Table 3-1 Pin Function Table p.13, the same pad map as [models.pins].
+[sensor.pins]
+1 = "vout"
+2 = "vss"
+3 = "vdd"
+4 = "sda"
+5 = "scl"
+6 = "a0"
+
+[[sensor.address_select]]
+address = 0x60
+straps = { a0 = "low" }
+[[sensor.address_select]]
+address = 0x61
+straps = { a0 = "high" }
+
+# VDD is the DAC reference (Section 5.3: "The MCP4725 device uses the VDD as its voltage reference").
+# Not bound to the board rail: a harness-driven value, defaulting to an assumed 3.3 V.
+[[sensor.input]]
+name = "vdd"
+default = 3.3
+
+# DAC register (Table 5-4) and EEPROM (Table 5-3). Factory EEPROM default: PD1 PD0 = 00, D11 = 1,
+# all other bits 0 (800h, mid-scale); the device loads it into the DAC register at reset (Section 5.4).
+[[sensor.state]]
+name = "code"
+default = 2048.0
+[[sensor.state]]
+name = "pd"
+default = 0.0
+[[sensor.state]]
+name = "ecode"
+default = 2048.0
+[[sensor.state]]
+name = "epd"
+default = 0.0
+
+# Fast mode write (Figure 6-1, p.24): [0 0 PD1 PD0 D11..D8][D7..D0], C2 C1 = 00, repeating pairs.
+[[sensor.write_command]]
+name = "fast_write"
+match_mask = 0xC0
+match_value = 0x00
+group_bytes = 2
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [13, 12]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [11, 0]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register (Figure 6-2, p.25): [0 1 0 x x PD1 PD0 x][D11..D4][D3..D0 x x x x].
+[[sensor.write_command]]
+name = "write_dac"
+match_mask = 0xE0
+match_value = 0x40
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register and EEPROM (Figure 6-2, p.25): C2 C1 C0 = 011, also writes the EEPROM.
+[[sensor.write_command]]
+name = "write_dac_eeprom"
+match_mask = 0xE0
+match_value = 0x60
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+ecode = "code_bits"
+epd = "pd_bits"
+
+# Equation 5-1 (p.19): VOUT = VREF x Dn / 4096 with VREF = VDD. Power-down (Table 5-2) puts a
+# 1 k, 100 k or 500 k resistor from VOUT to ground; modelled as 0 V (derived simplification).
+[[sensor.output]]
+name = "vout"
+channel = 0
+expr = "if(pd == 0.0, code / 4096 * vdd, 0.0)"
+
+# Read command (Figure 6-3, p.26): [RDY/BSY POR x x x PD1 PD0 x][D11..D4][D3..D0 x x x x]
+# then the EEPROM [x PD1 PD0 x D11..D8][D7..D0]. RDY/BSY = 1 (no EEPROM write time is modelled);
+# the POR bit has no printed meaning and is read as 0.
+[sensor.read_frame]
+bytes = [
+  "128 + pd * 2",
+  "floor(code / 16)",
+  "(code % 16) * 16",
+  "epd * 32 + floor(ecode / 256)",
+  "ecode % 256",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "vss"
+power_on_threshold_v = 2.0     # p.3 Electrical Characteristics, VPOR typ 2 V (below it all circuits are disabled, Section 5.4.1)
+idle_a = 0.00021               # p.3 Electrical Characteristics, IDD typ
+read_a = 0.00021
+write_a = 0.00021
+low_power_a = 0.00000006       # p.3 Electrical Characteristics, IDDP typ 0.06 uA (2.0 uA max, VDD = 5.5 V)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "thermal_resistance", "i2c_address_strap", "factory_address_option", "register_map", "fast_write", "write_dac_register", "write_dac_register_and_eeprom", "read_back_frame", "ratiometric_output_code_over_vdd", "power_down_output", "bus_coupled_active_current", "supply_voltage_gating", "eeprom_factory_default"]
+missing = ["eeprom_write_time_and_rdy_busy", "general_call_reset", "general_call_wake_up", "por_status_bit", "supply_net_as_reference", "output_power_down_pulldown_resistance", "input_vdd_plus_0v3_limit", "settling_time", "inl_dnl_offset_gain_errors", "eeprom_persistence_across_power_cycle", "reserved_command_handling"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22039d.pdf"
+title = "Microchip MCP4725 12-Bit Digital-to-Analog Converter with EEPROM Memory in SOT-23-6, DS22039D, June 2009"
+locator = "3.0 Table 3-1 Pin Function Table p.13; 1.0 Absolute Maximum Ratings and Electrical Characteristics pp.3-4; Thermal Package Resistances p.5; 5.1 Equation 5-1 p.19; 5.4 Tables 5-2 to 5-4 pp.20-21; 6.1 Figures 6-1 and 6-2 pp.24-25; 6.2 Figure 6-3 p.26; 7.2 Device Addressing p.27; 10.1 Package Marking p.43; Product Identification System p.47"
+sha256 = "746d95dfdaaf0a9da4698e2c0a201ac2736d8589a752ab0dcd903f4a1603077d"
+
+[[models.source.pinout]]
+package = "SOT-23-6 (CH)"
+pins = { "1" = "VOUT", "2" = "VSS", "3" = "VDD", "4" = "SDA", "5" = "SCL", "6" = "A0" }
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 210.0
+max = 400.0
+unit = "uA"
+conditions = "digital input pins grounded, VOUT unloaded, code = 000h, VDD = 2.7 V to 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDP power-down current"
+typ = 0.06
+max = 2.0
+unit = "uA"
+conditions = "VDD = 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDDP"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold voltage"
+typ = 2.0
+unit = "V"
+conditions = "below it all circuits are disabled and there is no DAC output"
+basis = "p.3 Electrical Characteristics, VPOR; Section 5.4.1 p.19"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA"
+basis = "p.4 Electrical Characteristics, Digital Interface, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "SCL = SDA = A0 = VSS or SCL = SDA = A0 = VDD"
+basis = "p.4 Electrical Characteristics, Digital Interface, ILI"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VOUT grounded"
+basis = "p.3 Electrical Characteristics, Output Amplifier, ISC"
+
+[[models.source.characteristic]]
+parameter = "ROUT DC output impedance, normal mode"
+typ = 1.0
+unit = "Ω"
+conditions = "VOUT to VSS, normal mode"
+basis = "p.4 Electrical Characteristics, ROUT"
+
+[[models.source.characteristic]]
+parameter = "TWRITE EEPROM write time"
+typ = 25.0
+max = 50.0
+unit = "ms"
+conditions = "Write DAC register and EEPROM command"
+basis = "p.4 Electrical Characteristics, EEPROM, TWRITE"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 190.5
+unit = "°C/W"
+conditions = "6L-SOT-23"
+package = "SOT-23-6 (CH)"
+basis = "p.5 Temperature Characteristics, Thermal Package Resistances"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4725_a1"
+kind = "digital"
+description = "Microchip MCP4725 12-bit I2C DAC with EEPROM, address option A1 (A2 A1 = 01 hard-wired, A0 from the pin, so 0x62 / 0x63): strapped I2C register map (fast write, write DAC register, write DAC register and EEPROM, read-back; output = code / 4096 x VDD), pad map and supply draw, SOT-23-6 (CH)"
+variant_of = "mcp4725"
+
+[models.match]
+# Family match: every address option shares one die and pad map; the options differ only in the
+# hard-wired A2 A1 address bits printed in the part number (MCP4725A0T-E/CH ... MCP4725A3T-E/CH).
+# This member's orderable code: MCP4725A1T-E/CH.
+value_re = "(?i)^MCP4725"
+
+[models.variant]
+orderable_re = "(?i)^MCP4725A1"
+orderable = ["MCP4725A1T-E/CH"]
+package = "SOT-23-6 (CH)"
+basis = "Microchip MCP4725 DS22039D, Product Identification System p.47 (address option A1 = A2 A1 01, A0 External) and 10.1 Package Marking Information p.43 (A1, CH = SOT-23-6)"
+
+[models.params]
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.7 x 3.3 V: p.4 Electrical Characteristics, VIH SDA and SCL 0.7 VDD min" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.3 x 3.3 V: p.4 Electrical Characteristics, VIL SDA and SCL 0.3 VDD max" }
+supply_static_ua = 210.0   # p.3 Electrical Characteristics, IDD typ, code 000h, VOUT unloaded, digital inputs grounded (400 uA max)
+supply_pin = "3"           # VDD
+gnd_pin = "2"              # VSS
+warning = "write commands (fast, write DAC register, write DAC register and EEPROM) and the read-back frame are executable and VOUT follows code / 4096 x VDD (0 V in power-down, where the datasheet gives a 1 k, 100 k or 500 k pull-down to ground); the model has no net-voltage binding for the supply, so the VDD used by the output law is a harness input that defaults to an assumed 3.3 V, not the board rail. EEPROM write time, the RDY/BSY wait that blocks new writes, the general-call reset and wake-up, and the POR status bit meaning are not modelled (the datasheet prints no meaning for the POR bit, so it reads 0); the DAC register powers up from the factory EEPROM default of 800h (mid-scale) and EEPROM contents are not retained across a power cycle"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.13: SOT-23 pads 1..6.
+"1" = "vout"
+"2" = "vss"
+"3" = "vdd"
+"4" = "sda"
+"5" = "scl"
+"6" = "a0"
+
+[models.ratings]
+max_voltage_v = 6.5            # p.3 Absolute Maximum Ratings, VDD 6.5 V
+max_pin_current_a = 0.025      # p.3 Absolute Maximum Ratings, current at output pins +-25 mA (input pins +-2 mA, supply pins +-50 mA are per-class and not expressible in one scalar)
+max_junction_temp_c = 150.0    # p.3 Absolute Maximum Ratings, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 190.5       # p.5 Thermal Package Resistances, thermal resistance 6L-SOT-23, typ
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4725 DS22039D, p.3 Electrical Characteristics, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4725 DS22039D, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings),
+# a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+
+# p.27 Section 7.2 Device Addressing: device code 1100, then A2 A1 (hard-wired at the factory, option A1 = 01) and A0 from the A0 pin
+# ("the logic state of the A0 pin is compared with the A0 address bit received", tied to VSS = 0, VDD = 1).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MCP4725 DAC"
+bus = "i2c"
+i2c_address = 0x62
+channels = 1
+
+# Table 3-1 Pin Function Table p.13, the same pad map as [models.pins].
+[sensor.pins]
+1 = "vout"
+2 = "vss"
+3 = "vdd"
+4 = "sda"
+5 = "scl"
+6 = "a0"
+
+[[sensor.address_select]]
+address = 0x62
+straps = { a0 = "low" }
+[[sensor.address_select]]
+address = 0x63
+straps = { a0 = "high" }
+
+# VDD is the DAC reference (Section 5.3: "The MCP4725 device uses the VDD as its voltage reference").
+# Not bound to the board rail: a harness-driven value, defaulting to an assumed 3.3 V.
+[[sensor.input]]
+name = "vdd"
+default = 3.3
+
+# DAC register (Table 5-4) and EEPROM (Table 5-3). Factory EEPROM default: PD1 PD0 = 00, D11 = 1,
+# all other bits 0 (800h, mid-scale); the device loads it into the DAC register at reset (Section 5.4).
+[[sensor.state]]
+name = "code"
+default = 2048.0
+[[sensor.state]]
+name = "pd"
+default = 0.0
+[[sensor.state]]
+name = "ecode"
+default = 2048.0
+[[sensor.state]]
+name = "epd"
+default = 0.0
+
+# Fast mode write (Figure 6-1, p.24): [0 0 PD1 PD0 D11..D8][D7..D0], C2 C1 = 00, repeating pairs.
+[[sensor.write_command]]
+name = "fast_write"
+match_mask = 0xC0
+match_value = 0x00
+group_bytes = 2
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [13, 12]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [11, 0]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register (Figure 6-2, p.25): [0 1 0 x x PD1 PD0 x][D11..D4][D3..D0 x x x x].
+[[sensor.write_command]]
+name = "write_dac"
+match_mask = 0xE0
+match_value = 0x40
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register and EEPROM (Figure 6-2, p.25): C2 C1 C0 = 011, also writes the EEPROM.
+[[sensor.write_command]]
+name = "write_dac_eeprom"
+match_mask = 0xE0
+match_value = 0x60
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+ecode = "code_bits"
+epd = "pd_bits"
+
+# Equation 5-1 (p.19): VOUT = VREF x Dn / 4096 with VREF = VDD. Power-down (Table 5-2) puts a
+# 1 k, 100 k or 500 k resistor from VOUT to ground; modelled as 0 V (derived simplification).
+[[sensor.output]]
+name = "vout"
+channel = 0
+expr = "if(pd == 0.0, code / 4096 * vdd, 0.0)"
+
+# Read command (Figure 6-3, p.26): [RDY/BSY POR x x x PD1 PD0 x][D11..D4][D3..D0 x x x x]
+# then the EEPROM [x PD1 PD0 x D11..D8][D7..D0]. RDY/BSY = 1 (no EEPROM write time is modelled);
+# the POR bit has no printed meaning and is read as 0.
+[sensor.read_frame]
+bytes = [
+  "128 + pd * 2",
+  "floor(code / 16)",
+  "(code % 16) * 16",
+  "epd * 32 + floor(ecode / 256)",
+  "ecode % 256",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "vss"
+power_on_threshold_v = 2.0     # p.3 Electrical Characteristics, VPOR typ 2 V (below it all circuits are disabled, Section 5.4.1)
+idle_a = 0.00021               # p.3 Electrical Characteristics, IDD typ
+read_a = 0.00021
+write_a = 0.00021
+low_power_a = 0.00000006       # p.3 Electrical Characteristics, IDDP typ 0.06 uA (2.0 uA max, VDD = 5.5 V)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "thermal_resistance", "i2c_address_strap", "factory_address_option", "register_map", "fast_write", "write_dac_register", "write_dac_register_and_eeprom", "read_back_frame", "ratiometric_output_code_over_vdd", "power_down_output", "bus_coupled_active_current", "supply_voltage_gating", "eeprom_factory_default"]
+missing = ["eeprom_write_time_and_rdy_busy", "general_call_reset", "general_call_wake_up", "por_status_bit", "supply_net_as_reference", "output_power_down_pulldown_resistance", "input_vdd_plus_0v3_limit", "settling_time", "inl_dnl_offset_gain_errors", "eeprom_persistence_across_power_cycle", "reserved_command_handling"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22039d.pdf"
+title = "Microchip MCP4725 12-Bit Digital-to-Analog Converter with EEPROM Memory in SOT-23-6, DS22039D, June 2009"
+locator = "3.0 Table 3-1 Pin Function Table p.13; 1.0 Absolute Maximum Ratings and Electrical Characteristics pp.3-4; Thermal Package Resistances p.5; 5.1 Equation 5-1 p.19; 5.4 Tables 5-2 to 5-4 pp.20-21; 6.1 Figures 6-1 and 6-2 pp.24-25; 6.2 Figure 6-3 p.26; 7.2 Device Addressing p.27; 10.1 Package Marking p.43; Product Identification System p.47"
+sha256 = "746d95dfdaaf0a9da4698e2c0a201ac2736d8589a752ab0dcd903f4a1603077d"
+
+[[models.source.pinout]]
+package = "SOT-23-6 (CH)"
+pins = { "1" = "VOUT", "2" = "VSS", "3" = "VDD", "4" = "SDA", "5" = "SCL", "6" = "A0" }
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 210.0
+max = 400.0
+unit = "uA"
+conditions = "digital input pins grounded, VOUT unloaded, code = 000h, VDD = 2.7 V to 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDP power-down current"
+typ = 0.06
+max = 2.0
+unit = "uA"
+conditions = "VDD = 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDDP"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold voltage"
+typ = 2.0
+unit = "V"
+conditions = "below it all circuits are disabled and there is no DAC output"
+basis = "p.3 Electrical Characteristics, VPOR; Section 5.4.1 p.19"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA"
+basis = "p.4 Electrical Characteristics, Digital Interface, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "SCL = SDA = A0 = VSS or SCL = SDA = A0 = VDD"
+basis = "p.4 Electrical Characteristics, Digital Interface, ILI"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VOUT grounded"
+basis = "p.3 Electrical Characteristics, Output Amplifier, ISC"
+
+[[models.source.characteristic]]
+parameter = "ROUT DC output impedance, normal mode"
+typ = 1.0
+unit = "Ω"
+conditions = "VOUT to VSS, normal mode"
+basis = "p.4 Electrical Characteristics, ROUT"
+
+[[models.source.characteristic]]
+parameter = "TWRITE EEPROM write time"
+typ = 25.0
+max = 50.0
+unit = "ms"
+conditions = "Write DAC register and EEPROM command"
+basis = "p.4 Electrical Characteristics, EEPROM, TWRITE"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 190.5
+unit = "°C/W"
+conditions = "6L-SOT-23"
+package = "SOT-23-6 (CH)"
+basis = "p.5 Temperature Characteristics, Thermal Package Resistances"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4725_a2"
+kind = "digital"
+description = "Microchip MCP4725 12-bit I2C DAC with EEPROM, address option A2 (A2 A1 = 10 hard-wired, A0 from the pin, so 0x64 / 0x65): strapped I2C register map (fast write, write DAC register, write DAC register and EEPROM, read-back; output = code / 4096 x VDD), pad map and supply draw, SOT-23-6 (CH)"
+variant_of = "mcp4725"
+
+[models.match]
+# Family match: every address option shares one die and pad map; the options differ only in the
+# hard-wired A2 A1 address bits printed in the part number (MCP4725A0T-E/CH ... MCP4725A3T-E/CH).
+# This member's orderable code: MCP4725A2T-E/CH.
+value_re = "(?i)^MCP4725"
+
+[models.variant]
+orderable_re = "(?i)^MCP4725A2"
+orderable = ["MCP4725A2T-E/CH"]
+package = "SOT-23-6 (CH)"
+basis = "Microchip MCP4725 DS22039D, Product Identification System p.47 (address option A2 = A2 A1 10, A0 External) and 10.1 Package Marking Information p.43 (A2, CH = SOT-23-6)"
+
+[models.params]
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.7 x 3.3 V: p.4 Electrical Characteristics, VIH SDA and SCL 0.7 VDD min" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.3 x 3.3 V: p.4 Electrical Characteristics, VIL SDA and SCL 0.3 VDD max" }
+supply_static_ua = 210.0   # p.3 Electrical Characteristics, IDD typ, code 000h, VOUT unloaded, digital inputs grounded (400 uA max)
+supply_pin = "3"           # VDD
+gnd_pin = "2"              # VSS
+warning = "write commands (fast, write DAC register, write DAC register and EEPROM) and the read-back frame are executable and VOUT follows code / 4096 x VDD (0 V in power-down, where the datasheet gives a 1 k, 100 k or 500 k pull-down to ground); the model has no net-voltage binding for the supply, so the VDD used by the output law is a harness input that defaults to an assumed 3.3 V, not the board rail. EEPROM write time, the RDY/BSY wait that blocks new writes, the general-call reset and wake-up, and the POR status bit meaning are not modelled (the datasheet prints no meaning for the POR bit, so it reads 0); the DAC register powers up from the factory EEPROM default of 800h (mid-scale) and EEPROM contents are not retained across a power cycle"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.13: SOT-23 pads 1..6.
+"1" = "vout"
+"2" = "vss"
+"3" = "vdd"
+"4" = "sda"
+"5" = "scl"
+"6" = "a0"
+
+[models.ratings]
+max_voltage_v = 6.5            # p.3 Absolute Maximum Ratings, VDD 6.5 V
+max_pin_current_a = 0.025      # p.3 Absolute Maximum Ratings, current at output pins +-25 mA (input pins +-2 mA, supply pins +-50 mA are per-class and not expressible in one scalar)
+max_junction_temp_c = 150.0    # p.3 Absolute Maximum Ratings, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 190.5       # p.5 Thermal Package Resistances, thermal resistance 6L-SOT-23, typ
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4725 DS22039D, p.3 Electrical Characteristics, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4725 DS22039D, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings),
+# a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+
+# p.27 Section 7.2 Device Addressing: device code 1100, then A2 A1 (hard-wired at the factory, option A2 = 10) and A0 from the A0 pin
+# ("the logic state of the A0 pin is compared with the A0 address bit received", tied to VSS = 0, VDD = 1).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MCP4725 DAC"
+bus = "i2c"
+i2c_address = 0x64
+channels = 1
+
+# Table 3-1 Pin Function Table p.13, the same pad map as [models.pins].
+[sensor.pins]
+1 = "vout"
+2 = "vss"
+3 = "vdd"
+4 = "sda"
+5 = "scl"
+6 = "a0"
+
+[[sensor.address_select]]
+address = 0x64
+straps = { a0 = "low" }
+[[sensor.address_select]]
+address = 0x65
+straps = { a0 = "high" }
+
+# VDD is the DAC reference (Section 5.3: "The MCP4725 device uses the VDD as its voltage reference").
+# Not bound to the board rail: a harness-driven value, defaulting to an assumed 3.3 V.
+[[sensor.input]]
+name = "vdd"
+default = 3.3
+
+# DAC register (Table 5-4) and EEPROM (Table 5-3). Factory EEPROM default: PD1 PD0 = 00, D11 = 1,
+# all other bits 0 (800h, mid-scale); the device loads it into the DAC register at reset (Section 5.4).
+[[sensor.state]]
+name = "code"
+default = 2048.0
+[[sensor.state]]
+name = "pd"
+default = 0.0
+[[sensor.state]]
+name = "ecode"
+default = 2048.0
+[[sensor.state]]
+name = "epd"
+default = 0.0
+
+# Fast mode write (Figure 6-1, p.24): [0 0 PD1 PD0 D11..D8][D7..D0], C2 C1 = 00, repeating pairs.
+[[sensor.write_command]]
+name = "fast_write"
+match_mask = 0xC0
+match_value = 0x00
+group_bytes = 2
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [13, 12]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [11, 0]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register (Figure 6-2, p.25): [0 1 0 x x PD1 PD0 x][D11..D4][D3..D0 x x x x].
+[[sensor.write_command]]
+name = "write_dac"
+match_mask = 0xE0
+match_value = 0x40
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register and EEPROM (Figure 6-2, p.25): C2 C1 C0 = 011, also writes the EEPROM.
+[[sensor.write_command]]
+name = "write_dac_eeprom"
+match_mask = 0xE0
+match_value = 0x60
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+ecode = "code_bits"
+epd = "pd_bits"
+
+# Equation 5-1 (p.19): VOUT = VREF x Dn / 4096 with VREF = VDD. Power-down (Table 5-2) puts a
+# 1 k, 100 k or 500 k resistor from VOUT to ground; modelled as 0 V (derived simplification).
+[[sensor.output]]
+name = "vout"
+channel = 0
+expr = "if(pd == 0.0, code / 4096 * vdd, 0.0)"
+
+# Read command (Figure 6-3, p.26): [RDY/BSY POR x x x PD1 PD0 x][D11..D4][D3..D0 x x x x]
+# then the EEPROM [x PD1 PD0 x D11..D8][D7..D0]. RDY/BSY = 1 (no EEPROM write time is modelled);
+# the POR bit has no printed meaning and is read as 0.
+[sensor.read_frame]
+bytes = [
+  "128 + pd * 2",
+  "floor(code / 16)",
+  "(code % 16) * 16",
+  "epd * 32 + floor(ecode / 256)",
+  "ecode % 256",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "vss"
+power_on_threshold_v = 2.0     # p.3 Electrical Characteristics, VPOR typ 2 V (below it all circuits are disabled, Section 5.4.1)
+idle_a = 0.00021               # p.3 Electrical Characteristics, IDD typ
+read_a = 0.00021
+write_a = 0.00021
+low_power_a = 0.00000006       # p.3 Electrical Characteristics, IDDP typ 0.06 uA (2.0 uA max, VDD = 5.5 V)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "thermal_resistance", "i2c_address_strap", "factory_address_option", "register_map", "fast_write", "write_dac_register", "write_dac_register_and_eeprom", "read_back_frame", "ratiometric_output_code_over_vdd", "power_down_output", "bus_coupled_active_current", "supply_voltage_gating", "eeprom_factory_default"]
+missing = ["eeprom_write_time_and_rdy_busy", "general_call_reset", "general_call_wake_up", "por_status_bit", "supply_net_as_reference", "output_power_down_pulldown_resistance", "input_vdd_plus_0v3_limit", "settling_time", "inl_dnl_offset_gain_errors", "eeprom_persistence_across_power_cycle", "reserved_command_handling"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22039d.pdf"
+title = "Microchip MCP4725 12-Bit Digital-to-Analog Converter with EEPROM Memory in SOT-23-6, DS22039D, June 2009"
+locator = "3.0 Table 3-1 Pin Function Table p.13; 1.0 Absolute Maximum Ratings and Electrical Characteristics pp.3-4; Thermal Package Resistances p.5; 5.1 Equation 5-1 p.19; 5.4 Tables 5-2 to 5-4 pp.20-21; 6.1 Figures 6-1 and 6-2 pp.24-25; 6.2 Figure 6-3 p.26; 7.2 Device Addressing p.27; 10.1 Package Marking p.43; Product Identification System p.47"
+sha256 = "746d95dfdaaf0a9da4698e2c0a201ac2736d8589a752ab0dcd903f4a1603077d"
+
+[[models.source.pinout]]
+package = "SOT-23-6 (CH)"
+pins = { "1" = "VOUT", "2" = "VSS", "3" = "VDD", "4" = "SDA", "5" = "SCL", "6" = "A0" }
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 210.0
+max = 400.0
+unit = "uA"
+conditions = "digital input pins grounded, VOUT unloaded, code = 000h, VDD = 2.7 V to 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDP power-down current"
+typ = 0.06
+max = 2.0
+unit = "uA"
+conditions = "VDD = 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDDP"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold voltage"
+typ = 2.0
+unit = "V"
+conditions = "below it all circuits are disabled and there is no DAC output"
+basis = "p.3 Electrical Characteristics, VPOR; Section 5.4.1 p.19"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA"
+basis = "p.4 Electrical Characteristics, Digital Interface, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "SCL = SDA = A0 = VSS or SCL = SDA = A0 = VDD"
+basis = "p.4 Electrical Characteristics, Digital Interface, ILI"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VOUT grounded"
+basis = "p.3 Electrical Characteristics, Output Amplifier, ISC"
+
+[[models.source.characteristic]]
+parameter = "ROUT DC output impedance, normal mode"
+typ = 1.0
+unit = "Ω"
+conditions = "VOUT to VSS, normal mode"
+basis = "p.4 Electrical Characteristics, ROUT"
+
+[[models.source.characteristic]]
+parameter = "TWRITE EEPROM write time"
+typ = 25.0
+max = 50.0
+unit = "ms"
+conditions = "Write DAC register and EEPROM command"
+basis = "p.4 Electrical Characteristics, EEPROM, TWRITE"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 190.5
+unit = "°C/W"
+conditions = "6L-SOT-23"
+package = "SOT-23-6 (CH)"
+basis = "p.5 Temperature Characteristics, Thermal Package Resistances"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4725_a3"
+kind = "digital"
+description = "Microchip MCP4725 12-bit I2C DAC with EEPROM, address option A3 (A2 A1 = 11 hard-wired, A0 from the pin, so 0x66 / 0x67): strapped I2C register map (fast write, write DAC register, write DAC register and EEPROM, read-back; output = code / 4096 x VDD), pad map and supply draw, SOT-23-6 (CH)"
+variant_of = "mcp4725"
+
+[models.match]
+# Family match: every address option shares one die and pad map; the options differ only in the
+# hard-wired A2 A1 address bits printed in the part number (MCP4725A0T-E/CH ... MCP4725A3T-E/CH).
+# This member's orderable code: MCP4725A3T-E/CH.
+value_re = "(?i)^MCP4725"
+
+[models.variant]
+orderable_re = "(?i)^MCP4725A3"
+orderable = ["MCP4725A3T-E/CH"]
+package = "SOT-23-6 (CH)"
+basis = "Microchip MCP4725 DS22039D, Product Identification System p.47 (address option A3 = A2 A1 11, A0 External) and 10.1 Package Marking Information p.43 (A3, CH = SOT-23-6)"
+
+[models.params]
+vih = { min = 2.31, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.7 x 3.3 V: p.4 Electrical Characteristics, VIH SDA and SCL 0.7 VDD min" }
+vil = { max = 0.99, unit = "V", conditions = "VDD = 3.3 V (SDA, SCL)", basis = "DERIVED 0.3 x 3.3 V: p.4 Electrical Characteristics, VIL SDA and SCL 0.3 VDD max" }
+supply_static_ua = 210.0   # p.3 Electrical Characteristics, IDD typ, code 000h, VOUT unloaded, digital inputs grounded (400 uA max)
+supply_pin = "3"           # VDD
+gnd_pin = "2"              # VSS
+warning = "write commands (fast, write DAC register, write DAC register and EEPROM) and the read-back frame are executable and VOUT follows code / 4096 x VDD (0 V in power-down, where the datasheet gives a 1 k, 100 k or 500 k pull-down to ground); the model has no net-voltage binding for the supply, so the VDD used by the output law is a harness input that defaults to an assumed 3.3 V, not the board rail. EEPROM write time, the RDY/BSY wait that blocks new writes, the general-call reset and wake-up, and the POR status bit meaning are not modelled (the datasheet prints no meaning for the POR bit, so it reads 0); the DAC register powers up from the factory EEPROM default of 800h (mid-scale) and EEPROM contents are not retained across a power cycle"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.13: SOT-23 pads 1..6.
+"1" = "vout"
+"2" = "vss"
+"3" = "vdd"
+"4" = "sda"
+"5" = "scl"
+"6" = "a0"
+
+[models.ratings]
+max_voltage_v = 6.5            # p.3 Absolute Maximum Ratings, VDD 6.5 V
+max_pin_current_a = 0.025      # p.3 Absolute Maximum Ratings, current at output pins +-25 mA (input pins +-2 mA, supply pins +-50 mA are per-class and not expressible in one scalar)
+max_junction_temp_c = 150.0    # p.3 Absolute Maximum Ratings, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 190.5       # p.5 Thermal Package Resistances, thermal resistance 6L-SOT-23, typ
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4725 DS22039D, p.3 Electrical Characteristics, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4725 DS22039D, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings),
+# a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+
+# p.27 Section 7.2 Device Addressing: device code 1100, then A2 A1 (hard-wired at the factory, option A3 = 11) and A0 from the A0 pin
+# ("the logic state of the A0 pin is compared with the A0 address bit received", tied to VSS = 0, VDD = 1).
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "MCP4725 DAC"
+bus = "i2c"
+i2c_address = 0x66
+channels = 1
+
+# Table 3-1 Pin Function Table p.13, the same pad map as [models.pins].
+[sensor.pins]
+1 = "vout"
+2 = "vss"
+3 = "vdd"
+4 = "sda"
+5 = "scl"
+6 = "a0"
+
+[[sensor.address_select]]
+address = 0x66
+straps = { a0 = "low" }
+[[sensor.address_select]]
+address = 0x67
+straps = { a0 = "high" }
+
+# VDD is the DAC reference (Section 5.3: "The MCP4725 device uses the VDD as its voltage reference").
+# Not bound to the board rail: a harness-driven value, defaulting to an assumed 3.3 V.
+[[sensor.input]]
+name = "vdd"
+default = 3.3
+
+# DAC register (Table 5-4) and EEPROM (Table 5-3). Factory EEPROM default: PD1 PD0 = 00, D11 = 1,
+# all other bits 0 (800h, mid-scale); the device loads it into the DAC register at reset (Section 5.4).
+[[sensor.state]]
+name = "code"
+default = 2048.0
+[[sensor.state]]
+name = "pd"
+default = 0.0
+[[sensor.state]]
+name = "ecode"
+default = 2048.0
+[[sensor.state]]
+name = "epd"
+default = 0.0
+
+# Fast mode write (Figure 6-1, p.24): [0 0 PD1 PD0 D11..D8][D7..D0], C2 C1 = 00, repeating pairs.
+[[sensor.write_command]]
+name = "fast_write"
+match_mask = 0xC0
+match_value = 0x00
+group_bytes = 2
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [13, 12]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [11, 0]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register (Figure 6-2, p.25): [0 1 0 x x PD1 PD0 x][D11..D4][D3..D0 x x x x].
+[[sensor.write_command]]
+name = "write_dac"
+match_mask = 0xE0
+match_value = 0x40
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+
+# Write DAC register and EEPROM (Figure 6-2, p.25): C2 C1 C0 = 011, also writes the EEPROM.
+[[sensor.write_command]]
+name = "write_dac_eeprom"
+match_mask = 0xE0
+match_value = 0x60
+group_bytes = 3
+[[sensor.write_command.field]]
+name = "pd_bits"
+bits = [18, 17]
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [15, 4]
+[sensor.write_command.update]
+code = "code_bits"
+pd = "pd_bits"
+ecode = "code_bits"
+epd = "pd_bits"
+
+# Equation 5-1 (p.19): VOUT = VREF x Dn / 4096 with VREF = VDD. Power-down (Table 5-2) puts a
+# 1 k, 100 k or 500 k resistor from VOUT to ground; modelled as 0 V (derived simplification).
+[[sensor.output]]
+name = "vout"
+channel = 0
+expr = "if(pd == 0.0, code / 4096 * vdd, 0.0)"
+
+# Read command (Figure 6-3, p.26): [RDY/BSY POR x x x PD1 PD0 x][D11..D4][D3..D0 x x x x]
+# then the EEPROM [x PD1 PD0 x D11..D8][D7..D0]. RDY/BSY = 1 (no EEPROM write time is modelled);
+# the POR bit has no printed meaning and is read as 0.
+[sensor.read_frame]
+bytes = [
+  "128 + pd * 2",
+  "floor(code / 16)",
+  "(code % 16) * 16",
+  "epd * 32 + floor(ecode / 256)",
+  "ecode % 256",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "vss"
+power_on_threshold_v = 2.0     # p.3 Electrical Characteristics, VPOR typ 2 V (below it all circuits are disabled, Section 5.4.1)
+idle_a = 0.00021               # p.3 Electrical Characteristics, IDD typ
+read_a = 0.00021
+write_a = 0.00021
+low_power_a = 0.00000006       # p.3 Electrical Characteristics, IDDP typ 0.06 uA (2.0 uA max, VDD = 5.5 V)
+
+[models.coverage]
+implements = ["pin_roles", "output_low_level", "ratiometric_input_levels_at_3v3", "operating_supply_current", "absolute_ratings", "supply_ranges", "thermal_resistance", "i2c_address_strap", "factory_address_option", "register_map", "fast_write", "write_dac_register", "write_dac_register_and_eeprom", "read_back_frame", "ratiometric_output_code_over_vdd", "power_down_output", "bus_coupled_active_current", "supply_voltage_gating", "eeprom_factory_default"]
+missing = ["eeprom_write_time_and_rdy_busy", "general_call_reset", "general_call_wake_up", "por_status_bit", "supply_net_as_reference", "output_power_down_pulldown_resistance", "input_vdd_plus_0v3_limit", "settling_time", "inl_dnl_offset_gain_errors", "eeprom_persistence_across_power_cycle", "reserved_command_handling"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22039d.pdf"
+title = "Microchip MCP4725 12-Bit Digital-to-Analog Converter with EEPROM Memory in SOT-23-6, DS22039D, June 2009"
+locator = "3.0 Table 3-1 Pin Function Table p.13; 1.0 Absolute Maximum Ratings and Electrical Characteristics pp.3-4; Thermal Package Resistances p.5; 5.1 Equation 5-1 p.19; 5.4 Tables 5-2 to 5-4 pp.20-21; 6.1 Figures 6-1 and 6-2 pp.24-25; 6.2 Figure 6-3 p.26; 7.2 Device Addressing p.27; 10.1 Package Marking p.43; Product Identification System p.47"
+sha256 = "746d95dfdaaf0a9da4698e2c0a201ac2736d8589a752ab0dcd903f4a1603077d"
+
+[[models.source.pinout]]
+package = "SOT-23-6 (CH)"
+pins = { "1" = "VOUT", "2" = "VSS", "3" = "VDD", "4" = "SDA", "5" = "SCL", "6" = "A0" }
+
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 210.0
+max = 400.0
+unit = "uA"
+conditions = "digital input pins grounded, VOUT unloaded, code = 000h, VDD = 2.7 V to 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDP power-down current"
+typ = 0.06
+max = 2.0
+unit = "uA"
+conditions = "VDD = 5.5 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, IDDP"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on-reset threshold voltage"
+typ = 2.0
+unit = "V"
+conditions = "below it all circuits are disabled and there is no DAC output"
+basis = "p.3 Electrical Characteristics, VPOR; Section 5.4.1 p.19"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 3 mA"
+basis = "p.4 Electrical Characteristics, Digital Interface, VOL"
+
+[[models.source.characteristic]]
+parameter = "Input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "SCL = SDA = A0 = VSS or SCL = SDA = A0 = VDD"
+basis = "p.4 Electrical Characteristics, Digital Interface, ILI"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VOUT grounded"
+basis = "p.3 Electrical Characteristics, Output Amplifier, ISC"
+
+[[models.source.characteristic]]
+parameter = "ROUT DC output impedance, normal mode"
+typ = 1.0
+unit = "Ω"
+conditions = "VOUT to VSS, normal mode"
+basis = "p.4 Electrical Characteristics, ROUT"
+
+[[models.source.characteristic]]
+parameter = "TWRITE EEPROM write time"
+typ = 25.0
+max = 50.0
+unit = "ms"
+conditions = "Write DAC register and EEPROM command"
+basis = "p.4 Electrical Characteristics, EEPROM, TWRITE"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 190.5
+unit = "°C/W"
+conditions = "6L-SOT-23"
+package = "SOT-23-6 (CH)"
+basis = "p.5 Temperature Characteristics, Thermal Package Resistances"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp3204_pdip14"
+kind = "adc"
+description = "Microchip MCP3204 4-channel 12-bit SPI ADC (pad map, supply, levels and ratings; the SPI conversion framing is not executable), PDIP-14"
+variant_of = "mcp3204"
+
+[models.match]
+# Family match: the anchored number keeps MCP3204 and MCP3208 apart, and from the 10-bit MCP3004/3008
+# and the MCP3201/3202/3301 ADCs. Members differ only in package (P = PDIP, SL = SOIC, ST = TSSOP in the
+# part number); this member's orderable codes: MCP3204-BI/P, MCP3204-CI/P, MCP3204T-BI/P, MCP3204T-CI/P.
+mpn_re = "(?i)^MCP3204([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP3204T?-[BC]I/P$"
+orderable = ["MCP3204-BI/P", "MCP3204-CI/P", "MCP3204T-BI/P", "MCP3204T-CI/P"]
+package = "PDIP-14"
+basis = "Microchip MCP3204/3208 DS21298E, Product Identification System p.37: Device MCP3204 or MCP3204T (tape and reel), Grade B or C, Temperature I, Package P = Plastic DIP (300 mil body), 14-lead; the MCP3204 is offered in 14-pin PDIP, SOIC and TSSOP (p.1)"
+
+[models.params]
+bits = 12                  # p.2 Electrical Characteristics, resolution 12 bits
+vih = { min = 3.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.7 x 5 V: p.3 Electrical Characteristics, VIH 0.7 VDD min (test supply VDD = 5 V)" }
+vil = { max = 1.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.3 x 5 V: p.3 Electrical Characteristics, VIL 0.3 VDD max (test supply VDD = 5 V)" }
+supply_static_ua = 320.0   # p.3 Electrical Characteristics, operating current IDD typ, VDD = VREF = 5 V, DOUT unloaded (400 uA max)
+supply_pin = "14"            # VDD
+gnd_pin = "7"              # DGND
+warning = "pad map, supply draw and logic levels only: the SPI conversion exchange (start bit, SGL/DIFF and D2..D0 channel select, null bit, 12-bit MSB-first result, then LSB-first repeat) is not executable, so the conversion result is never produced and the analog inputs are not sampled"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.15, the MCP3204 column (pads 5 and 6 are NC, no connection).
+"1" = "ch0"
+"2" = "ch1"
+"3" = "ch2"
+"4" = "ch3"
+"5" = "nc"
+"6" = "nc"
+"7" = "dgnd"
+"8" = "cs"
+"9" = "mosi"
+"10" = "miso"
+"11" = "sck"
+"12" = "agnd"
+"13" = "vref"
+"14" = "vdd"
+
+[models.ratings]
+max_voltage_v = 7.0            # p.2 Absolute Maximum Ratings, VDD 7.0 V
+theta_ja_c_per_w = 70.0     # p.4 Temperature Characteristics, Thermal Package Resistances, 14L-PDIP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Microchip MCP3204/3208 DS21298E, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP3204/3208 DS21298E, p.2 Absolute Maximum Ratings, VDD 7.0 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.6 V to VDD + 0.6 V w.r.t. VSS (p.2 Absolute Maximum
+# Ratings), a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# No maximum pin current or junction temperature is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "absolute_ratings", "supply_ranges", "logic_input_levels_at_5v", "thermal_resistance"]
+missing = ["spi_conversion_framing", "channel_select_and_single_ended_vs_pseudo_differential", "conversion_result", "reference_input_range", "analog_input_sampling", "standby_current_gating", "input_vdd_plus_0v6_limit", "dout_output_levels", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21298e.pdf"
+title = "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E, September 2008"
+locator = "3.0 Table 3-1 Pin Function Table p.15; 1.0 Absolute Maximum Ratings and Electrical Specifications pp.2-3; Temperature Characteristics p.4; 5.0 Tables 5-1 and 5-2 p.19; Product Identification System p.37"
+sha256 = "89bc1e17c35e2bb1c7b8fbf0b775b3729ce9fe4d27f7e9c052a774757afc0c20"
+
+[[models.source.pinout]]
+package = "PDIP-14"
+pins = { "1" = "CH0", "2" = "CH1", "3" = "CH2", "4" = "CH3", "5" = "NC", "6" = "NC", "7" = "DGND", "8" = "CS/SHDN", "9" = "DIN", "10" = "DOUT", "11" = "CLK", "12" = "AGND", "13" = "VREF", "14" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 320.0
+max = 400.0
+unit = "uA"
+conditions = "VDD = VREF = 5 V, DOUT unloaded (225 uA typ at VDD = VREF = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, operating current IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDS standby current"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "CS = VDD = 5.0 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, standby current IDDS"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOL"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 4.1
+unit = "V"
+conditions = "IOH = -1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOH"
+
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VSS or VDD"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, ILI"
+
+[[models.source.characteristic]]
+parameter = "fCLK clock frequency"
+max = 2.0
+unit = "MHz"
+conditions = "VDD = 5 V (1.0 MHz max at VDD = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Timing Parameters, fCLK"
+
+[[models.source.characteristic]]
+parameter = "VREF reference input voltage range"
+min = 0.25
+unit = "V"
+conditions = "the upper limit is VDD (a supply-relative limit)"
+basis = "p.2 Electrical Characteristics, Reference Input, voltage range"
+
+[[models.source.characteristic]]
+parameter = "Analog input switch resistance"
+typ = 1000.0
+unit = "Ω"
+conditions = "see Figure 4-1"
+basis = "p.3 Electrical Characteristics, Analog Inputs, switch resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 70.0
+unit = "°C/W"
+conditions = "14L-PDIP"
+package = "PDIP-14"
+basis = "p.4 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-PDIP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp3204_soic14"
+kind = "adc"
+description = "Microchip MCP3204 4-channel 12-bit SPI ADC (pad map, supply, levels and ratings; the SPI conversion framing is not executable), SOIC-14"
+variant_of = "mcp3204"
+
+[models.match]
+# Family match: the anchored number keeps MCP3204 and MCP3208 apart, and from the 10-bit MCP3004/3008
+# and the MCP3201/3202/3301 ADCs. Members differ only in package (P = PDIP, SL = SOIC, ST = TSSOP in the
+# part number); this member's orderable codes: MCP3204-BI/SL, MCP3204-CI/SL, MCP3204T-BI/SL, MCP3204T-CI/SL.
+mpn_re = "(?i)^MCP3204([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP3204T?-[BC]I/SL$"
+orderable = ["MCP3204-BI/SL", "MCP3204-CI/SL", "MCP3204T-BI/SL", "MCP3204T-CI/SL"]
+package = "SOIC-14"
+basis = "Microchip MCP3204/3208 DS21298E, Product Identification System p.37: Device MCP3204 or MCP3204T (tape and reel), Grade B or C, Temperature I, Package SL = Plastic SOIC (150 mil body), 14-lead; the MCP3204 is offered in 14-pin PDIP, SOIC and TSSOP (p.1)"
+
+[models.params]
+bits = 12                  # p.2 Electrical Characteristics, resolution 12 bits
+vih = { min = 3.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.7 x 5 V: p.3 Electrical Characteristics, VIH 0.7 VDD min (test supply VDD = 5 V)" }
+vil = { max = 1.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.3 x 5 V: p.3 Electrical Characteristics, VIL 0.3 VDD max (test supply VDD = 5 V)" }
+supply_static_ua = 320.0   # p.3 Electrical Characteristics, operating current IDD typ, VDD = VREF = 5 V, DOUT unloaded (400 uA max)
+supply_pin = "14"            # VDD
+gnd_pin = "7"              # DGND
+warning = "pad map, supply draw and logic levels only: the SPI conversion exchange (start bit, SGL/DIFF and D2..D0 channel select, null bit, 12-bit MSB-first result, then LSB-first repeat) is not executable, so the conversion result is never produced and the analog inputs are not sampled"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.15, the MCP3204 column (pads 5 and 6 are NC, no connection).
+"1" = "ch0"
+"2" = "ch1"
+"3" = "ch2"
+"4" = "ch3"
+"5" = "nc"
+"6" = "nc"
+"7" = "dgnd"
+"8" = "cs"
+"9" = "mosi"
+"10" = "miso"
+"11" = "sck"
+"12" = "agnd"
+"13" = "vref"
+"14" = "vdd"
+
+[models.ratings]
+max_voltage_v = 7.0            # p.2 Absolute Maximum Ratings, VDD 7.0 V
+theta_ja_c_per_w = 95.3     # p.4 Temperature Characteristics, Thermal Package Resistances, 14L-SOIC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Microchip MCP3204/3208 DS21298E, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP3204/3208 DS21298E, p.2 Absolute Maximum Ratings, VDD 7.0 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.6 V to VDD + 0.6 V w.r.t. VSS (p.2 Absolute Maximum
+# Ratings), a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# No maximum pin current or junction temperature is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "absolute_ratings", "supply_ranges", "logic_input_levels_at_5v", "thermal_resistance"]
+missing = ["spi_conversion_framing", "channel_select_and_single_ended_vs_pseudo_differential", "conversion_result", "reference_input_range", "analog_input_sampling", "standby_current_gating", "input_vdd_plus_0v6_limit", "dout_output_levels", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21298e.pdf"
+title = "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E, September 2008"
+locator = "3.0 Table 3-1 Pin Function Table p.15; 1.0 Absolute Maximum Ratings and Electrical Specifications pp.2-3; Temperature Characteristics p.4; 5.0 Tables 5-1 and 5-2 p.19; Product Identification System p.37"
+sha256 = "89bc1e17c35e2bb1c7b8fbf0b775b3729ce9fe4d27f7e9c052a774757afc0c20"
+
+[[models.source.pinout]]
+package = "SOIC-14"
+pins = { "1" = "CH0", "2" = "CH1", "3" = "CH2", "4" = "CH3", "5" = "NC", "6" = "NC", "7" = "DGND", "8" = "CS/SHDN", "9" = "DIN", "10" = "DOUT", "11" = "CLK", "12" = "AGND", "13" = "VREF", "14" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 320.0
+max = 400.0
+unit = "uA"
+conditions = "VDD = VREF = 5 V, DOUT unloaded (225 uA typ at VDD = VREF = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, operating current IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDS standby current"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "CS = VDD = 5.0 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, standby current IDDS"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOL"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 4.1
+unit = "V"
+conditions = "IOH = -1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOH"
+
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VSS or VDD"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, ILI"
+
+[[models.source.characteristic]]
+parameter = "fCLK clock frequency"
+max = 2.0
+unit = "MHz"
+conditions = "VDD = 5 V (1.0 MHz max at VDD = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Timing Parameters, fCLK"
+
+[[models.source.characteristic]]
+parameter = "VREF reference input voltage range"
+min = 0.25
+unit = "V"
+conditions = "the upper limit is VDD (a supply-relative limit)"
+basis = "p.2 Electrical Characteristics, Reference Input, voltage range"
+
+[[models.source.characteristic]]
+parameter = "Analog input switch resistance"
+typ = 1000.0
+unit = "Ω"
+conditions = "see Figure 4-1"
+basis = "p.3 Electrical Characteristics, Analog Inputs, switch resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 95.3
+unit = "°C/W"
+conditions = "14L-SOIC"
+package = "SOIC-14"
+basis = "p.4 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-SOIC"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp3204_tssop14"
+kind = "adc"
+description = "Microchip MCP3204 4-channel 12-bit SPI ADC (pad map, supply, levels and ratings; the SPI conversion framing is not executable), TSSOP-14"
+variant_of = "mcp3204"
+
+[models.match]
+# Family match: the anchored number keeps MCP3204 and MCP3208 apart, and from the 10-bit MCP3004/3008
+# and the MCP3201/3202/3301 ADCs. Members differ only in package (P = PDIP, SL = SOIC, ST = TSSOP in the
+# part number); this member's orderable codes: MCP3204-BI/ST, MCP3204-CI/ST, MCP3204T-BI/ST, MCP3204T-CI/ST.
+mpn_re = "(?i)^MCP3204([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP3204T?-[BC]I/ST$"
+orderable = ["MCP3204-BI/ST", "MCP3204-CI/ST", "MCP3204T-BI/ST", "MCP3204T-CI/ST"]
+package = "TSSOP-14"
+basis = "Microchip MCP3204/3208 DS21298E, Product Identification System p.37: Device MCP3204 or MCP3204T (tape and reel), Grade B or C, Temperature I, Package ST = Plastic TSSOP (4.4 mm), 14-lead; the MCP3204 is offered in 14-pin PDIP, SOIC and TSSOP (p.1)"
+
+[models.params]
+bits = 12                  # p.2 Electrical Characteristics, resolution 12 bits
+vih = { min = 3.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.7 x 5 V: p.3 Electrical Characteristics, VIH 0.7 VDD min (test supply VDD = 5 V)" }
+vil = { max = 1.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.3 x 5 V: p.3 Electrical Characteristics, VIL 0.3 VDD max (test supply VDD = 5 V)" }
+supply_static_ua = 320.0   # p.3 Electrical Characteristics, operating current IDD typ, VDD = VREF = 5 V, DOUT unloaded (400 uA max)
+supply_pin = "14"            # VDD
+gnd_pin = "7"              # DGND
+warning = "pad map, supply draw and logic levels only: the SPI conversion exchange (start bit, SGL/DIFF and D2..D0 channel select, null bit, 12-bit MSB-first result, then LSB-first repeat) is not executable, so the conversion result is never produced and the analog inputs are not sampled"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.15, the MCP3204 column (pads 5 and 6 are NC, no connection).
+"1" = "ch0"
+"2" = "ch1"
+"3" = "ch2"
+"4" = "ch3"
+"5" = "nc"
+"6" = "nc"
+"7" = "dgnd"
+"8" = "cs"
+"9" = "mosi"
+"10" = "miso"
+"11" = "sck"
+"12" = "agnd"
+"13" = "vref"
+"14" = "vdd"
+
+[models.ratings]
+max_voltage_v = 7.0            # p.2 Absolute Maximum Ratings, VDD 7.0 V
+theta_ja_c_per_w = 100.0     # p.4 Temperature Characteristics, Thermal Package Resistances, 14L-TSSOP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Microchip MCP3204/3208 DS21298E, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP3204/3208 DS21298E, p.2 Absolute Maximum Ratings, VDD 7.0 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.6 V to VDD + 0.6 V w.r.t. VSS (p.2 Absolute Maximum
+# Ratings), a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# No maximum pin current or junction temperature is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "absolute_ratings", "supply_ranges", "logic_input_levels_at_5v", "thermal_resistance"]
+missing = ["spi_conversion_framing", "channel_select_and_single_ended_vs_pseudo_differential", "conversion_result", "reference_input_range", "analog_input_sampling", "standby_current_gating", "input_vdd_plus_0v6_limit", "dout_output_levels", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21298e.pdf"
+title = "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E, September 2008"
+locator = "3.0 Table 3-1 Pin Function Table p.15; 1.0 Absolute Maximum Ratings and Electrical Specifications pp.2-3; Temperature Characteristics p.4; 5.0 Tables 5-1 and 5-2 p.19; Product Identification System p.37"
+sha256 = "89bc1e17c35e2bb1c7b8fbf0b775b3729ce9fe4d27f7e9c052a774757afc0c20"
+
+[[models.source.pinout]]
+package = "TSSOP-14"
+pins = { "1" = "CH0", "2" = "CH1", "3" = "CH2", "4" = "CH3", "5" = "NC", "6" = "NC", "7" = "DGND", "8" = "CS/SHDN", "9" = "DIN", "10" = "DOUT", "11" = "CLK", "12" = "AGND", "13" = "VREF", "14" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 320.0
+max = 400.0
+unit = "uA"
+conditions = "VDD = VREF = 5 V, DOUT unloaded (225 uA typ at VDD = VREF = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, operating current IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDS standby current"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "CS = VDD = 5.0 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, standby current IDDS"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOL"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 4.1
+unit = "V"
+conditions = "IOH = -1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOH"
+
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VSS or VDD"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, ILI"
+
+[[models.source.characteristic]]
+parameter = "fCLK clock frequency"
+max = 2.0
+unit = "MHz"
+conditions = "VDD = 5 V (1.0 MHz max at VDD = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Timing Parameters, fCLK"
+
+[[models.source.characteristic]]
+parameter = "VREF reference input voltage range"
+min = 0.25
+unit = "V"
+conditions = "the upper limit is VDD (a supply-relative limit)"
+basis = "p.2 Electrical Characteristics, Reference Input, voltage range"
+
+[[models.source.characteristic]]
+parameter = "Analog input switch resistance"
+typ = 1000.0
+unit = "Ω"
+conditions = "see Figure 4-1"
+basis = "p.3 Electrical Characteristics, Analog Inputs, switch resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 100.0
+unit = "°C/W"
+conditions = "14L-TSSOP"
+package = "TSSOP-14"
+basis = "p.4 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-TSSOP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp3208_pdip16"
+kind = "adc"
+description = "Microchip MCP3208 8-channel 12-bit SPI ADC (pad map, supply, levels and ratings; the SPI conversion framing is not executable), PDIP-16"
+variant_of = "mcp3208"
+
+[models.match]
+# Family match: the anchored number keeps MCP3204 and MCP3208 apart, and from the 10-bit MCP3004/3008
+# and the MCP3201/3202/3301 ADCs. Members differ only in package (P = PDIP, SL = SOIC, ST = TSSOP in the
+# part number); this member's orderable codes: MCP3208-BI/P, MCP3208-CI/P, MCP3208T-BI/P, MCP3208T-CI/P.
+mpn_re = "(?i)^MCP3208([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP3208T?-[BC]I/P$"
+orderable = ["MCP3208-BI/P", "MCP3208-CI/P", "MCP3208T-BI/P", "MCP3208T-CI/P"]
+package = "PDIP-16"
+basis = "Microchip MCP3204/3208 DS21298E, Product Identification System p.37: Device MCP3208 or MCP3208T (tape and reel), Grade B or C, Temperature I, Package P = Plastic DIP (300 mil body), 16-lead; the MCP3208 is offered in 16-pin PDIP and SOIC (p.1; the p.37 example MCP3208-CI/ST is not a package the pin table or p.1 list for the MCP3208, so no TSSOP-16 member is written)"
+
+[models.params]
+bits = 12                  # p.2 Electrical Characteristics, resolution 12 bits
+vih = { min = 3.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.7 x 5 V: p.3 Electrical Characteristics, VIH 0.7 VDD min (test supply VDD = 5 V)" }
+vil = { max = 1.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.3 x 5 V: p.3 Electrical Characteristics, VIL 0.3 VDD max (test supply VDD = 5 V)" }
+supply_static_ua = 320.0   # p.3 Electrical Characteristics, operating current IDD typ, VDD = VREF = 5 V, DOUT unloaded (400 uA max)
+supply_pin = "16"            # VDD
+gnd_pin = "9"              # DGND
+warning = "pad map, supply draw and logic levels only: the SPI conversion exchange (start bit, SGL/DIFF and D2..D0 channel select, null bit, 12-bit MSB-first result, then LSB-first repeat) is not executable, so the conversion result is never produced and the analog inputs are not sampled"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.15, the MCP3208 column.
+"1" = "ch0"
+"2" = "ch1"
+"3" = "ch2"
+"4" = "ch3"
+"5" = "ch4"
+"6" = "ch5"
+"7" = "ch6"
+"8" = "ch7"
+"9" = "dgnd"
+"10" = "cs"
+"11" = "mosi"
+"12" = "miso"
+"13" = "sck"
+"14" = "agnd"
+"15" = "vref"
+"16" = "vdd"
+
+[models.ratings]
+max_voltage_v = 7.0            # p.2 Absolute Maximum Ratings, VDD 7.0 V
+theta_ja_c_per_w = 70.0     # p.4 Temperature Characteristics, Thermal Package Resistances, 16L-PDIP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Microchip MCP3204/3208 DS21298E, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP3204/3208 DS21298E, p.2 Absolute Maximum Ratings, VDD 7.0 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.6 V to VDD + 0.6 V w.r.t. VSS (p.2 Absolute Maximum
+# Ratings), a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# No maximum pin current or junction temperature is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "absolute_ratings", "supply_ranges", "logic_input_levels_at_5v", "thermal_resistance"]
+missing = ["spi_conversion_framing", "channel_select_and_single_ended_vs_pseudo_differential", "conversion_result", "reference_input_range", "analog_input_sampling", "standby_current_gating", "input_vdd_plus_0v6_limit", "dout_output_levels", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21298e.pdf"
+title = "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E, September 2008"
+locator = "3.0 Table 3-1 Pin Function Table p.15; 1.0 Absolute Maximum Ratings and Electrical Specifications pp.2-3; Temperature Characteristics p.4; 5.0 Tables 5-1 and 5-2 p.19; Product Identification System p.37"
+sha256 = "89bc1e17c35e2bb1c7b8fbf0b775b3729ce9fe4d27f7e9c052a774757afc0c20"
+
+[[models.source.pinout]]
+package = "PDIP-16"
+pins = { "1" = "CH0", "2" = "CH1", "3" = "CH2", "4" = "CH3", "5" = "CH4", "6" = "CH5", "7" = "CH6", "8" = "CH7", "9" = "DGND", "10" = "CS/SHDN", "11" = "DIN", "12" = "DOUT", "13" = "CLK", "14" = "AGND", "15" = "VREF", "16" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 320.0
+max = 400.0
+unit = "uA"
+conditions = "VDD = VREF = 5 V, DOUT unloaded (225 uA typ at VDD = VREF = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, operating current IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDS standby current"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "CS = VDD = 5.0 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, standby current IDDS"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOL"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 4.1
+unit = "V"
+conditions = "IOH = -1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOH"
+
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VSS or VDD"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, ILI"
+
+[[models.source.characteristic]]
+parameter = "fCLK clock frequency"
+max = 2.0
+unit = "MHz"
+conditions = "VDD = 5 V (1.0 MHz max at VDD = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Timing Parameters, fCLK"
+
+[[models.source.characteristic]]
+parameter = "VREF reference input voltage range"
+min = 0.25
+unit = "V"
+conditions = "the upper limit is VDD (a supply-relative limit)"
+basis = "p.2 Electrical Characteristics, Reference Input, voltage range"
+
+[[models.source.characteristic]]
+parameter = "Analog input switch resistance"
+typ = 1000.0
+unit = "Ω"
+conditions = "see Figure 4-1"
+basis = "p.3 Electrical Characteristics, Analog Inputs, switch resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 70.0
+unit = "°C/W"
+conditions = "16L-PDIP"
+package = "PDIP-16"
+basis = "p.4 Temperature Characteristics, Thermal Package Resistances, thermal resistance 16L-PDIP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp3208_soic16"
+kind = "adc"
+description = "Microchip MCP3208 8-channel 12-bit SPI ADC (pad map, supply, levels and ratings; the SPI conversion framing is not executable), SOIC-16"
+variant_of = "mcp3208"
+
+[models.match]
+# Family match: the anchored number keeps MCP3204 and MCP3208 apart, and from the 10-bit MCP3004/3008
+# and the MCP3201/3202/3301 ADCs. Members differ only in package (P = PDIP, SL = SOIC, ST = TSSOP in the
+# part number); this member's orderable codes: MCP3208-BI/SL, MCP3208-CI/SL, MCP3208T-BI/SL, MCP3208T-CI/SL.
+mpn_re = "(?i)^MCP3208([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP3208T?-[BC]I/SL$"
+orderable = ["MCP3208-BI/SL", "MCP3208-CI/SL", "MCP3208T-BI/SL", "MCP3208T-CI/SL"]
+package = "SOIC-16"
+basis = "Microchip MCP3204/3208 DS21298E, Product Identification System p.37: Device MCP3208 or MCP3208T (tape and reel), Grade B or C, Temperature I, Package SL = Plastic SOIC (150 mil body), 16-lead; the MCP3208 is offered in 16-pin PDIP and SOIC (p.1; the p.37 example MCP3208-CI/ST is not a package the pin table or p.1 list for the MCP3208, so no TSSOP-16 member is written)"
+
+[models.params]
+bits = 12                  # p.2 Electrical Characteristics, resolution 12 bits
+vih = { min = 3.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.7 x 5 V: p.3 Electrical Characteristics, VIH 0.7 VDD min (test supply VDD = 5 V)" }
+vil = { max = 1.5, unit = "V", conditions = "VDD = 5 V", basis = "DERIVED 0.3 x 5 V: p.3 Electrical Characteristics, VIL 0.3 VDD max (test supply VDD = 5 V)" }
+supply_static_ua = 320.0   # p.3 Electrical Characteristics, operating current IDD typ, VDD = VREF = 5 V, DOUT unloaded (400 uA max)
+supply_pin = "16"            # VDD
+gnd_pin = "9"              # DGND
+warning = "pad map, supply draw and logic levels only: the SPI conversion exchange (start bit, SGL/DIFF and D2..D0 channel select, null bit, 12-bit MSB-first result, then LSB-first repeat) is not executable, so the conversion result is never produced and the analog inputs are not sampled"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.15, the MCP3208 column.
+"1" = "ch0"
+"2" = "ch1"
+"3" = "ch2"
+"4" = "ch3"
+"5" = "ch4"
+"6" = "ch5"
+"7" = "ch6"
+"8" = "ch7"
+"9" = "dgnd"
+"10" = "cs"
+"11" = "mosi"
+"12" = "miso"
+"13" = "sck"
+"14" = "agnd"
+"15" = "vref"
+"16" = "vdd"
+
+[models.ratings]
+max_voltage_v = 7.0            # p.2 Absolute Maximum Ratings, VDD 7.0 V
+theta_ja_c_per_w = 86.1     # p.4 Temperature Characteristics, Thermal Package Resistances, 16L-SOIC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Microchip MCP3204/3208 DS21298E, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP3204/3208 DS21298E, p.2 Absolute Maximum Ratings, VDD 7.0 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to -0.6 V to VDD + 0.6 V w.r.t. VSS (p.2 Absolute Maximum
+# Ratings), a supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# No maximum pin current or junction temperature is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "absolute_ratings", "supply_ranges", "logic_input_levels_at_5v", "thermal_resistance"]
+missing = ["spi_conversion_framing", "channel_select_and_single_ended_vs_pseudo_differential", "conversion_result", "reference_input_range", "analog_input_sampling", "standby_current_gating", "input_vdd_plus_0v6_limit", "dout_output_levels", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/21298e.pdf"
+title = "Microchip MCP3204/3208 2.7V 4-Channel/8-Channel 12-Bit A/D Converters with SPI Serial Interface, DS21298E, September 2008"
+locator = "3.0 Table 3-1 Pin Function Table p.15; 1.0 Absolute Maximum Ratings and Electrical Specifications pp.2-3; Temperature Characteristics p.4; 5.0 Tables 5-1 and 5-2 p.19; Product Identification System p.37"
+sha256 = "89bc1e17c35e2bb1c7b8fbf0b775b3729ce9fe4d27f7e9c052a774757afc0c20"
+
+[[models.source.pinout]]
+package = "SOIC-16"
+pins = { "1" = "CH0", "2" = "CH1", "3" = "CH2", "4" = "CH3", "5" = "CH4", "6" = "CH5", "7" = "CH6", "8" = "CH7", "9" = "DGND", "10" = "CS/SHDN", "11" = "DIN", "12" = "DOUT", "13" = "CLK", "14" = "AGND", "15" = "VREF", "16" = "VDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 320.0
+max = 400.0
+unit = "uA"
+conditions = "VDD = VREF = 5 V, DOUT unloaded (225 uA typ at VDD = VREF = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, operating current IDD"
+
+[[models.source.characteristic]]
+parameter = "IDDS standby current"
+typ = 0.5
+max = 2.0
+unit = "uA"
+conditions = "CS = VDD = 5.0 V"
+basis = "p.3 Electrical Characteristics, Power Requirements, standby current IDDS"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "IOL = 1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOL"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 4.1
+unit = "V"
+conditions = "IOH = -1 mA, VDD = 4.5 V"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, VOH"
+
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VSS or VDD"
+basis = "p.3 Electrical Characteristics, Digital Input/Output, ILI"
+
+[[models.source.characteristic]]
+parameter = "fCLK clock frequency"
+max = 2.0
+unit = "MHz"
+conditions = "VDD = 5 V (1.0 MHz max at VDD = 2.7 V)"
+basis = "p.3 Electrical Characteristics, Timing Parameters, fCLK"
+
+[[models.source.characteristic]]
+parameter = "VREF reference input voltage range"
+min = 0.25
+unit = "V"
+conditions = "the upper limit is VDD (a supply-relative limit)"
+basis = "p.2 Electrical Characteristics, Reference Input, voltage range"
+
+[[models.source.characteristic]]
+parameter = "Analog input switch resistance"
+typ = 1000.0
+unit = "Ω"
+conditions = "see Figure 4-1"
+basis = "p.3 Electrical Characteristics, Analog Inputs, switch resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 86.1
+unit = "°C/W"
+conditions = "16L-SOIC"
+package = "SOIC-16"
+basis = "p.4 Temperature Characteristics, Thermal Package Resistances, thermal resistance 16L-SOIC"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "pcm5102a"
+kind = "dac"
+description = "TI PCM5102A 112 dB SNR stereo I2S audio DAC with 2.1 VRMS ground-centred line outputs and PLL (hardware-strapped, no control bus), TSSOP-20 (PW)"
+
+[models.match]
+# PCM5102A only: the PCM5101A and PCM5100A (lower dynamic range) and the PCM5102 (no A) are not this card.
+# Single package (TSSOP-20 PW), so no variant set. Orderable codes, from the Packaging Information addendum (also the -Q1 automotive grade, same silicon family, -40 to 125 C): PCM5102APW, PCM5102APWG4, PCM5102APWR, PCM5102AQPWRQ1.
+mpn_re = "(?i)^PCM5102A([^0-9]|$)"
+
+[models.params]
+# Pad-map, supply, strap and level card: there is no control bus (hardware control only, no I2C or SPI registers),
+# so there is no peripheral model. The I2S stream is not executed.
+i2s_clock_role = "slave"       # 9.3.5 Clock Slave Mode pp.24-25: BCK, LRCK (and optional SCK) are all inputs; the device never drives an audio clock
+mclk_required = false          # 9.3.5.3 p.25: with SCK tied to ground and BCK/LRCK running for 16 successive LRCK periods the internal PLL generates the system clock (3-wire I2S)
+supply_pin = "20"              # DVDD (digital supply; AVDD pad 8 and CPVDD pad 1 are the other supply pads)
+gnd_pin = "19"                 # DGND
+warning = "pad map, supply ranges, strap meanings and ratings only: the I2S stream, PLL lock, filter, soft-mute and charge-pump behaviour are not executed, and no output waveform is produced"
+
+[models.pins]
+# 7 Pin Configuration and Functions p.5, PW 20-pin package.
+"1" = "cpvdd"     # CPVDD charge pump power supply, 3.3 V
+"2" = "capp"      # CAPP charge pump flying capacitor, positive
+"3" = "cpgnd"     # CPGND charge pump ground
+"4" = "capm"      # CAPM charge pump flying capacitor, negative
+"5" = "vneg"      # VNEG negative charge pump rail, decoupling, -3.3 V
+"6" = "outl"      # OUTL analog output, left
+"7" = "outr"      # OUTR analog output, right
+"8" = "avdd"      # AVDD analog power supply, 3.3 V
+"9" = "agnd"      # AGND analog ground
+"10" = "demp"     # DEMP de-emphasis for 44.1 kHz: off (low) / on (high)
+"11" = "flt"      # FLT filter select: normal latency (low) / low latency (high)
+"12" = "sysclk"   # SCK system clock input
+"13" = "bck"      # BCK audio data bit clock input
+"14" = "din"      # DIN audio data input
+"15" = "lrck"     # LRCK audio data word clock input
+"16" = "fmt"      # FMT audio format: I2S (low) / left-justified (high)
+"17" = "xsmt"     # XSMT soft mute control: soft mute (low) / soft un-mute (high)
+"18" = "ldoo"     # LDOO internal logic supply rail, decoupling (or external 1.8 V supply)
+"19" = "dgnd"     # DGND digital ground
+"20" = "dvdd"     # DVDD digital power supply, 1.8 V or 3.3 V
+
+[models.ratings]
+max_voltage_v = 3.9            # 8.1 Absolute Maximum Ratings p.6, AVDD, CPVDD, DVDD -0.3 V to 3.9 V (digital and analog input voltage also 3.9 V max)
+max_junction_temp_c = 130.0    # 8.1 p.6, operating junction temperature range -40 to 130 C
+theta_ja_c_per_w = 91.2        # 8.4 Thermal Information p.6, RθJA PW 20 pins
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 3.0
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI PCM5102A SLAS859C, 8.3 Recommended Operating Conditions p.6, AVDD referenced to AGND, VCOM mode 3 V min, 3.3 V nom, 3.46 V max (VREF mode min 3.2 V)"
+abs_max_basis = "TI PCM5102A SLAS859C, 8.1 Absolute Maximum Ratings p.6, AVDD, CPVDD, DVDD -0.3 V to 3.9 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "cpvdd"
+min_v = 3.1
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI PCM5102A SLAS859C, 8.3 Recommended Operating Conditions p.6, CPVDD referenced to CPGND, 3.1 V min, 3.3 V nom, 3.46 V max"
+abs_max_basis = "TI PCM5102A SLAS859C, 8.1 Absolute Maximum Ratings p.6, AVDD, CPVDD, DVDD -0.3 V to 3.9 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 1.65
+max_v = 3.46
+abs_max_v = 3.9
+basis = "TI PCM5102A SLAS859C, 8.3 Recommended Operating Conditions p.6, DVDD referenced to DGND: 1.8 V option 1.65 V to 1.95 V, 3.3 V option 3.1 V to 3.46 V (this union range spans the 1.95 V to 3.1 V gap in which the datasheet gives no operating range)"
+abs_max_basis = "TI PCM5102A SLAS859C, 8.1 Absolute Maximum Ratings p.6, DVDD -0.3 V to 3.9 V (2.25 V max when DVDD is at 1.8 V)"
+
+# SCHEMA GAP: the digital inputs (BCK, LRCK, DIN, SCK, FMT, FLT, DEMP, XSMT) are limited to -0.3 V to DVDD + 0.3 V
+# (8.1 p.6 lists 2.25 V at DVDD 1.8 V and 3.9 V at DVDD 3.3 V; 9.3.3 p.16 gives DVDD + 0.3 V for XSMT), a supply-relative
+# limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the datasheet prints no internal pull resistors and no statement on floating inputs, so no float rule
+# is written; the strap meanings below are the only strap facts it gives (7 Pin Configuration and Functions p.5).
+# SCHEMA GAP: the charge-pump pads CAPP/CAPM/VNEG/LDOO need decoupling and flying capacitors (10.1 p.26 figure 33); no
+# schema field carries a required external capacitor per pad, so none is written.
+# No maximum pin current is printed, so none is given.
+
+[models.coverage]
+implements = ["pin_roles", "supply_current_rows", "absolute_ratings", "supply_ranges", "logic_input_levels_at_3v3", "thermal_resistance", "i2s_clock_role_slave", "hardware_strap_meanings", "no_external_mclk_required"]
+missing = ["i2s_stream_execution", "pll_lock_and_clock_error_detection", "interpolation_filter_response", "soft_mute_and_undervoltage_protection_sequence", "charge_pump_startup", "analog_output_voltage", "input_voltage_dvdd_plus_0v3_limit", "power_sequencing_rules", "q1_vol_difference"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/pcm5102a.pdf"
+title = "TI PCM510xA, PCM510xA-Q1 2.1 VRMS, 112/106/100 dB Audio Stereo DAC with PLL and 32-bit, 384 kHz PCM Interface, SLAS859C, May 2012, revised May 2015"
+revision = "SLAS859C"
+locator = "7 Pin Configuration and Functions p.5; 8.1 Absolute Maximum Ratings, 8.3 Recommended Operating Conditions, 8.4 Thermal Information p.6; 8.5 Electrical Characteristics pp.7-10; 9.3.5 Audio Clocking pp.24-25; 9.3.3 XSMT p.16; 11.5.2 Power Save Modes p.33; 14 Packaging Information"
+sha256 = "a522083606b8e994875883215046fbdb92fd362996ca97719d259fbe9df07a85"
+
+[[models.source.pinout]]
+package = "TSSOP-20 (PW)"
+pins = { "1" = "CPVDD", "2" = "CAPP", "3" = "CPGND", "4" = "CAPM", "5" = "VNEG", "6" = "OUTL", "7" = "OUTR", "8" = "AVDD", "9" = "AGND", "10" = "DEMP", "11" = "FLT", "12" = "SCK", "13" = "BCK", "14" = "DIN", "15" = "LRCK", "16" = "FMT", "17" = "XSMT", "18" = "LDOO", "19" = "DGND", "20" = "DVDD" }
+
+[[models.source.characteristic]]
+parameter = "IDD DVDD supply current, 3.3 V"
+typ = 8.0
+max = 13.0
+unit = "mA"
+conditions = "fS = 48 kHz, input 1 kHz -1 dBFS data (typ also 9 mA at 96 kHz, 10 mA at 192 kHz); max applies at 48 kHz"
+basis = "8.5 Electrical Characteristics p.9, DVDD supply current at 3.3 V (6)"
+
+[[models.source.characteristic]]
+parameter = "IDD DVDD supply current, 1.8 V"
+typ = 7.0
+unit = "mA"
+conditions = "fS = 48 kHz, input 1 kHz -1 dBFS data (8 mA at 96 kHz, 9 mA at 192 kHz)"
+basis = "8.5 Electrical Characteristics p.9, DVDD supply current at 1.8 V (6)"
+
+[[models.source.characteristic]]
+parameter = "IDD AVDD / CPVDD supply current"
+typ = 22.0
+max = 32.0
+unit = "mA"
+conditions = "fS = 48 kHz, input 1 kHz -1 dBFS data (22 mA at 96 kHz and 192 kHz); max applies at 48 kHz"
+basis = "8.5 Electrical Characteristics p.10, AVDD / CPVDD supply current (6)"
+
+[[models.source.characteristic]]
+parameter = "IDD DVDD standby supply current, 3.3 V"
+typ = 0.5
+max = 0.8
+unit = "mA"
+conditions = "power-down mode (BCK and LRCK low for more than 1 s)"
+basis = "8.5 Electrical Characteristics p.9, DVDD supply current at 3.3 V (7)"
+
+[[models.source.characteristic]]
+parameter = "IDD AVDD / CPVDD supply current, power-down"
+typ = 0.2
+max = 0.4
+unit = "mA"
+conditions = "power-down mode"
+basis = "8.5 Electrical Characteristics p.10, AVDD / CPVDD supply current (7)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 2.31
+unit = "V"
+conditions = "DERIVED 0.7 x 3.3 V, DVDD = 3.3 V, 3.3 V LVCMOS family"
+basis = "8.5 Electrical Characteristics p.7, input logic level VIH 0.7 x DVDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.99
+unit = "V"
+conditions = "DERIVED 0.3 x 3.3 V, DVDD = 3.3 V, 3.3 V LVCMOS family"
+basis = "8.5 Electrical Characteristics p.7, input logic level VIL 0.3 x DVDD max"
+
+[[models.source.characteristic]]
+parameter = "VOH high-level output voltage"
+min = 2.64
+unit = "V"
+conditions = "DERIVED 0.8 x 3.3 V, IOH = -4 mA, DVDD = 3.3 V"
+basis = "8.5 Electrical Characteristics p.7, output logic level VOH 0.8 x DVDD min, 3.3 V LVCMOS family"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.726
+unit = "V"
+conditions = "DERIVED 0.22 x 3.3 V, IOL = 4 mA, DVDD = 3.3 V (non-Q1 grade; the Q1 grade prints 0.3 x DVDD at the 1.8 V family)"
+basis = "8.5 Electrical Characteristics p.7, output logic level VOL 0.22 x DVDD max, 3.3 V LVCMOS family"
+
+[[models.source.characteristic]]
+parameter = "IIH / IIL input logic current"
+min = -10.0
+max = 10.0
+unit = "uA"
+conditions = "VIN = VDD (IIH max 10 uA) and VIN = 0 V (IIL min -10 uA)"
+basis = "8.5 Electrical Characteristics p.7, input logic current"
+
+[[models.source.characteristic]]
+parameter = "fSCK system clock frequency"
+max = 50.0
+unit = "MHz"
+conditions = "multiples of fS: 64, 128, 192, 256, 384, 512, 768, 1024, 1152, 1536, 2048 or 3072"
+basis = "8.5 Electrical Characteristics p.7, fSCK; 8.3 Recommended Operating Conditions p.6, MCLK 50 MHz max"
+
+[[models.source.characteristic]]
+parameter = "fS sampling frequency"
+min = 8.0
+max = 384.0
+unit = "kHz"
+conditions = "PCM mode"
+basis = "8.5 Electrical Characteristics p.7, fS"
+
+[[models.source.characteristic]]
+parameter = "Output voltage"
+typ = 2.1
+unit = "VRMS"
+conditions = "ground-centred line output, load 1 kohm min"
+basis = "8.5 Electrical Characteristics p.9, analog output, output voltage"
+
+[[models.source.characteristic]]
+parameter = "Stereo line output load resistance"
+min = 1.0
+max = 10.0
+unit = "kΩ"
+conditions = "LOL, LOR"
+basis = "8.3 Recommended Operating Conditions p.6, stereo line output load resistance"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 91.2
+unit = "°C/W"
+conditions = "TSSOP-20 (PW)"
+package = "TSSOP-20 (PW)"
+basis = "8.4 Thermal Information p.6, RθJA PW 20 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4921_pdip8"
+kind = "dac"
+description = "Microchip MCP4921 single 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), PDIP-8"
+variant_of = "mcp4921"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4921 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (P in the part number); this member's
+# orderable codes: MCP4921-E/P, MCP4921T-E/P.
+mpn_re = "(?i)^MCP4921([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4921T?-E/(P)$"
+orderable = ["MCP4921-E/P", "MCP4921T-E/P"]
+package = "PDIP-8"
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, Product Identification System p.47: Device MCP4921 or MCP4921T (tape and reel), Temperature E (-40 to +125 C), Package P = 8-Lead Plastic Dual In-Line (PDIP); MCP4921-E/P is example o) of the same page"
+
+[models.params]
+bits = 12                      # DS22248A p.1, MCP4921 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "7"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = 0 write DAC, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (PDIP, MSOP and SOIC columns).
+"1" = "vdd"
+"2" = "cs"
+"3" = "sck"
+"4" = "mosi"
+"5" = "ldac"
+"6" = "vref"
+"7" = "vss"
+"8" = "vout"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 90.0     # Temperature Characteristics p.8, Thermal Package Resistances, 8L-PDIP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22248a.pdf"
+title = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output Digital-to-Analog Converter with SPI Interface, DS22248A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.47"
+sha256 = "a52733deb49e0ae49c7f535e0f3591491d5e81c72f18e6c9f3846ce4ce2dcc5e"
+
+[[models.source.pinout]]
+package = "PDIP-8"
+pins = { "1" = "VDD", "2" = "CS", "3" = "SCK", "4" = "SDI", "5" = "LDAC", "6" = "VREF", "7" = "VSS", "8" = "VOUT" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 175.0
+max = 350.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (125 typ, 250 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 90.0
+unit = "°C/W"
+conditions = "8L-PDIP"
+package = "PDIP-8"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 8L-PDIP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4921_soic8"
+kind = "dac"
+description = "Microchip MCP4921 single 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), SOIC-8"
+variant_of = "mcp4921"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4921 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (SN/SL in the part number); this member's
+# orderable codes: MCP4921-E/SN, MCP4921-E/SL, MCP4921T-E/SN, MCP4921T-E/SL.
+mpn_re = "(?i)^MCP4921([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4921T?-E/(SN|SL)$"
+orderable = ["MCP4921-E/SN", "MCP4921-E/SL", "MCP4921T-E/SN", "MCP4921T-E/SL"]
+package = "SOIC-8"
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, Product Identification System p.47: Device MCP4921 or MCP4921T (tape and reel), Temperature E (-40 to +125 C), Package SN = 8-Lead Plastic Small Outline - Narrow, 150 mil (SOIC); the same page's MCP4921 examples p) and q) print this package as /SL"
+
+[models.params]
+bits = 12                      # DS22248A p.1, MCP4921 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "7"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = 0 write DAC, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (PDIP, MSOP and SOIC columns).
+"1" = "vdd"
+"2" = "cs"
+"3" = "sck"
+"4" = "mosi"
+"5" = "ldac"
+"6" = "vref"
+"7" = "vss"
+"8" = "vout"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 150.0     # Temperature Characteristics p.8, Thermal Package Resistances, 8L-SOIC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22248a.pdf"
+title = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output Digital-to-Analog Converter with SPI Interface, DS22248A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.47"
+sha256 = "a52733deb49e0ae49c7f535e0f3591491d5e81c72f18e6c9f3846ce4ce2dcc5e"
+
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "VDD", "2" = "CS", "3" = "SCK", "4" = "SDI", "5" = "LDAC", "6" = "VREF", "7" = "VSS", "8" = "VOUT" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 175.0
+max = 350.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (125 typ, 250 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 150.0
+unit = "°C/W"
+conditions = "8L-SOIC"
+package = "SOIC-8"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 8L-SOIC"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4921_msop8"
+kind = "dac"
+description = "Microchip MCP4921 single 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), MSOP-8"
+variant_of = "mcp4921"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4921 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (MS in the part number); this member's
+# orderable codes: MCP4921-E/MS, MCP4921T-E/MS.
+mpn_re = "(?i)^MCP4921([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4921T?-E/(MS)$"
+orderable = ["MCP4921-E/MS", "MCP4921T-E/MS"]
+package = "MSOP-8"
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, Product Identification System p.47: Device MCP4921 or MCP4921T (tape and reel), Temperature E (-40 to +125 C), Package MS = 8-Lead Plastic Micro Small Outline (MSOP); MCP4921-E/MS is example r) of the same page"
+
+[models.params]
+bits = 12                      # DS22248A p.1, MCP4921 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "7"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = 0 write DAC, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (PDIP, MSOP and SOIC columns).
+"1" = "vdd"
+"2" = "cs"
+"3" = "sck"
+"4" = "mosi"
+"5" = "ldac"
+"6" = "vref"
+"7" = "vss"
+"8" = "vout"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 211.0     # Temperature Characteristics p.8, Thermal Package Resistances, 8L-MSOP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22248a.pdf"
+title = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output Digital-to-Analog Converter with SPI Interface, DS22248A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.47"
+sha256 = "a52733deb49e0ae49c7f535e0f3591491d5e81c72f18e6c9f3846ce4ce2dcc5e"
+
+[[models.source.pinout]]
+package = "MSOP-8"
+pins = { "1" = "VDD", "2" = "CS", "3" = "SCK", "4" = "SDI", "5" = "LDAC", "6" = "VREF", "7" = "VSS", "8" = "VOUT" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 175.0
+max = 350.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (125 typ, 250 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 211.0
+unit = "°C/W"
+conditions = "8L-MSOP"
+package = "MSOP-8"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 8L-MSOP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4921_dfn8"
+kind = "dac"
+description = "Microchip MCP4921 single 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), DFN-8 (2x3)"
+variant_of = "mcp4921"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4921 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (MC in the part number); this member's
+# orderable codes: MCP4921-E/MC, MCP4921T-E/MC.
+mpn_re = "(?i)^MCP4921([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4921T?-E/(MC)$"
+orderable = ["MCP4921-E/MC", "MCP4921T-E/MC"]
+package = "DFN-8 (2x3)"
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, Product Identification System p.47: Device MCP4921 or MCP4921T (tape and reel), Temperature E (-40 to +125 C), Package MC = 8-Lead Plastic Dual Flat, No Lead Package - 2x3x0.9 mm Body (DFN); MCP4921-E/MC is example t) of the same page"
+
+[models.params]
+bits = 12                      # DS22248A p.1, MCP4921 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "7"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = 0 write DAC, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (DFN column; pad 9 is the exposed thermal pad, connected to VSS in the application).
+"1" = "vdd"
+"2" = "cs"
+"3" = "sck"
+"4" = "mosi"
+"5" = "ldac"
+"6" = "vref"
+"7" = "vss"
+"8" = "vout"
+"9" = "thermal_pad"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 68.0     # Temperature Characteristics p.8, Thermal Package Resistances, 8L-DFN (2 x 3)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output DAC with SPI Interface DS22248A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22248a.pdf"
+title = "Microchip MCP4901/4911/4921 8/10/12-Bit Voltage Output Digital-to-Analog Converter with SPI Interface, DS22248A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.47"
+sha256 = "a52733deb49e0ae49c7f535e0f3591491d5e81c72f18e6c9f3846ce4ce2dcc5e"
+
+[[models.source.pinout]]
+package = "DFN-8 (2x3)"
+pins = { "1" = "VDD", "2" = "CS", "3" = "SCK", "4" = "SDI", "5" = "LDAC", "6" = "VREF", "7" = "VSS", "8" = "VOUT", "9" = "EP" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 175.0
+max = 350.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (125 typ, 250 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 68.0
+unit = "°C/W"
+conditions = "8L-DFN (2 x 3)"
+package = "DFN-8 (2x3)"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 8L-DFN (2 x 3)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4922_pdip14"
+kind = "dac"
+description = "Microchip MCP4922 dual 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), PDIP-14"
+variant_of = "mcp4922"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4922 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (P in the part number); this member's
+# orderable codes: MCP4922-E/P, MCP4922T-E/P.
+mpn_re = "(?i)^MCP4922([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4922T?-E/(P)$"
+orderable = ["MCP4922-E/P", "MCP4922T-E/P"]
+package = "PDIP-14"
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, Product Identification System p.45: Device MCP4922 or MCP4922T (tape and reel), Temperature E (-40 to +125 C), Package P = 14-Lead Plastic Dual In-Line (PDIP); MCP4922-E/P is example k) of the same page"
+
+[models.params]
+bits = 12                      # DS22250A p.1, MCP4922 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "12"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = A/B channel select, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (14-pin PDIP, SOIC, TSSOP; pads 2, 6 and 7 are NC).
+"1" = "vdd"
+"2" = "nc"
+"3" = "cs"
+"4" = "sck"
+"5" = "mosi"
+"6" = "nc"
+"7" = "nc"
+"8" = "ldac"
+"9" = "shdn"
+"10" = "vout_b"
+"11" = "vref_b"
+"12" = "vss"
+"13" = "vref_a"
+"14" = "vout_a"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 70.0     # Temperature Characteristics p.8, Thermal Package Resistances, 14L-PDIP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance", "hardware_shutdown_current"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors", "shdn_pin_both_channel_shutdown", "dual_channel_a_b_select"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22250A.pdf"
+title = "Microchip MCP4902/4912/4922 8/10/12-Bit Dual Voltage Output Digital-to-Analog Converter with SPI Interface, DS22250A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.45"
+sha256 = "8c507a2bce321888b4ff7f76e18824480116b32256e573ab4fdbb377e8b86484"
+
+[[models.source.pinout]]
+package = "PDIP-14"
+pins = { "1" = "VDD", "2" = "NC", "3" = "CS", "4" = "SCK", "5" = "SDI", "6" = "NC", "7" = "NC", "8" = "LDAC", "9" = "SHDN", "10" = "VOUTB", "11" = "VREFB", "12" = "VSS", "13" = "VREFA", "14" = "VOUTA" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 350.0
+max = 700.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (250 typ, 500 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "ISHDN hardware shutdown current"
+typ = 0.3
+max = 2.0
+unit = "uA"
+conditions = "SHDN low, power-on reset circuit turned off"
+basis = "p.3 Electrical Characteristics, Power Requirements, hardware shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS (SHDN as a digital input)"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 70.0
+unit = "°C/W"
+conditions = "14L-PDIP"
+package = "PDIP-14"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-PDIP"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4922_soic14"
+kind = "dac"
+description = "Microchip MCP4922 dual 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), SOIC-14"
+variant_of = "mcp4922"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4922 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (SL in the part number); this member's
+# orderable codes: MCP4922-E/SL, MCP4922T-E/SL.
+mpn_re = "(?i)^MCP4922([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4922T?-E/(SL)$"
+orderable = ["MCP4922-E/SL", "MCP4922T-E/SL"]
+package = "SOIC-14"
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, Product Identification System p.45: Device MCP4922 or MCP4922T (tape and reel), Temperature E (-40 to +125 C), Package SL = 14-Lead Plastic Small Outline - Narrow (SOIC); MCP4922-E/SL is example l) of the same page"
+
+[models.params]
+bits = 12                      # DS22250A p.1, MCP4922 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "12"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = A/B channel select, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (14-pin PDIP, SOIC, TSSOP; pads 2, 6 and 7 are NC).
+"1" = "vdd"
+"2" = "nc"
+"3" = "cs"
+"4" = "sck"
+"5" = "mosi"
+"6" = "nc"
+"7" = "nc"
+"8" = "ldac"
+"9" = "shdn"
+"10" = "vout_b"
+"11" = "vref_b"
+"12" = "vss"
+"13" = "vref_a"
+"14" = "vout_a"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 120.0     # Temperature Characteristics p.8, Thermal Package Resistances, 14L-SOIC
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance", "hardware_shutdown_current"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors", "shdn_pin_both_channel_shutdown", "dual_channel_a_b_select"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22250A.pdf"
+title = "Microchip MCP4902/4912/4922 8/10/12-Bit Dual Voltage Output Digital-to-Analog Converter with SPI Interface, DS22250A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.45"
+sha256 = "8c507a2bce321888b4ff7f76e18824480116b32256e573ab4fdbb377e8b86484"
+
+[[models.source.pinout]]
+package = "SOIC-14"
+pins = { "1" = "VDD", "2" = "NC", "3" = "CS", "4" = "SCK", "5" = "SDI", "6" = "NC", "7" = "NC", "8" = "LDAC", "9" = "SHDN", "10" = "VOUTB", "11" = "VREFB", "12" = "VSS", "13" = "VREFA", "14" = "VOUTA" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 350.0
+max = 700.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (250 typ, 500 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "ISHDN hardware shutdown current"
+typ = 0.3
+max = 2.0
+unit = "uA"
+conditions = "SHDN low, power-on reset circuit turned off"
+basis = "p.3 Electrical Characteristics, Power Requirements, hardware shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS (SHDN as a digital input)"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 120.0
+unit = "°C/W"
+conditions = "14L-SOIC"
+package = "SOIC-14"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-SOIC"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp4922_tssop14"
+kind = "dac"
+description = "Microchip MCP4922 dual 12-bit SPI voltage-output DAC (pad map, supply, levels and ratings; the 16-bit write frame and output law are not executable), TSSOP-14"
+variant_of = "mcp4922"
+
+[models.match]
+# Family match: the anchored number keeps the MCP4922 apart from the 8-bit and 10-bit parts of the same datasheet
+# and from the single/dual sibling. Members differ only in package (ST in the part number); this member's
+# orderable codes: MCP4922-E/ST, MCP4922T-E/ST.
+mpn_re = "(?i)^MCP4922([^0-9]|$)"
+
+[models.variant]
+orderable_re = "(?i)^MCP4922T?-E/(ST)$"
+orderable = ["MCP4922-E/ST", "MCP4922T-E/ST"]
+package = "TSSOP-14"
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, Product Identification System p.45: Device MCP4922 or MCP4922T (tape and reel), Temperature E (-40 to +125 C), Package ST = 14-Lead Plastic Thin Shrink Small Outline (TSSOP); MCP4922-E/ST is example n) of the same page"
+
+[models.params]
+bits = 12                      # DS22250A p.1, MCP4922 12-bit; Electrical Characteristics p.3, resolution n = 12 bits
+supply_pin = "1"           # VDD
+gnd_pin = "12"              # VSS
+warning = "pad map, supply draw, logic levels and ratings only: the 16-bit write frame (bit 15 = A/B channel select, BUF, GA, SHDN, D11..D0) is write-only SPI and is not executable here, so VOUT = G x VREF x D/4096 (G = 2 when GA = 0, 1 when GA = 1) is never produced"
+
+[models.pins]
+# Table 3-1 Pin Function Table p.17 (14-pin PDIP, SOIC, TSSOP; pads 2, 6 and 7 are NC).
+"1" = "vdd"
+"2" = "nc"
+"3" = "cs"
+"4" = "sck"
+"5" = "mosi"
+"6" = "nc"
+"7" = "nc"
+"8" = "ldac"
+"9" = "shdn"
+"10" = "vout_b"
+"11" = "vref_b"
+"12" = "vss"
+"13" = "vref_a"
+"14" = "vout_a"
+
+[models.ratings]
+max_voltage_v = 6.5            # Absolute Maximum Ratings p.3, VDD 6.5 V
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings p.3, maximum junction temperature TJ +150 C
+theta_ja_c_per_w = 100.0     # Temperature Characteristics p.8, Thermal Package Resistances, 14L-TSSOP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Electrical Characteristics, power requirements, operating voltage VDD 2.7 V to 5.5 V"
+abs_max_basis = "Microchip MCP4902/4912/4922 Dual 8/10/12-Bit Voltage Output DAC with SPI Interface DS22250A, p.3 Absolute Maximum Ratings, VDD 6.5 V"
+
+# SCHEMA GAP: all inputs and outputs are limited to VSS - 0.3 V to VDD + 0.3 V (p.3 Absolute Maximum Ratings), a
+# supply-relative limit; input_tolerance takes only a fixed max_v, so no input envelope row is written.
+# SCHEMA GAP: the pin-current limits are per pin class (input pins +-2 mA, supply pins +-50 mA, output pins +-25 mA,
+# p.3); only one max_pin_current_a scalar exists, so none is written.
+
+[models.coverage]
+implements = ["pin_roles", "operating_supply_current", "software_shutdown_current", "absolute_ratings", "supply_ranges", "logic_input_levels", "thermal_resistance", "hardware_shutdown_current"]
+missing = ["spi_write_frame", "dac_output_voltage", "reference_gain_and_buffer_control", "double_buffered_ldac_update", "shutdown_500k_output_load", "power_on_reset_sequencing", "output_settling_time", "input_vdd_plus_0v3_limit", "inl_dnl_offset_gain_errors", "shdn_pin_both_channel_shutdown", "dual_channel_a_b_select"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22250A.pdf"
+title = "Microchip MCP4902/4912/4922 8/10/12-Bit Dual Voltage Output Digital-to-Analog Converter with SPI Interface, DS22250A, 2010"
+locator = "Package Types p.1; 1.0 Electrical Characteristics and Absolute Maximum Ratings pp.3-7; Temperature Characteristics p.8; 3.0 Pin Descriptions Table 3-1 p.17; 5.2 Write Command p.24; Product Identification System p.45"
+sha256 = "8c507a2bce321888b4ff7f76e18824480116b32256e573ab4fdbb377e8b86484"
+
+[[models.source.pinout]]
+package = "TSSOP-14"
+pins = { "1" = "VDD", "2" = "NC", "3" = "CS", "4" = "SCK", "5" = "SDI", "6" = "NC", "7" = "NC", "8" = "LDAC", "9" = "SHDN", "10" = "VOUTB", "11" = "VREFB", "12" = "VSS", "13" = "VREFA", "14" = "VOUTA" }
+
+[[models.source.characteristic]]
+parameter = "IDD operating supply current"
+typ = 350.0
+max = 700.0
+unit = "uA"
+conditions = "VDD = 5 V, VREF unbuffered, digital inputs grounded, outputs unloaded, code 0x000 (250 typ, 500 max at VDD = 3 V)"
+basis = "p.3 Electrical Characteristics, Power Requirements, supply current IDD"
+
+[[models.source.characteristic]]
+parameter = "ISHDN_SW software shutdown current"
+typ = 3.3
+max = 6.0
+unit = "uA"
+conditions = "power-on reset circuit remains on"
+basis = "p.3 Electrical Characteristics, Power Requirements, software shutdown current"
+
+[[models.source.characteristic]]
+parameter = "ISHDN hardware shutdown current"
+typ = 0.3
+max = 2.0
+unit = "uA"
+conditions = "SHDN low, power-on reset circuit turned off"
+basis = "p.3 Electrical Characteristics, Power Requirements, hardware shutdown current"
+
+[[models.source.characteristic]]
+parameter = "VPOR power-on reset threshold"
+typ = 2.0
+unit = "V"
+conditions = "TA = -40 to +85 C (1.85 V typ in the extended-temperature table at +125 C)"
+basis = "p.3 Electrical Characteristics, Power Requirements, power-on reset threshold"
+
+[[models.source.characteristic]]
+parameter = "VIH Schmitt trigger high-level input voltage"
+min = 3.5
+unit = "V"
+conditions = "DERIVED 0.7 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIH 0.7 VDD min"
+
+[[models.source.characteristic]]
+parameter = "VIL Schmitt trigger low-level input voltage"
+max = 1.0
+unit = "V"
+conditions = "DERIVED 0.2 x 5 V at the VDD = 5 V test supply, all digital input pins"
+basis = "p.7 AC Characteristics (SPI timing), VIL 0.2 VDD max"
+
+[[models.source.characteristic]]
+parameter = "ILEAKAGE input leakage current"
+min = -1.0
+max = 1.0
+unit = "uA"
+conditions = "LDAC = CS = SDI = SCK = VREF = VDD or VSS (SHDN as a digital input)"
+basis = "p.7 AC Characteristics (SPI timing), input leakage current"
+
+[[models.source.characteristic]]
+parameter = "FCLK clock frequency"
+max = 20.0
+unit = "MHz"
+conditions = "TA = +25 C"
+basis = "p.7 AC Characteristics (SPI timing), clock frequency"
+
+[[models.source.characteristic]]
+parameter = "ISC output short-circuit current"
+typ = 15.0
+max = 24.0
+unit = "mA"
+conditions = "VDD = 5 V, VREF = 2.048 V, gain 2x"
+basis = "p.4 Electrical Characteristics, Output Amplifier, short circuit current"
+
+[[models.source.characteristic]]
+parameter = "Output swing"
+min = 0.01
+unit = "V"
+conditions = "VOUT from 10 mV to (VDD - 40 mV) is accurate to better than 1 LSb"
+basis = "p.4 Electrical Characteristics, Output Amplifier, output swing"
+
+[[models.source.characteristic]]
+parameter = "tsettling output settling time"
+typ = 4.5
+unit = "us"
+conditions = "within 1/2 LSb of final value from 1/4 to 3/4 full-scale range"
+basis = "p.4 Electrical Characteristics, Output Amplifier, settling time"
+
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+typ = 100.0
+unit = "°C/W"
+conditions = "14L-TSSOP"
+package = "TSSOP-14"
+basis = "p.8 Temperature Characteristics, Thermal Package Resistances, thermal resistance 14L-TSSOP"

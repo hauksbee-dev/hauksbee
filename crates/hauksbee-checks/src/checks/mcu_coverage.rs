@@ -331,7 +331,7 @@ mod tests {
     }
 
     /// The blocker case: a part absent from the device DB but routed to a strapless
-    /// engine fallback (STM32F407 → `route_mcu_family`) must STILL be flagged. The
+    /// engine fallback (STM32F446 → `route_mcu_family`) must STILL be flagged. The
     /// fallback gives it a model with no strap table, so `strap_lint` skips its
     /// BOOT0 silently; gating on `model.is_some()` would miss it and reprint "Looks
     /// healthy" over an unchecked boot-mode latch; the exact bug this check exists
@@ -343,7 +343,7 @@ mod tests {
             "t",
             &[],
             vec![
-                comp("U1", "STM32F407VGT6", "Package_QFP:LQFP-100"), // DB-miss → fallback
+                comp("U1", "STM32F446VET6", "Package_QFP:LQFP-100"), // DB-miss → fallback
                 comp("U2", "STM32F103C8T6", "Package_QFP:LQFP-48"),  // DB-authored, has straps
             ],
         );
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(
             refs,
             vec!["U1"],
-            "fallback-routed STM32F407 must be flagged; DB-authored STM32F103C8 must not"
+            "fallback-routed STM32F446 must be flagged; DB-authored STM32F103C8 must not"
         );
     }
 

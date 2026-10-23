@@ -1,0 +1,695 @@
+# Official built-in part library: drivers.
+#
+# Cards here are written from vendor datasheets only (every value carries a basis and a source).
+# See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+# ── A4988 microstepping stepper driver, 28-contact QFN with exposed pad (ET) ──────────────────────────────
+# Source: Allegro 4988-DS Rev. 8 (April 5, 2022). Pinout Diagram and Terminal List Table p.18, Absolute Maximum
+# Ratings p.2, Electrical Characteristics p.4, Thermal Characteristics p.5, Table 1 microstep truth table p.6.
+# The datasheet prints one package (ET, 28-contact QFN, ordering code A4988SETTR-T), so the bare name resolves here.
+# The motor outputs, the STEP translator, the VREF trip law and the chopping are NOT modelled: only the VBB
+# supply draw, the rails, the logic thresholds, the pin map and the printed ratings are.
+[[models]]
+id = "a4988_et_qfn28"
+kind = "digital"
+description = "Allegro A4988 DMOS microstepping driver with translator and overcurrent protection, 28-contact QFN with exposed thermal pad (ET): VBB supply draw, logic thresholds and ratings (motor outputs not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.allegromicro.com/-/media/files/datasheets/a4988-datasheet.pdf"
+title = "Allegro MicroSystems A4988 DMOS Microstepping Driver with Translator and Overcurrent Protection, 4988-DS Rev. 8 (April 5, 2022)"
+locator = "Pinout Diagram and Terminal List Table p.18; Absolute Maximum Ratings p.2; Electrical Characteristics p.4; Thermal Characteristics p.5; Table 1 Microstepping Resolution Truth Table p.6; Functional Description p.7"
+sha256 = "d1dfba3bb7be2cbf2b689f39424569fc78b1f4fd1f427648bbd8f291ebb933ea"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "A4988 4988-DS Rev. 8 Electrical Characteristics: IBB prints maximum values only (4 mA fPWM < 50 kHz, 2 mA operating with outputs disabled); no typical is printed, so the 4 mA maximum is the stamped awake draw"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the DMOS full bridges, the fixed off-time chopping, the mixed-decay timing, the STEP translator and microstep tables, the VREF trip law (ITripMax = VREF / (8 x RS)), sleep, the overcurrent and thermal shutdown are not modelled; the Rds(on) of 320 mOhm typ / 430 mOhm max is not stamped"
+
+[models.match]
+# A4988 and its ET ordering codes (A4988SETTR-T, A4988SET-T, A4988SETTR). The datasheet prints a single package.
+# A4950, A4989 and other Allegro bridge drivers are siblings and do not match.
+value_re = "(?i)^A4988(SET(TR)?(-T)?)?$"
+
+[models.params]
+vih = 2.31        # derived: VIN(1) min = VDD x 0.7 at VDD = 3.3 V (Electrical Characteristics, Control Logic)
+vil = 0.99        # derived: VIN(0) max = VDD x 0.3 at VDD = 3.3 V (Electrical Characteristics, Control Logic)
+supply_static_ua = 5000.0   # IDD, outputs off, max (Electrical Characteristics, Logic Supply Current); 8 mA max with fPWM < 50 kHz is not stamped
+supply_pin = "15"   # VDD
+gnd_pin = "3"
+supply_current_a = 4e-3   # IBB, fPWM < 50 kHz, max (Electrical Characteristics); no typical is printed
+supply_on_v = 8.0         # VBB operating minimum (Electrical Characteristics, Load Supply Voltage Range)
+float_tolerated_roles = "ms1,ms2,ms3"
+float_tolerated_basis = "A4988 Functional Description, Microstep Select: the MS1 and MS3 pins have a 100 kOhm pull-down resistance and MS2 a 50 kOhm pull-down (Electrical Characteristics RMS1 100 kOhm, RMS2 50 kOhm, RMS3 100 kOhm), so an open pin selects full step"
+
+[models.levels]
+# Electrical Characteristics, Logic Input Voltage: VIN(1) min = VDD x 0.7, VIN(0) max = VDD x 0.3 (derived at VDD 3.0 V and 5.5 V, the Logic Supply Voltage Range ends)
+vih = [[3.0, 2.1], [5.5, 3.85]]
+vil = [[3.0, 0.9], [5.5, 1.65]]
+
+[models.pins]
+# Terminal List Table p.18 (ET package; GND 3 and 18, NC 7, 20 and 25, PAD)
+"1" = "out2b"
+"2" = "enable"
+"3" = "gnd"
+"4" = "cp1"
+"5" = "cp2"
+"6" = "vcp"
+"7" = "nc"
+"8" = "vreg"
+"9" = "ms1"
+"10" = "ms2"
+"11" = "ms3"
+"12" = "reset"
+"13" = "rosc"
+"14" = "sleep"
+"15" = "vdd"
+"16" = "step"
+"17" = "ref"
+"18" = "gnd"
+"19" = "dir"
+"20" = "nc"
+"21" = "out1b"
+"22" = "vbb1"
+"23" = "sense1"
+"24" = "out1a"
+"25" = "nc"
+"26" = "out2a"
+"27" = "sense2"
+"28" = "vbb2"
+"29" = "gnd_ep"
+
+[models.ratings]
+max_voltage_v = 35.0           # Absolute Maximum Ratings, Load Supply Voltage VBB
+max_current_a = 2.0            # Absolute Maximum Ratings, Output Current IOUT +-2 A
+max_junction_temp_c = 150.0    # Absolute Maximum Ratings, TJ(max)
+theta_ja_c_per_w = 32.0        # Thermal Characteristics, RthetaJA, four-layer PCB, JEDEC standard
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbb1"
+min_v = 8.0
+max_v = 35.0
+abs_max_v = 35.0
+basis = "Allegro A4988 4988-DS Rev. 8, Electrical Characteristics Load Supply Voltage Range VBB operating 8 V to 35 V; Absolute Maximum Ratings Load Supply Voltage VBB 35 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbb2"
+min_v = 8.0
+max_v = 35.0
+abs_max_v = 35.0
+basis = "Allegro A4988 4988-DS Rev. 8, Electrical Characteristics Load Supply Voltage Range VBB operating 8 V to 35 V; Absolute Maximum Ratings Load Supply Voltage VBB 35 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 5.5
+abs_max_v = 5.5
+basis = "Allegro A4988 4988-DS Rev. 8, Electrical Characteristics Logic Supply Voltage Range VDD operating 3 V to 5.5 V; Absolute Maximum Ratings Logic Supply Voltage VDD -0.3 V to 5.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["enable", "ms1", "ms2", "ms3", "reset", "sleep", "step", "dir"]
+max_v = 5.5
+abs_max_v = 5.5
+basis = "Allegro A4988 4988-DS Rev. 8, Absolute Maximum Ratings Logic Input Voltage VIN -0.3 V to 5.5 V (no separate recommended ceiling is printed)"
+abs_max_basis = "Allegro A4988 4988-DS Rev. 8, Absolute Maximum Ratings Logic Input Voltage VIN -0.3 V to 5.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["ref"]
+max_v = 4.0
+abs_max_v = 5.5
+basis = "Allegro A4988 4988-DS Rev. 8, Electrical Characteristics Reference Input Voltage Range VREF 0 V to 4 V"
+abs_max_basis = "Allegro A4988 4988-DS Rev. 8, Absolute Maximum Ratings Reference Voltage VREF 5.5 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vbb1"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vbb1 / supply_on_v))"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles"]
+missing = ["h_bridge_drive", "step_translator", "microstep_selection", "current_regulation", "decay_mode", "sleep_mode", "overcurrent_protection", "thermal_shutdown", "output_on_resistance", "timing_requirements"]
+
+
+# ── DRV8825 stepper motor controller, 28-pin HTSSOP PowerPAD (PWP) ──────────────────────────────
+# Source: TI SLVSA73F (April 2010, revised July 2014). Pin Functions p.3-4, 7.1 Absolute Maximum Ratings and
+# 7.3 Recommended Operating Conditions p.4, 7.4 Thermal Information p.5, 7.5 Electrical Characteristics p.6.
+# The datasheet prints one package (PWP, HTSSOP 28), so the bare name resolves. The PowerPAD is not numbered in the
+# pin table and the datasheet only says to connect it thermally to copper (11.3.2), so it is not mapped.
+# The outputs, the indexer, the decay modes and the VREF trip law are NOT modelled: only the VM supply draw, the rails,
+# the logic thresholds, the pin map and the printed ratings are.
+[[models]]
+id = "drv8825_pwp28"
+kind = "digital"
+description = "TI DRV8825 stepper motor controller IC, 28-pin HTSSOP PowerPAD (PWP): VM supply draw, logic thresholds and ratings (motor outputs, indexer and decay not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8825.pdf"
+title = "Texas Instruments DRV8825 Stepper Motor Controller IC, SLVSA73F, April 2010, revised July 2014"
+locator = "6 Pin Configuration and Functions (Pin Functions); 7.1 Absolute Maximum Ratings; 7.3 Recommended Operating Conditions; 7.4 Thermal Information; 7.5 Electrical Characteristics; 7.6 Timing Requirements"
+sha256 = "5b4dccc2497334e10574ffa5a55518c8d59b0ed35758f5e8f099b84bbfbb407b"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "DRV8825 SLVSA73F 7.5: IVM 5 mA typ / 8 mA max at V(VMx) = 24 V; sleep 10 uA typ / 20 uA max; no minimum is printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the H-bridge outputs, the microstepping indexer (full to 1/32 step), the decay modes, the VREF trip law (VTRIP = 660 mV typ at VREF = 3.3 V, 100% current), the 3.3 V V3P3OUT regulator output, nFAULT and nHOME open-drain outputs, protection and timing are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_threshold_pins"
+reason = "7.5 prints VIL 0.7 V max and VIH 2.2 V min for the logic inputs; the DECAY pin has its own thresholds (0.8 V slow-decay max, 2 V fast-decay min) that a single level pair cannot carry"
+
+[models.match]
+# DRV8825PWP and the PWPR / PWPRG4 / .A / .B orderable codes in the Package Option Addendum. The sheet prints one package.
+# DRV8824 and DRV8826 are different parts and do not match.
+value_re = "(?i)^DRV8825(PWP(R|RG4)?)?(\\.[AB])?$"
+
+[models.params]
+vih = 2.2         # VIH min, 7.5 logic-level inputs
+vil = 0.7         # VIL max, 7.5 logic-level inputs
+gnd_pin = "14"
+supply_current_a = 5e-3   # IVM typ at V(VMx) = 24 V (8 mA max), 7.5 Power Supplies
+supply_on_v = 8.2         # VM undervoltage lockout, VUVLO rising max 8.2 V (7.8 V typ), 7.5 Protection Circuits
+float_tolerated_roles = "mode0,mode1,mode2,dir,nenbl"
+float_tolerated_basis = "DRV8825 SLVSA73F Pin Functions: MODE0 to MODE2, DIR and nENBL have an internal pulldown (7.5 RPD 100 kOhm), so an open pin reads low: full step, one direction, outputs enabled"
+must_not_float_roles = "nsleep,nreset"
+
+[models.pins]
+# 6 Pin Configuration and Functions, Pin Functions p.3-4 (PWP, HTSSOP 28; GND 14 and 28)
+"1" = "cp1"
+"2" = "cp2"
+"3" = "vcp"
+"4" = "vma"
+"5" = "aout1"
+"6" = "isena"
+"7" = "aout2"
+"8" = "bout2"
+"9" = "isenb"
+"10" = "bout1"
+"11" = "vmb"
+"12" = "avref"
+"13" = "bvref"
+"14" = "gnd"
+"15" = "v3p3out"
+"16" = "nreset"
+"17" = "nsleep"
+"18" = "nfault"
+"19" = "decay"
+"20" = "dir"
+"21" = "nenbl"
+"22" = "step"
+"23" = "nc"
+"24" = "mode0"
+"25" = "mode1"
+"26" = "mode2"
+"27" = "nhome"
+"28" = "gnd"
+
+[models.ratings]
+max_voltage_v = 47.0           # 7.1 Power supply voltage V(VMx)
+max_current_a = 2.5            # 7.1 Continuous motor drive output current
+max_junction_temp_c = 150.0    # 7.1 Operating junction temperature TJ
+theta_ja_c_per_w = 31.6        # 7.4 RthetaJA, PWP, JEDEC high-K board simulation
+theta_jc_c_per_w = 15.9        # 7.4 RthetaJC(top), PWP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vma"
+min_v = 8.2
+max_v = 45.0
+abs_max_v = 47.0
+basis = "TI DRV8825 SLVSA73F, 7.3 Recommended Operating Conditions V(VMx) 8.2 V to 45 V; 7.1 Absolute Maximum Ratings V(VMx) -0.3 V to 47 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vmb"
+min_v = 8.2
+max_v = 45.0
+abs_max_v = 47.0
+basis = "TI DRV8825 SLVSA73F, 7.3 Recommended Operating Conditions V(VMx) 8.2 V to 45 V (all VM pins must connect to the same supply); 7.1 Absolute Maximum Ratings V(VMx) -0.3 V to 47 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["nreset", "nsleep", "nenbl", "step", "dir", "mode0", "mode1", "mode2", "decay"]
+max_v = 5.25
+abs_max_v = 7.0
+basis = "TI DRV8825 SLVSA73F, 7.5 Electrical Characteristics VIH logic-level input high max 5.25 V"
+abs_max_basis = "TI DRV8825 SLVSA73F, 7.1 Absolute Maximum Ratings Digital pin voltage -0.5 V to 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["avref", "bvref"]
+max_v = 3.5
+abs_max_v = 4.0
+basis = "TI DRV8825 SLVSA73F, 7.3 Recommended Operating Conditions V(VREF) 1 V to 3.5 V"
+abs_max_basis = "TI DRV8825 SLVSA73F, 7.1 Absolute Maximum Ratings V(xVREF) input voltage -0.3 V to 4 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vma"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vma / supply_on_v))"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles"]
+missing = ["h_bridge_drive", "microstep_indexer", "current_regulation", "decay_mode", "sleep_mode", "v3p3out_regulator", "fault_output", "home_output", "overcurrent_protection", "thermal_shutdown", "thermal_pad_pin", "timing_requirements"]
+
+
+# ── DRV8833 dual H-bridge motor driver, 16-pin HTSSOP PowerPAD (PWP) ──────────────────────────────
+# Source: TI SLVSAR1E (January 2011, revised July 2015). Pin Functions p.3-4, 6.1 Absolute Maximum Ratings p.5,
+# 6.3 Recommended Operating Conditions p.5, 6.4 Thermal Information p.5, 6.5 Electrical Characteristics p.6.
+# One card per package: RthetaJA differs and the WQFN numbers its pads differently. The outputs and the ISEN current
+# regulation are NOT modelled: only the VM supply draw, the rail, the logic thresholds, the pin map and the ratings are.
+[[models]]
+id = "drv8833_pwp16"
+kind = "digital"
+description = "TI DRV8833 dual H-bridge motor driver, 16-pin HTSSOP PowerPAD (PWP): VM supply draw, logic thresholds and ratings (H-bridge outputs not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8833.pdf"
+title = "Texas Instruments DRV8833 Dual H-Bridge Motor Driver, SLVSAR1E, January 2011, revised July 2015"
+locator = "5 Pin Configuration and Functions (Pin Functions); 6.1 Absolute Maximum Ratings; 6.3 Recommended Operating Conditions; 6.4 Thermal Information; 6.5 Electrical Characteristics; Package Option Addendum"
+sha256 = "3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "DRV8833 SLVSAR1E 6.5: IVM 1.7 mA typ / 3 mA max at VM = 5 V with xIN1 = xIN2 = 0 V; sleep 1.6 uA typ / 2.5 uA max; no minimum is printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_threshold_pins"
+reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
+
+[models.match]
+# DRV8833PWP, DRV8833PWPR, DRV8833PWPRG4 and the .B variants of the Package Option Addendum.
+# DRV8832, DRV8837 and other DRV88xx bridges are siblings and do not match.
+value_re = "(?i)^DRV8833PWP(R|RG4)?(\\.[AB])?$"
+
+[models.params]
+vih = 2.0         # VIH min, all pins except nSLEEP (nSLEEP 2.5 V), 6.5 logic-level inputs
+vil = 0.7         # VIL max, all pins except nSLEEP (nSLEEP 0.5 V), 6.5 logic-level inputs
+gnd_pin = "13"
+supply_current_a = 1.7e-3   # IVM typ, VM = 5 V, xIN1 = xIN2 = 0 V (3 mA max), 6.5 Power Supply
+supply_on_v = 2.6           # VM undervoltage lockout, VUVLO VM falling max 2.6 V, 6.5 Power Supply
+must_not_float_roles = "nsleep"
+
+[models.pins]
+# HTSSOP, TSSOP column; PowerPAD (PPAD) connected to ground (Pin Functions GND row); numbered 17 here
+"1" = "nsleep"
+"2" = "aout1"
+"3" = "aisen"
+"4" = "aout2"
+"5" = "bout2"
+"6" = "bisen"
+"7" = "bout1"
+"8" = "nfault"
+"9" = "bin1"
+"10" = "bin2"
+"11" = "vcp"
+"12" = "vm"
+"13" = "gnd"
+"14" = "vint"
+"15" = "ain2"
+"16" = "ain1"
+"17" = "gnd_ep"
+
+[models.ratings]
+max_voltage_v = 11.8           # 6.1 VM power supply voltage
+max_junction_temp_c = 150.0    # 6.1 operating junction temperature TJ
+theta_ja_c_per_w = 40.5        # 6.4 RthetaJA, PWP
+theta_jc_c_per_w = 32.9        # 6.4 RthetaJC(top), PWP
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm"
+min_v = 2.7
+max_v = 10.8
+abs_max_v = 11.8
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VM motor power supply voltage range 2.7 V to 10.8 V; 6.1 Absolute Maximum Ratings VM -0.3 V to 11.8 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["ain1", "ain2", "bin1", "bin2", "nsleep"]
+max_v = 5.75
+abs_max_v = 7.0
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VDIGIN digital input pin voltage range -0.3 V to 5.75 V"
+abs_max_basis = "TI DRV8833 SLVSAR1E, 6.1 Absolute Maximum Ratings Digital input pin voltage -0.5 V to 7 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vm"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vm / supply_on_v))"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "pin_roles"]
+missing = ["h_bridge_drive", "current_regulation", "decay_drive", "sleep_mode", "fault_output", "overcurrent_protection", "thermal_shutdown", "nsleep_input_thresholds", "output_on_resistance", "timing"]
+
+# ── DRV8833 dual H-bridge motor driver, 16-pin WQFN (RTY) ──────────────────────────────
+# Source: TI SLVSAR1E (January 2011, revised July 2015). Pin Functions p.3-4, 6.1 Absolute Maximum Ratings p.5,
+# 6.3 Recommended Operating Conditions p.5, 6.4 Thermal Information p.5, 6.5 Electrical Characteristics p.6.
+# One card per package: RthetaJA differs and the WQFN numbers its pads differently. The outputs and the ISEN current
+# regulation are NOT modelled: only the VM supply draw, the rail, the logic thresholds, the pin map and the ratings are.
+[[models]]
+id = "drv8833_rty16"
+kind = "digital"
+description = "TI DRV8833 dual H-bridge motor driver, 16-pin WQFN (RTY): VM supply draw, logic thresholds and ratings (H-bridge outputs not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8833.pdf"
+title = "Texas Instruments DRV8833 Dual H-Bridge Motor Driver, SLVSAR1E, January 2011, revised July 2015"
+locator = "5 Pin Configuration and Functions (Pin Functions); 6.1 Absolute Maximum Ratings; 6.3 Recommended Operating Conditions; 6.4 Thermal Information; 6.5 Electrical Characteristics; Package Option Addendum"
+sha256 = "3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "DRV8833 SLVSAR1E 6.5: IVM 1.7 mA typ / 3 mA max at VM = 5 V with xIN1 = xIN2 = 0 V; sleep 1.6 uA typ / 2.5 uA max; no minimum is printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_threshold_pins"
+reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
+
+[models.match]
+# DRV8833RTYR, DRV8833RTYT, DRV8833RTYRG4 and the .B variants.
+# DRV8832, DRV8837 and other DRV88xx bridges are siblings and do not match.
+value_re = "(?i)^DRV8833RTY(R|T|RG4)?(\\.[AB])?$"
+
+[models.params]
+vih = 2.0         # VIH min, all pins except nSLEEP (nSLEEP 2.5 V), 6.5 logic-level inputs
+vil = 0.7         # VIL max, all pins except nSLEEP (nSLEEP 0.5 V), 6.5 logic-level inputs
+gnd_pin = "11"
+supply_current_a = 1.7e-3   # IVM typ, VM = 5 V, xIN1 = xIN2 = 0 V (3 mA max), 6.5 Power Supply
+supply_on_v = 2.6           # VM undervoltage lockout, VUVLO VM falling max 2.6 V, 6.5 Power Supply
+must_not_float_roles = "nsleep"
+
+[models.pins]
+# WQFN column; PowerPAD (PPAD) numbered 17 here
+"15" = "nsleep"
+"16" = "aout1"
+"1" = "aisen"
+"2" = "aout2"
+"3" = "bout2"
+"4" = "bisen"
+"5" = "bout1"
+"6" = "nfault"
+"7" = "bin1"
+"8" = "bin2"
+"9" = "vcp"
+"10" = "vm"
+"11" = "gnd"
+"12" = "vint"
+"13" = "ain2"
+"14" = "ain1"
+"17" = "gnd_ep"
+
+[models.ratings]
+max_voltage_v = 11.8           # 6.1 VM power supply voltage
+max_current_a = 1.5            # 6.3 IOUT, RTY package continuous RMS or DC output current per bridge (VM = 5 V); the HTSSOP and TSSOP carry no printed per-bridge figure, so this is the only sourced one
+max_junction_temp_c = 150.0    # 6.1 operating junction temperature TJ
+theta_ja_c_per_w = 37.2        # 6.4 RthetaJA, RTY
+theta_jc_c_per_w = 34.3        # 6.4 RthetaJC(top), RTY
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm"
+min_v = 2.7
+max_v = 10.8
+abs_max_v = 11.8
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VM motor power supply voltage range 2.7 V to 10.8 V; 6.1 Absolute Maximum Ratings VM -0.3 V to 11.8 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["ain1", "ain2", "bin1", "bin2", "nsleep"]
+max_v = 5.75
+abs_max_v = 7.0
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VDIGIN digital input pin voltage range -0.3 V to 5.75 V"
+abs_max_basis = "TI DRV8833 SLVSAR1E, 6.1 Absolute Maximum Ratings Digital input pin voltage -0.5 V to 7 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vm"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vm / supply_on_v))"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "pin_roles"]
+missing = ["h_bridge_drive", "current_regulation", "decay_drive", "sleep_mode", "fault_output", "overcurrent_protection", "thermal_shutdown", "nsleep_input_thresholds", "output_on_resistance", "timing"]
+
+# ── DRV8833 dual H-bridge motor driver, 16-pin TSSOP (PW) ──────────────────────────────
+# Source: TI SLVSAR1E (January 2011, revised July 2015). Pin Functions p.3-4, 6.1 Absolute Maximum Ratings p.5,
+# 6.3 Recommended Operating Conditions p.5, 6.4 Thermal Information p.5, 6.5 Electrical Characteristics p.6.
+# One card per package: RthetaJA differs and the WQFN numbers its pads differently. The outputs and the ISEN current
+# regulation are NOT modelled: only the VM supply draw, the rail, the logic thresholds, the pin map and the ratings are.
+[[models]]
+id = "drv8833_pw16"
+kind = "digital"
+description = "TI DRV8833 dual H-bridge motor driver, 16-pin TSSOP (PW): VM supply draw, logic thresholds and ratings (H-bridge outputs not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8833.pdf"
+title = "Texas Instruments DRV8833 Dual H-Bridge Motor Driver, SLVSAR1E, January 2011, revised July 2015"
+locator = "5 Pin Configuration and Functions (Pin Functions); 6.1 Absolute Maximum Ratings; 6.3 Recommended Operating Conditions; 6.4 Thermal Information; 6.5 Electrical Characteristics; Package Option Addendum"
+sha256 = "3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "DRV8833 SLVSAR1E 6.5: IVM 1.7 mA typ / 3 mA max at VM = 5 V with xIN1 = xIN2 = 0 V; sleep 1.6 uA typ / 2.5 uA max; no minimum is printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_threshold_pins"
+reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
+
+[models.match]
+# DRV8833PW and DRV8833PWR (the PW TSSOP; PWP is the PowerPAD package and has its own card).
+# DRV8832, DRV8837 and other DRV88xx bridges are siblings and do not match.
+value_re = "(?i)^DRV8833PW(R)?(\\.[AB])?$"
+
+[models.params]
+vih = 2.0         # VIH min, all pins except nSLEEP (nSLEEP 2.5 V), 6.5 logic-level inputs
+vil = 0.7         # VIL max, all pins except nSLEEP (nSLEEP 0.5 V), 6.5 logic-level inputs
+gnd_pin = "13"
+supply_current_a = 1.7e-3   # IVM typ, VM = 5 V, xIN1 = xIN2 = 0 V (3 mA max), 6.5 Power Supply
+supply_on_v = 2.6           # VM undervoltage lockout, VUVLO VM falling max 2.6 V, 6.5 Power Supply
+must_not_float_roles = "nsleep"
+
+[models.pins]
+# HTSSOP, TSSOP column (PW has no exposed pad)
+"1" = "nsleep"
+"2" = "aout1"
+"3" = "aisen"
+"4" = "aout2"
+"5" = "bout2"
+"6" = "bisen"
+"7" = "bout1"
+"8" = "nfault"
+"9" = "bin1"
+"10" = "bin2"
+"11" = "vcp"
+"12" = "vm"
+"13" = "gnd"
+"14" = "vint"
+"15" = "ain2"
+"16" = "ain1"
+
+[models.ratings]
+max_voltage_v = 11.8           # 6.1 VM power supply voltage
+max_junction_temp_c = 150.0    # 6.1 operating junction temperature TJ
+theta_ja_c_per_w = 103.1        # 6.4 RthetaJA, PW
+theta_jc_c_per_w = 38.0        # 6.4 RthetaJC(top), PW
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm"
+min_v = 2.7
+max_v = 10.8
+abs_max_v = 11.8
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VM motor power supply voltage range 2.7 V to 10.8 V; 6.1 Absolute Maximum Ratings VM -0.3 V to 11.8 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["ain1", "ain2", "bin1", "bin2", "nsleep"]
+max_v = 5.75
+abs_max_v = 7.0
+basis = "TI DRV8833 SLVSAR1E, 6.3 Recommended Operating Conditions VDIGIN digital input pin voltage range -0.3 V to 5.75 V"
+abs_max_basis = "TI DRV8833 SLVSAR1E, 6.1 Absolute Maximum Ratings Digital input pin voltage -0.5 V to 7 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vm"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vm / supply_on_v))"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "pin_roles"]
+missing = ["h_bridge_drive", "current_regulation", "decay_drive", "sleep_mode", "fault_output", "overcurrent_protection", "thermal_shutdown", "nsleep_input_thresholds", "output_on_resistance", "timing"]
+
+
+# ── TB6612FNG dual DC motor driver, SSOP24 ──────────────────────────────
+# Source: Toshiba TB6612FNG datasheet dated 2007-06-30 (the downloaded copy). Pin Functions p.2, Absolute Maximum
+# Ratings and Operating Range p.3, H-SW Control Function p.4, Electrical Characteristics p.5, Target characteristics p.6.
+# The datasheet prints one package (SSOP24, 0.65 mm pitch), so the bare name resolves. The H-bridge outputs are NOT
+# modelled: only the Vcc logic supply, the rails, the logic thresholds, the pin map and the printed ratings are.
+[[models]]
+id = "tb6612fng_ssop24"
+kind = "digital"
+description = "Toshiba TB6612FNG driver IC for dual DC motors, SSOP24: Vcc logic supply, logic thresholds and ratings (H-bridge outputs not modelled)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://toshiba.semicon-storage.com/info/TB6612FNG_datasheet_en_20141001.pdf"
+title = "Toshiba TB6612FNG Driver IC for Dual DC motor, datasheet dated 2007-06-30"
+locator = "Pin Functions p.2; Absolute Maximum Ratings and Operating Range p.3; H-SW Control Function p.4; Electrical Characteristics p.5; Target characteristics PD-Ta p.6"
+sha256 = "928865fade9c7c18bd11ae5c4d3ac68a56ead028239669d5e5e9d6b087f716de"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_supply_current"
+reason = "the datasheet prints no operating VM supply current (only IM(STB) 1 uA max in standby), so the VM supply carries no stamped draw"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "motor_drive"
+reason = "the H-bridge outputs and the H-SW control table (CW, CCW, short brake, stop, standby), the 0.5 Ohm on-resistance, dead time and thermal shutdown are not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vm_minimum"
+reason = "the Pin Functions remarks print the motor supply as 2.5 V to 13.5 V while the Operating Range table prints VM 4.5 V min (output current limited to 0.4 A below 5 V); the card uses the Operating Range table"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "theta_ja"
+reason = "the only thermal figure is the IC-only thetaj-a = 160 C/W annotated on the PD-Ta target characteristics chart (p.6), not a Thermal Information table row"
+
+[models.match]
+# TB6612FNG and its tape-and-reel orderable forms such as TB6612FNG(O,C,8,EL) or TB6612FNG(C,8,EL).
+# TB6612 (without FNG), TB67H450 and other Toshiba bridges are siblings and do not match.
+value_re = "(?i)^TB6612FNG(\\([A-Z0-9,]+\\))?$"
+
+[models.params]
+vih = 2.1         # derived: VIH min = Vcc x 0.7 at Vcc = 3 V (Electrical Characteristics, Control input voltage)
+vil = 0.9         # derived: VIL max = Vcc x 0.3 at Vcc = 3 V (Electrical Characteristics, Control input voltage)
+supply_static_ua = 2200.0   # Icc(5.5V) max, STBY = Vcc = 5.5 V, VM = 5 V (Electrical Characteristics); 1.8 mA at Vcc = 3 V is a design value in parentheses and is not stamped
+supply_pin = "20"   # Vcc
+gnd_pin = "18"
+must_not_float_roles = "stby"
+
+[models.levels]
+# Electrical Characteristics, Control input voltage: VIH min = Vcc x 0.7, VIL max = Vcc x 0.3 (derived at the Operating Range Vcc 2.7 V and 5.5 V ends)
+vih = [[2.7, 1.89], [5.5, 3.85]]
+vil = [[2.7, 0.81], [5.5, 1.65]]
+
+[models.pins]
+# Pin Functions p.2 (SSOP24)
+"1" = "ao1"
+"2" = "ao1"
+"3" = "pgnd1"
+"4" = "pgnd1"
+"5" = "ao2"
+"6" = "ao2"
+"7" = "bo2"
+"8" = "bo2"
+"9" = "pgnd2"
+"10" = "pgnd2"
+"11" = "bo1"
+"12" = "bo1"
+"13" = "vm2"
+"14" = "vm3"
+"15" = "pwmb"
+"16" = "bin2"
+"17" = "bin1"
+"18" = "gnd"
+"19" = "stby"
+"20" = "vcc"
+"21" = "ain1"
+"22" = "ain2"
+"23" = "pwma"
+"24" = "vm1"
+
+[models.ratings]
+max_voltage_v = 15.0           # Absolute Maximum Ratings, supply voltage VM
+max_current_a = 1.2            # Absolute Maximum Ratings, output current Iout per 1 channel (2 A: tw = 20 ms continuous pulse, duty <= 20%; 3.2 A peak single 10 ms pulse)
+theta_ja_c_per_w = 160.0       # Target characteristics PD-Ta chart, IC only thetaj-a
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Toshiba TB6612FNG 2007-06-30, Operating Range Supply voltage Vcc 2.7 V to 5.5 V; Absolute Maximum Ratings Supply voltage Vcc 6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm1"
+min_v = 4.5
+max_v = 13.5
+abs_max_v = 15.0
+basis = "Toshiba TB6612FNG 2007-06-30, Operating Range Supply voltage VM 4.5 V to 13.5 V; Absolute Maximum Ratings Supply voltage VM 15 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm2"
+min_v = 4.5
+max_v = 13.5
+abs_max_v = 15.0
+basis = "Toshiba TB6612FNG 2007-06-30, Operating Range Supply voltage VM 4.5 V to 13.5 V; Absolute Maximum Ratings Supply voltage VM 15 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm3"
+min_v = 4.5
+max_v = 13.5
+abs_max_v = 15.0
+basis = "Toshiba TB6612FNG 2007-06-30, Operating Range Supply voltage VM 4.5 V to 13.5 V; Absolute Maximum Ratings Supply voltage VM 15 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["ain1", "ain2", "pwma", "bin1", "bin2", "pwmb", "stby"]
+max_v = 5.7
+abs_max_v = 6.0
+basis = "derived: Toshiba TB6612FNG 2007-06-30, Electrical Characteristics control input voltage VIH max = Vcc + 0.2 V (p.5) at the Operating Range Vcc max 5.5 V (p.3) gives 5.7 V; the supply-relative limit has no field, so the worst case is stamped"
+abs_max_basis = "Toshiba TB6612FNG 2007-06-30, Absolute Maximum Ratings Input voltage VIN -0.2 V to 6 V"
+
+[models.coverage]
+implements = ["supply_range", "logic_levels", "absolute_ratings", "pin_roles"]
+missing = ["h_bridge_drive", "h_sw_control_table", "motor_supply_current", "standby_mode", "undervoltage_detection", "thermal_shutdown", "output_saturation_voltage", "timing"]
+
