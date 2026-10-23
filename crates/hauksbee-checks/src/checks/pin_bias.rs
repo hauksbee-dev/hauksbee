@@ -235,7 +235,9 @@ fn without_right_pull(
             ),
         },
         Hold::MayFloat(weak) => {
-            let on_gpio = weak.iter().any(|w| w.kind == WeakKind::Gpio);
+            let on_gpio = weak
+                .iter()
+                .any(|w| matches!(w.kind, WeakKind::Gpio | WeakKind::McuOutput));
             let extra = if on_gpio {
                 " (firmware may enable the MCU pad's internal pull, which is not a board fact this check can see, so confirm it)"
             } else {

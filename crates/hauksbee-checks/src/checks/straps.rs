@@ -119,6 +119,16 @@ pub fn strap_lint_with_drives(
                 Hold::Defined => false,
             };
             if floats {
+                // A net some MCU output drives is driven once firmware runs. At
+                // most it is a note about the reset window, never a fault.
+                if no_pull && driven_by_mcu(&hold) {
+                    if let Some(note) =
+                        driven_strap_note(board, (comp, model), strap, (&pad_num, &net.name), &hold)
+                    {
+                        report.findings.push(note);
+                    }
+                    continue;
+                }
                 if no_pull
                     && !strap_is_reported_elsewhere(board, comp, model, strap, &hold, &pad_num)
                 {
@@ -195,6 +205,58 @@ fn strap_is_reported_elsewhere(
     required && !gpio
 }
 
+/// Whether a weak holder of the net is an MCU pad that is an output once
+/// firmware runs.
+fn driven_by_mcu(hold: &Hold) -> bool {
+    matches!(hold, Hold::MayFloat(weak) if weak.iter().any(|w| w.kind == WeakKind::McuOutput))
+}
+
+/// The note for a boot strap with no internal pull whose net an MCU output
+/// drives. The level the pin latches is the driver's only once its firmware
+/// runs; while that MCU is in reset its pad is high-impedance and nothing sets
+/// the strap. That is a note (`Low`), never a fault: the driver holds the level
+/// in normal operation. A strap that is not a boot-select latch, or whose mode
+/// the board cannot select, has no reset window worth a note.
+fn driven_strap_note(
+    board: &ExtractedBoard,
+    (comp, model): (&Component, &ModelEntry),
+    strap: &StrapPin,
+    (pad_num, net_name): (&str, &str),
+    hold: &Hold,
+) -> Option<LintFinding> {
+    let Hold::MayFloat(weak) = hold else {
+        return None;
+    };
+    if !strap.boot_select
+        || strap
+            .only_with
+            .as_deref()
+            .is_some_and(|selector| !selector_is_drivable(board, comp, model, selector))
+    {
+        return None;
+    }
+    let drivers = weak
+        .iter()
+        .filter(|w| w.kind == WeakKind::McuOutput)
+        .map(|w| w.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fix = pull_fix(board, comp, model, strap, net_name);
+    Some(LintFinding {
+        check: LintCheck::StrapPin,
+        severity: Severity::Low,
+        message: format!(
+            "{} strap pin {pad_num} ({}) is driven by {drivers} on net '{net_name}', so it has a level once that firmware runs. The datasheet latches this pin at reset ({}) and the pin has no internal pull, so while the driving MCU is in reset or has not yet configured its pad the boot level is undefined. If the part must boot the application whatever the driver is doing, {}",
+            comp.reference,
+            strap.role,
+            strap.note,
+            fix.replacen("Add", "add", 1),
+        ),
+        refs: vec![comp.reference.clone()],
+        nets: vec![net_name.to_string()],
+    })
+}
+
 /// The finding for a strap with no internal pull that nothing holds, or `None`
 /// when a mode-qualifying strap's mode is unreachable on this board.
 fn floating_finding(
@@ -260,7 +322,9 @@ fn strap_when_open(weak: &[Weak]) -> String {
         .map(|w| match w.kind {
             WeakKind::Switch => "no button or switch is closed",
             WeakKind::Connector => "nothing is plugged in",
-            WeakKind::Gpio => "the driving MCU is in reset and its pad is high-impedance",
+            WeakKind::Gpio | WeakKind::McuOutput => {
+                "the driving MCU is in reset and its pad is high-impedance"
+            }
             WeakKind::Sink => "the transistor is off",
         })
         .collect();
@@ -401,6 +465,8 @@ pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String>
                     && (bare || strap.internal_pull == StrapInternalPull::None)
                 {
                     "unconnected, float check only"
+                } else if driven_by_mcu(&hold) && strap.internal_pull == StrapInternalPull::None {
+                    "driven by an MCU output, reset-window note only"
                 } else if matches!(hold, Hold::MayFloat(_))
                     && strap.internal_pull == StrapInternalPull::None
                 {
@@ -1497,14 +1563,38 @@ vih = [0.0, 2.0]
                 ),
                 &[(High, &["may float", "J2 pin 1", "nothing is plugged in"])],
             ),
+            // The driver is an output once firmware runs (this pad is the
+            // card's PWM output; an untyped layout pad reads the same), so the
+            // net has a level: only a note about the reset window.
             (
-                "BOOT0 driven only by another MCU pad",
+                "BOOT0 driven by another MCU's output pad",
                 strap_board(
                     "+3V3",
                     "/BOOT0",
                     vec![test_mcu(), part("U5", "ATmega328P", &[("5", 3)])],
                 ),
-                &[(High, &["may float", "U5 pin 5", "high-impedance"])],
+                &[(
+                    Low,
+                    &[
+                        "driven by U5 pin 5",
+                        "firmware runs",
+                        "add a 10 kOhm pull-down",
+                    ],
+                )],
+            ),
+            // A pad the symbol types as an input only listens: it drives nothing.
+            (
+                "BOOT0 on another MCU's input-only pad",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), {
+                        let mut u = part("U5", "ATmega328P", &[("4", 3)]);
+                        u.pins[0].kind = "input".into();
+                        u
+                    }],
+                ),
+                &[(High, &["may float", "U5 pin 4", "high-impedance"])],
             ),
             (
                 "BOOT0 button with its pull-down",
@@ -1780,11 +1870,22 @@ vih = [0.0, 2.0]
             parts.extend(extra);
             strap_lint_with_drives(&strap_board("+3V3", "/EN", parts), &library(), &none)
         };
-        let gpio = run(vec![part("U5", "ATmega328P", &[("5", 3)])]);
+        // An enable some MCU output drives has a level once firmware runs, and
+        // an enable is not a latch sampled at power-up: silent, not a fault.
+        let driven = run(vec![part("U5", "ATmega328P", &[("5", 3)])]);
+        assert_eq!(
+            driven.of_check(LintCheck::StrapPin).count(),
+            0,
+            "{driven:#?}"
+        );
+        // An MCU pad the symbol types as an input only listens.
+        let mut listener = part("U5", "ATmega328P", &[("4", 3)]);
+        listener.pins[0].kind = "input".into();
+        let gpio = run(vec![listener]);
         let found: Vec<_> = gpio.of_check(LintCheck::StrapPin).collect();
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, High);
-        for needle in ["may float", "U5 pin 5", "pull-up to '+3V3'"] {
+        for needle in ["may float", "U5 pin 4", "pull-up to '+3V3'"] {
             assert!(
                 found[0].message.contains(needle),
                 "{needle}: {}",
@@ -1800,6 +1901,44 @@ vih = [0.0, 2.0]
         );
         let button = part("SW1", "SW_Push", &[("1", 3), ("2", 1)]);
         assert_eq!(run(vec![button]).of_check(LintCheck::StrapPin).count(), 0);
+    }
+
+    /// A strap net an MCU output drives has a level once that firmware runs:
+    /// never a Medium or High fault, at most a Low note about the reset window,
+    /// and only for a boot-select latch. The same net with nothing driving it is
+    /// still the fault.
+    #[test]
+    fn a_strap_net_an_mcu_output_drives_is_a_note_never_a_fault() {
+        let none = BTreeMap::new();
+        let driver = |kind: &str, extra: Vec<Component>| {
+            let mut u = part("U5", "ATmega328P", &[("4", 3)]);
+            u.pins[0].kind = kind.into();
+            let mut parts = vec![test_mcu(), u];
+            parts.extend(extra);
+            strap_board("+3V3", "/BOOT0", parts)
+        };
+        let worst = |b: &ExtractedBoard| {
+            strap_lint_with_drives(b, &library(), &none)
+                .of_check(LintCheck::StrapPin)
+                .map(|f| f.severity)
+                .min_by_key(|s| match s {
+                    High => 0,
+                    Medium => 1,
+                    Low => 2,
+                })
+        };
+        // Output-like pads: a note, whatever else shares the net.
+        for kind in ["output", "bidirectional", "tri_state", ""] {
+            assert_eq!(worst(&driver(kind, vec![])), Some(Low), "{kind}");
+        }
+        let header = part("J2", "Conn_01x01", &[("1", 3)]);
+        assert_eq!(worst(&driver("bidirectional", vec![header])), Some(Low));
+        // A pull resistor holds the level: silent.
+        let pulled = driver("bidirectional", vec![pull("R1", "10k", 1)]);
+        assert_eq!(worst(&pulled), None);
+        // Nothing drives it: the fault.
+        let bare = strap_board("+3V3", "/BOOT0", vec![test_mcu()]);
+        assert_eq!(worst(&bare), Some(High));
     }
 
     /// A mode-qualifying strap (ESP32-C3 GPIO8: any level in SPI boot, high for
