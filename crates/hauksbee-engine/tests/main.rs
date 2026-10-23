@@ -11,8 +11,12 @@ mod ac_active_models;
 mod altium_no_fabricated_values;
 #[path = "apin_gpio_bind.rs"]
 mod apin_gpio_bind;
+#[path = "avr_alternate_footprint.rs"]
+mod avr_alternate_footprint;
 #[path = "avr_at28_atomic_cosim.rs"]
 mod avr_at28_atomic_cosim;
+#[path = "avr_cosim_speed.rs"]
+mod avr_cosim_speed;
 #[path = "avr_gpio_release_cosim.rs"]
 mod avr_gpio_release_cosim;
 #[path = "behavioral_faults.rs"]

@@ -54,6 +54,7 @@ pub mod ffi {
 #[cfg(feature = "avr")]
 pub mod avr;
 pub mod avr_fuses;
+pub mod avr_image;
 pub mod backend_id;
 pub mod boot_mode;
 pub mod children;
@@ -172,7 +173,7 @@ pub fn validate_firmware_format(path: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "avr")]
-pub use avr::AvrMcu;
+pub use avr::{avr_part_capacity, AvrMcu};
 
 #[cfg(feature = "renode")]
 pub use renode::{AdcChannelMap, AdcInject, PullMap, RenodeBackend, RenodeConfig};
