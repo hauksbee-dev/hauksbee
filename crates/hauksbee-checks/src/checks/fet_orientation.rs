@@ -246,7 +246,7 @@ fn sensed_nets(idx: &Index<'_>, net: i64, q: &Component, gate: i64) -> Vec<i64> 
 /// or terminal pin on each side of the channel: a power-path, ideal-diode,
 /// hot-swap or charger IC watching the battery on one side and its own
 /// converter output on the other (the LTC4020's BAT and CSN/CSP around its
-/// PowerPath FET). Such a controller servos the FET to its documented
+/// `PowerPath` FET). Such a controller servos the FET to its documented
 /// topology (the body diode carrying the battery or the input to the output
 /// is usually the point), and the schematic alone cannot say which side is
 /// the load, so the check abstains. A microcontroller is excluded: it
