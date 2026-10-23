@@ -2832,24 +2832,10 @@ fn series_contention_finding(
         })
 }
 
-/// UART direction of one pin-function token: `Some(true)` for transmit
-/// (`TX`, `TXD`, `TXD0`, `U0TXD`, `UART1_TX`, `USART2_TX`), `Some(false)` for
-/// receive, `None` otherwise. A bus prefix other than a UART one (`EMAC_TXD0`,
-/// `ETH_TXD`, `RMII_TXD1`) is a different interface and stays `None`.
+/// UART direction of one pin-function token, read once in
+/// [`hauksbee_ir::pin_functions::uart_token_direction`].
 fn uart_dir(token: &str) -> Option<bool> {
-    let t = token.to_ascii_uppercase();
-    let t = ["LPUART", "USART", "UART", "U"]
-        .iter()
-        .find_map(|p| t.strip_prefix(p))
-        .map_or(t.as_str(), |rest| {
-            rest.trim_start_matches(|c: char| c.is_ascii_digit())
-                .trim_start_matches('_')
-        });
-    match t.trim_end_matches(|c: char| c.is_ascii_digit()) {
-        "TX" | "TXD" => Some(true),
-        "RX" | "RXD" => Some(false),
-        _ => None,
-    }
+    hauksbee_ir::pin_functions::uart_token_direction(token)
 }
 
 /// Function-name tokens, split on the separators symbol libraries use for

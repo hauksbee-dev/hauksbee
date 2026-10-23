@@ -32,6 +32,9 @@
 //!   schematic's pin electrical types said. The extract-layer contention check
 //!   reads pin types and treats a `bidirectional` MCU pad as a resolver, so a
 //!   mis-mapped logic model driving an MCU GPIO net slipped past it.
+//!   `transmit_contention_lint` adds the pads a card binds to a UART transmit
+//!   function (a port pad whose `uart_tx` table or role token says TXD on a
+//!   serial line) as drivers, so two TXDs on one line are caught.
 //! - [`back_power`]: the cross-domain pull lint. A modelled part's signal pin
 //!   tied or pulled up to a rail above the part's own supply conducts through
 //!   the pin's protection clamp into the lower rail: back-powering at
@@ -89,6 +92,8 @@
 //! - [`pin_mux`]: a bus wired to MCU pads that cannot carry it: SPI, I2C, UART
 //!   or PWM where the card's `[models.pin_capability.<function>]` table lists
 //!   other pads (the intent read from a partner part's pin and the net name).
+//!   A UART partner that transmits needs a receive pad, and one that only
+//!   listens needs a transmit pad; the message names the pads that would work.
 //! - [`datasheet_field`]: a part's `Datasheet` field whose file name clearly
 //!   names a different device or logic family, so a model drafted from it
 //!   would describe the wrong part (a low-severity, non-gating note).
@@ -593,9 +598,40 @@ fn extend_with_wiring_checks(
     report
         .findings
         .extend(debug_header::debug_header_lint(board, lib).findings);
-    report
+    // A transmit pad facing another transmitter is a contention finding already
+    // (it names the pads that can receive), not a second one about the pad.
+    let mux: Vec<_> = pin_mux::pin_mux_lint(board, lib)
         .findings
-        .extend(pin_mux::pin_mux_lint(board, lib).findings);
+        .into_iter()
+        .filter(|f| !(f.message.contains("UART") && reported_on_nets(report, f)))
+        .collect();
+    report.findings.extend(mux);
+}
+
+/// Whether `report` already holds a contention, UART-name or direction finding
+/// on a net of `finding`.
+fn reported_on_nets(report: &NetLintReport, finding: &LintFinding) -> bool {
+    report.findings.iter().any(|r| {
+        matches!(
+            r.check,
+            LintCheck::OutputContention | LintCheck::PinFunction | LintCheck::SignalDirection
+        ) && finding.nets.iter().any(|n| r.nets.contains(n))
+    })
+}
+
+/// A serial line with two transmitters: the pin-type check and the UART-name
+/// check may already have said so on the same net, and are not repeated.
+fn extend_with_transmit_contention(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) {
+    let transmit: Vec<_> = contention::transmit_contention_lint(board, lib)
+        .findings
+        .into_iter()
+        .filter(|f| !reported_on_nets(report, f))
+        .collect();
+    report.findings.extend(transmit);
 }
 
 /// One [`engine_lint`] pass over `board` as it stands.
@@ -627,6 +663,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     ] {
         report.findings.extend(findings);
     }
+    extend_with_transmit_contention(&mut report, board, lib);
     report
         .findings
         .extend(power_state_findings(board, lib, &report));

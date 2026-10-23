@@ -259,8 +259,47 @@ fn is_wiper(comp: &Component, pin: &hauksbee_extract::Pin) -> bool {
 fn is_analog_out_role(role: &str) -> bool {
     matches!(
         role.trim().to_ascii_lowercase().as_str(),
-        "aout" | "analog_out" | "analogout" | "ao" | "vtemp" | "temp_out" | "sensor_out"
+        "aout" | "analog_out" | "analogout" | "ao" | "vtemp" | "temp_out" | "sensor_out" | "viout"
     )
+}
+
+/// The analogue output a single pin of `c` is: one its symbol names (`AOUT`,
+/// `ANALOG_OUT`, `VTEMP`; a pin typed an input is the other end of such a line)
+/// or its card names for the pad.
+fn pin_source(
+    st: &super::BoardStatics<'_>,
+    board: &ExtractedBoard,
+    c: &Component,
+    p: &hauksbee_extract::Pin,
+) -> Option<Source> {
+    if hauksbee_ir::pin_functions::names_an_analog_output(&p.function)
+        && !matches!(
+            p.kind.trim().to_ascii_lowercase().as_str(),
+            "input" | "power_in"
+        )
+    {
+        return Some(Source {
+            what: format!(
+                "the analogue output '{}' of {} pin {}",
+                p.function.trim(),
+                c.reference,
+                p.number
+            ),
+            refs: vec![c.reference.clone()],
+        });
+    }
+    let (kind, role) = st
+        .parts(board)
+        .find(|(pc, _)| pc.reference == c.reference)
+        .and_then(|(_, m)| m.pins.get(&p.number).map(|r| (m.kind, r.clone())))?;
+    let source_kind = matches!(
+        kind,
+        hauksbee_models::ComponentKind::Digital | hauksbee_models::ComponentKind::Adc
+    );
+    (source_kind && is_analog_out_role(&role)).then(|| Source {
+        what: format!("the analogue output '{role}' of {}", c.reference),
+        refs: vec![c.reference.clone()],
+    })
 }
 
 /// The analogue source driving `net_id`, other than the pads of `skip`.
@@ -291,21 +330,8 @@ fn source_of(
                 refs: vec![c.reference.clone()],
             });
         }
-        let role = st
-            .parts(board)
-            .find(|(pc, _)| pc.reference == c.reference)
-            .and_then(|(_, m)| m.pins.get(&p.number).map(|r| (m.kind, r.clone())));
-        if let Some((kind, r)) = role {
-            let source_kind = matches!(
-                kind,
-                hauksbee_models::ComponentKind::Digital | hauksbee_models::ComponentKind::Adc
-            );
-            if source_kind && is_analog_out_role(&r) {
-                return Some(Source {
-                    what: format!("the analogue output '{r}' of {}", c.reference),
-                    refs: vec![c.reference.clone()],
-                });
-            }
+        if let Some(source) = pin_source(st, board, c, p) {
+            return Some(source);
         }
     }
     // A divider: resistors to a positive supply and to ground, nothing active.
@@ -791,6 +817,53 @@ mod tests {
                 .all(|f| !f.message.contains("lists no ADC")),
             "{r:?}"
         );
+    }
+
+    /// A sensor module with no card: its symbol names pin 1 `AOUT` (typed an
+    /// output) and its supply pins. `mcu` is wired to the AOUT net on `pad`.
+    fn sensor_board(mcu: &str, pad: &str, kind: &str) -> ExtractedBoard {
+        let mut sensor = part("U2", "TMP-SENSOR", &[("1", 3), ("2", 2), ("3", 1)]);
+        sensor.pins[0].function = "AOUT".into();
+        sensor.pins[0].kind = kind.into();
+        let u1 = part(
+            "U1",
+            mcu,
+            &[("7", 2), ("8", 1), ("20", 2), ("22", 1), (pad, 3)],
+        );
+        board(&[(1, "GND"), (2, "+3V3"), (3, "TEMP")], vec![u1, sensor])
+    }
+
+    fn no_adc(b: &ExtractedBoard) -> Vec<LintFinding> {
+        analog_input_lint(b, &ModelLibrary::builtin(), &|_| None)
+            .findings
+            .into_iter()
+            .filter(|f| f.message.contains("lists no ADC"))
+            .collect()
+    }
+
+    // A sensor's analogue output, named in its symbol, on an MCU pad with no ADC
+    // channel: flagged, with the ADC pads named. On pad 23 (PC0_ADC0), silent.
+    #[test]
+    fn a_symbol_named_analogue_output_on_a_pad_with_no_adc_channel_is_flagged() {
+        let got = no_adc(&sensor_board("ATmega328P", "4", "output"));
+        assert_eq!(got.len(), 1, "{got:?}");
+        for want in [
+            "the analogue output 'AOUT' of U2 pin 1",
+            "U1 pad 4",
+            "ADC-capable pads",
+            "PC0_ADC0",
+        ] {
+            assert!(got[0].message.contains(want), "{want}: {}", got[0].message);
+        }
+        assert!(no_adc(&sensor_board("ATmega328P", "23", "output")).is_empty());
+        // The input end of an AOUT-named line (a buffer fed by it) is not a source.
+        assert!(no_adc(&sensor_board("ATmega328P", "4", "input")).is_empty());
+    }
+
+    // An MCU card without an ADC table says nothing about its pads.
+    #[test]
+    fn an_mcu_card_with_no_adc_table_is_not_held_to_one() {
+        assert!(no_adc(&sensor_board("STM32F4XX", "4", "output")).is_empty());
     }
 
     // A pad whose role itself is analogue (the AVR comparator input) is never held to the list.

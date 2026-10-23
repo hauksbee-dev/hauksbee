@@ -350,9 +350,140 @@ pub fn names_a_uart(name: &str) -> bool {
     })
 }
 
+/// The direction of one pin-function token as a UART line.
+///
+/// `Some(true)` is transmit (`TX`, `TXD`, `TXD0`, `U0TXD`, `UART1_TX`,
+/// `USART2_TX`), `Some(false)` receive, `None` anything else. A bus prefix other
+/// than a UART one (`EMAC_TXD0`, `ETH_TXD`, `RMII_TXD1`) is a different
+/// interface and reads as `None`.
+///
+/// The direction is the pad's own: a pin named `TXD` on a controller sends. A
+/// pin of a peripheral part may name the line from either side, so a caller
+/// reads that part's direction from its electrical type, not from this.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::uart_token_direction;
+/// assert_eq!(uart_token_direction("USART1_TX"), Some(true));
+/// assert_eq!(uart_token_direction("U0RXD"), Some(false));
+/// assert_eq!(uart_token_direction("RMII_TXD0"), None);
+/// ```
+#[must_use]
+pub fn uart_token_direction(token: &str) -> Option<bool> {
+    let t = token.to_ascii_uppercase();
+    let t = ["LPUART", "USART", "UART", "U"]
+        .iter()
+        .find_map(|p| t.strip_prefix(p))
+        .map_or(t.as_str(), |rest| {
+            rest.trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start_matches('_')
+        });
+    match t.trim_end_matches(|c: char| c.is_ascii_digit()) {
+        "TX" | "TXD" => Some(true),
+        "RX" | "RXD" => Some(false),
+        _ => None,
+    }
+}
+
+/// The UART direction a card's pad role states.
+///
+/// Roles such as `pd1_txd`, `pa9_usart1_tx` and `gpio1_u0txd` give `Some(true)`
+/// for transmit and `Some(false)` for receive. `None` when the role names no
+/// UART line or names both directions.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::uart_role_direction;
+/// assert_eq!(uart_role_direction("pd1_txd"), Some(true));
+/// assert_eq!(uart_role_direction("pa10_usart1_rx"), Some(false));
+/// assert_eq!(uart_role_direction("pb3_mosi_oc2a"), None);
+/// ```
+#[must_use]
+pub fn uart_role_direction(role: &str) -> Option<bool> {
+    const NOT_A_UART: [&str; 12] = [
+        "en", "clk", "clock", "er", "dv", "crs", "rmii", "mii", "eth", "emac", "ctl", "sync",
+    ];
+    let lower = role.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('_').collect();
+    let mut dirs = parts.iter().enumerate().filter_map(|(i, part)| {
+        let mut neighbours = [i.checked_sub(1), Some(i + 1)]
+            .into_iter()
+            .flatten()
+            .filter_map(|j| parts.get(j));
+        if neighbours.any(|n| NOT_A_UART.contains(n)) {
+            return None;
+        }
+        uart_token_direction(part)
+    });
+    let first = dirs.next()?;
+    dirs.all(|d| d == first).then_some(first)
+}
+
+/// Whether the pin name `name` states a sensor's analogue output.
+///
+/// A whole word does: `AOUT`, `ANALOG_OUT`, `VTEMP`, `TEMP_OUT`, `SENSOR_OUT`,
+/// `VIOUT`. A bare `OUT` or `VOUT` is not read, since a regulator's output
+/// carries the same name.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::names_an_analog_output;
+/// assert!(names_an_analog_output("AOUT") && names_an_analog_output("ANALOG_OUT"));
+/// assert!(!names_an_analog_output("VOUT") && !names_an_analog_output("OUT"));
+/// ```
+#[must_use]
+pub fn names_an_analog_output(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.iter().any(|w| {
+        matches!(
+            *w,
+            "aout" | "analogout" | "vtemp" | "tempout" | "sensorout" | "viout"
+        )
+    }) || words
+        .windows(2)
+        .any(|w| matches!((w[0], w[1]), ("analog" | "temp" | "sensor", "out")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uart_directions_are_read_from_tokens_and_roles() {
+        for (token, want) in [
+            ("TX", Some(true)),
+            ("txd0", Some(true)),
+            ("U0TXD", Some(true)),
+            ("LPUART1_TX", Some(true)),
+            ("RXD", Some(false)),
+            ("UART2_RX", Some(false)),
+            ("TXEN", None),
+            ("RMII_TXD0", None),
+            ("MOSI", None),
+        ] {
+            assert_eq!(uart_token_direction(token), want, "{token}");
+        }
+        assert_eq!(uart_role_direction("p01_txd"), Some(true));
+        assert_eq!(uart_role_direction("gpio1_u0txd"), Some(true));
+        assert_eq!(uart_role_direction("pa10_usart1_rx"), Some(false));
+        assert_eq!(uart_role_direction("pd0_rxd_txd"), None);
+        assert_eq!(uart_role_direction("pb5_sck"), None);
+        // Ethernet and RMII lines are another interface.
+        assert_eq!(uart_role_direction("pb11_eth_tx_en"), None);
+        assert_eq!(uart_role_direction("pb12_rmii_txd0"), None);
+        assert_eq!(uart_role_direction("gpio5_rx_dv"), None);
+    }
+
+    #[test]
+    fn an_analog_output_is_named_by_whole_word_and_not_by_a_bare_out() {
+        for yes in ["AOUT", "ANALOG_OUT", "VTEMP", "Temp_Out", "VIOUT"] {
+            assert!(names_an_analog_output(yes), "{yes}");
+        }
+        for no in ["OUT", "VOUT", "OUT1", "TEMPERATURE", "NOUT", "OUTA"] {
+            assert!(!names_an_analog_output(no), "{no}");
+        }
+    }
 
     #[test]
     fn a_reference_and_a_supply_do_not_contradict_but_a_supply_and_ground_do() {

@@ -76,15 +76,36 @@
 //! field case is out of static reach. This check catches MODEL-to-MODEL
 //! contention only, and its finding prose says so; the model-to-firmware half
 //! belongs to co-sim time, where the scheduler knows the real pin directions.
+//! ## Pads bound to a UART transmit function
+//!
+//! [`transmit_contention_lint`] reaches the one MCU pad whose direction the
+//! board itself settles. A pad is a bound push-pull output when the card states
+//! it is a UART transmit pad and no receive pad (its `uart_tx` table, or the
+//! transmit line its role names) AND the line is a serial one (the net is named
+//! for a serial port, or a part on it has a serial pin). A transmit pad on a
+//! serial line is the hardware UART's output; two of them, or one facing another
+//! part's transmit pin typed output, fight. Where the card gives the pad both
+//! directions, none, or the net is not a serial line, the pad is a GPIO whose
+//! direction is firmware state and the check abstains. SPI `MOSI`/`SCK` and the
+//! like are not read here: whether the MCU is the controller (and so drives
+//! them) or a target is a mode the netlist cannot state.
+//!
 //! That half is covered by the scheduler's runtime monitor
 //! (`Scheduler::detect_driver_contention`), which fires when a firmware-enabled
 //! GPIO driver and an enabled modelled push-pull output share a net, using the
 //! same `output_roles`/tri-state classification this check rests on.
 
 use super::is_unconnected_net;
+use super::pin_mux::{receive_pads, serial_pin, uart_pad, UartPad};
+use super::signal_direction::{classify, Dir, Member};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
+use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_extract::{
+    is_connector_like, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin,
+    Severity,
+};
+use hauksbee_ir::pin_functions::names_a_uart;
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use hauksbee_bind::digital::output_roles;
@@ -288,6 +309,236 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
         });
     }
 
+    report
+}
+
+/// One transmitter found on a serial line, as a message names it.
+struct Transmitter {
+    reference: String,
+    text: String,
+}
+
+/// A card's UART-transmit pad on a net: the part, its pin and its card.
+type BoundPad<'a> = (&'a Component, &'a Pin, &'a ModelEntry);
+
+/// The cards by reference designator.
+type Cards<'a> = HashMap<&'a str, &'a ModelEntry>;
+
+/// A general-purpose port pad of a card's pin map, by its role (`pd1_txd`,
+/// `gpio1_u0txd`, `p01_txd`).
+fn is_port_pad(role: &str) -> bool {
+    let r = role.trim().to_ascii_lowercase();
+    let head = r.split('_').next().unwrap_or("");
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let letter_port = head.len() >= 3
+        && head.starts_with('p')
+        && head.as_bytes()[1].is_ascii_lowercase()
+        && digits(&head[2..]);
+    letter_port
+        || ["gpio", "io", "gp", "p", "d"]
+            .iter()
+            .any(|p| head.strip_prefix(p).is_some_and(digits))
+}
+
+/// The pads each MCU card binds to UART transmit, grouped by net.
+fn bound_transmit_pads<'a>(
+    resolved: &'a [(&'a Component, ModelEntry)],
+) -> BTreeMap<i64, Vec<BoundPad<'a>>> {
+    let mut bound: BTreeMap<i64, Vec<BoundPad<'a>>> = BTreeMap::new();
+    for (c, m) in resolved {
+        if m.kind != ComponentKind::Mcu {
+            continue;
+        }
+        for pin in &c.pins {
+            let Some(net) = pin.net.filter(|&id| id != 0) else {
+                continue;
+            };
+            let port = m.pins.get(&pin.number).is_some_and(|r| is_port_pad(r));
+            if port && uart_pad(m, &pin.number, true) == UartPad::Tx {
+                bound.entry(net).or_default().push((c, pin, m));
+            }
+        }
+    }
+    bound
+}
+
+/// Whether the line is serial: named for a serial port, or a fitted
+/// non-MCU, non-connector part on it has a serial pin.
+fn is_serial_line(name: &str, members: &[(&Component, &Pin)], cards: &Cards<'_>) -> bool {
+    names_a_uart(name)
+        || members.iter().any(|(c, p)| {
+            let card = cards.get(c.reference.as_str()).copied();
+            !is_connector_like(c)
+                && AssemblyState::of(c).fitted().is_some()
+                && card.is_none_or(|m| m.kind != ComponentKind::Mcu)
+                && serial_pin(
+                    c,
+                    p,
+                    card.and_then(|m| m.pins.get(&p.number)).map(String::as_str),
+                )
+        })
+}
+
+/// The transmitters on a line beyond its bound pads: every fitted pin the
+/// symbol types an output that names a serial line. Also whether a tri-state or
+/// open-drain pin is on the line, which may be what shares it.
+fn other_transmitters(
+    members: &[(&Component, &Pin)],
+    pads: &[BoundPad<'_>],
+    cards: &Cards<'_>,
+) -> (Vec<Transmitter>, bool) {
+    let mut found = Vec::new();
+    let mut released = false;
+    for (c, p) in members {
+        let is_bound = pads
+            .iter()
+            .any(|(bc, bp, _)| bc.reference == c.reference && bp.number == p.number);
+        if is_bound || is_connector_like(c) || AssemblyState::of(c).fitted().is_none() {
+            continue;
+        }
+        let card = cards.get(c.reference.as_str()).copied();
+        match classify(c, p, card) {
+            Member::Pin(Dir::Open) => released = true,
+            Member::Pin(Dir::Out)
+                if serial_pin(
+                    c,
+                    p,
+                    card.and_then(|m| m.pins.get(&p.number)).map(String::as_str),
+                ) =>
+            {
+                let name = if p.function.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", p.function.trim())
+                };
+                found.push(Transmitter {
+                    reference: c.reference.clone(),
+                    text: format!("{}.{}{name}, typed output", c.reference, p.number),
+                });
+            }
+            _ => {}
+        }
+    }
+    (found, released)
+}
+
+/// The finding for a serial line `net` joined by `found` transmitters.
+fn transmit_finding(net: &str, found: &[Transmitter], model: &ModelEntry) -> LintFinding {
+    let refs: BTreeSet<&str> = found.iter().map(|t| t.reference.as_str()).collect();
+    let listed: Vec<&str> = found.iter().map(|t| t.text.as_str()).collect();
+    let receive = receive_pads(model);
+    let move_to = if receive.is_empty() {
+        "wire each transmitter to the other side's receive pin".to_owned()
+    } else {
+        format!(
+            "wire the transmit pad to the other side's receive pin, and give the line a \
+             pad that can receive: {receive}"
+        )
+    };
+    LintFinding {
+        check: LintCheck::OutputContention,
+        severity: Severity::High,
+        message: format!(
+            "net '{net}' joins {} UART transmitters: {}. A UART transmit pad drives its \
+             line push-pull, so two of them on one wire fight whenever their levels \
+             differ, and neither hears the other: the link cannot work (TX must go to \
+             the other side's RX). {move_to}. If the firmware never enables the hardware \
+             transmit on this pad this does not apply, but then the pad is a plain input \
+             and the line has no transmitter",
+            found.len(),
+            hauksbee_ir::vocabulary::names_summary(&listed),
+        ),
+        refs: refs.iter().map(|r| (*r).to_owned()).collect(),
+        nets: vec![net.to_owned()],
+    }
+}
+
+/// The nets a part touches (unconnected pads left out).
+fn net_set(c: &Component) -> BTreeSet<i64> {
+    c.pins
+        .iter()
+        .filter_map(|p| p.net.filter(|&n| n != 0))
+        .collect()
+}
+
+/// Whether two parts are one device drawn twice: a board that carries a
+/// footprint for each of two interchangeable chips (a DIP beside a TQFP, an
+/// `ATmega168` beside an `ATmega328P`) wires every pad of both to the same nets and
+/// fits one. Two parts on the same set of at least six nets are read that way;
+/// a second controller on the line has pins of its own.
+fn alternate_footprints(a: &Component, b: &Component) -> bool {
+    let nets = net_set(a);
+    nets.len() >= MIN_SHARED_NETS && nets == net_set(b)
+}
+
+/// The fewest nets two parts must share, all of them, to read as alternates.
+const MIN_SHARED_NETS: usize = 6;
+
+/// The parts the transmitters belong to, with alternate footprints of one device
+/// counted once: only one of them is on the assembled board.
+fn distinct_parts<'a>(board: &'a ExtractedBoard, found: &'a [Transmitter]) -> Vec<&'a str> {
+    let mut parts: Vec<&str> = Vec::new();
+    for t in found {
+        let r = t.reference.as_str();
+        let twin = |q: &&str| {
+            *q == r
+                || board
+                    .components
+                    .iter()
+                    .find(|c| c.reference == r)
+                    .zip(board.components.iter().find(|c| c.reference == *q))
+                    .is_some_and(|(a, b)| alternate_footprints(a, b))
+        };
+        if !parts.iter().any(twin) {
+            parts.push(r);
+        }
+    }
+    parts
+}
+
+/// Flag every serial line that carries two transmitters: an MCU pad bound to
+/// UART transmit beside another MCU's transmit pad or another part's transmit
+/// pin typed an output. See the module docs.
+#[must_use]
+pub fn transmit_contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    let mut report = NetLintReport::default();
+    let resolved: Vec<(&Component, ModelEntry)> = super::resolved_components(board, lib).collect();
+    let cards: Cards<'_> = resolved
+        .iter()
+        .map(|(c, m)| (c.reference.as_str(), m))
+        .collect();
+    for (net, pads) in bound_transmit_pads(&resolved) {
+        let Some(n) = board.net(net) else { continue };
+        if super::is_ground_name(&n.name) || is_unconnected_net(&n.name) {
+            continue;
+        }
+        let members = board.net_members(net);
+        if !is_serial_line(&n.name, &members, &cards) {
+            continue;
+        }
+        let mut found: Vec<Transmitter> = pads
+            .iter()
+            .map(|(c, p, m)| Transmitter {
+                reference: c.reference.clone(),
+                text: format!(
+                    "{}.{} ({}, the card's UART transmit pad)",
+                    c.reference,
+                    p.number,
+                    m.pins
+                        .get(&p.number)
+                        .map_or(String::new(), |r| r.to_ascii_uppercase()),
+                ),
+            })
+            .collect();
+        let (others, released) = other_transmitters(&members, &pads, &cards);
+        found.extend(others);
+        let parts = distinct_parts(board, &found);
+        if parts.len() >= 2 && !released {
+            report
+                .findings
+                .push(transmit_finding(&n.name, &found, pads[0].2));
+        }
+    }
     report
 }
 
@@ -545,5 +796,156 @@ mod tests {
         );
         assert_eq!(s.pushpull_driver_pins(), 1);
         assert_eq!(s.output_roles_presented(), 8);
+    }
+
+    /// A serial peripheral: `(pad, pin name, electrical type, net)` per pin.
+    fn serial_part(reference: &str, pins: &[(&str, &str, &str, i64)]) -> Component {
+        let pads: Vec<(&str, i64)> = pins.iter().map(|(p, _, _, n)| (*p, *n)).collect();
+        let mut u = comp(reference, "GPS-MODULE", &pads);
+        for (pin, (_, name, kind, _)) in u.pins.iter_mut().zip(pins) {
+            pin.function = (*name).into();
+            pin.kind = (*kind).into();
+        }
+        u
+    }
+
+    fn mcu(reference: &str, pads: &[(&str, i64)]) -> Component {
+        comp(reference, "ATmega328P", pads)
+    }
+
+    fn transmit(b: &ExtractedBoard) -> Vec<LintFinding> {
+        transmit_contention_lint(b, &ModelLibrary::builtin()).findings
+    }
+
+    const LINK: i64 = 1;
+
+    /// Two UART transmitters on one line: the `ATmega328P`'s TXD pad (PD1, pad 3,
+    /// `[models.pin_capability.uart_tx]`) and a GPS module's TXD typed output.
+    /// The pad is a GPIO-capable port pad, but the card binds it to the UART
+    /// transmit and the line is serial, so the fight is real.
+    #[test]
+    fn a_uart_transmit_pad_facing_a_transmit_pin_is_contention() {
+        let b = board(
+            &[(LINK, "GPS_TX")],
+            vec![
+                mcu("U1", &[("3", LINK)]),
+                serial_part("U2", &[("1", "TXD", "output", LINK)]),
+            ],
+        );
+        let found = transmit(&b);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(
+            (f.check, f.severity),
+            (LintCheck::OutputContention, Severity::High)
+        );
+        assert_eq!(f.refs, ["U1", "U2"]);
+        assert_eq!(f.nets, ["GPS_TX"]);
+        assert!(f.message.contains("U1"), "{}", f.message);
+        assert!(f.message.contains("U2"), "{}", f.message);
+    }
+
+    /// Two MCUs' transmit pads tied together is the same fight, with no
+    /// peripheral on the line: the net name alone says it is serial.
+    #[test]
+    fn two_mcu_transmit_pads_on_one_serial_net_are_contention() {
+        let b = board(
+            &[(LINK, "UART_TX")],
+            vec![mcu("U1", &[("3", LINK)]), mcu("U2", &[("3", LINK)])],
+        );
+        let found = transmit(&b);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].refs, ["U1", "U2"]);
+    }
+
+    /// One MCU drawn in two footprints (a DIP beside a TQFP), every pad on the
+    /// same nets, is one device with one transmitter. Two MCUs that share only
+    /// the transmit line are two devices fighting.
+    #[test]
+    fn one_mcu_in_two_footprints_is_not_two_transmitters() {
+        let nets = [
+            (LINK, "UART_TX"),
+            (2, "GND"),
+            (3, "VCC"),
+            (4, "AUX"),
+            (5, "RESET"),
+            (6, "SCK"),
+            (7, "MISO"),
+        ];
+        let wired = [
+            ("3", LINK),
+            ("8", 2),
+            ("7", 3),
+            ("1", 5),
+            ("19", 6),
+            ("18", 7),
+        ];
+        let twins = board(&nets, vec![mcu("U1", &wired), mcu("U1_TQFP", &wired)]);
+        let found = transmit(&twins);
+        assert!(found.is_empty(), "{found:#?}");
+        let apart = board(
+            &nets,
+            vec![
+                mcu("U1", &wired),
+                mcu(
+                    "U2",
+                    &[
+                        ("3", LINK),
+                        ("8", 2),
+                        ("7", 4),
+                        ("1", 5),
+                        ("19", 6),
+                        ("18", 7),
+                    ],
+                ),
+            ],
+        );
+        assert_eq!(transmit(&apart).len(), 1);
+    }
+
+    /// The correct wiring and every shape the check must leave alone.
+    #[test]
+    fn correct_serial_wiring_and_undecidable_pads_are_silent() {
+        let gps_tx = |kind: &str| serial_part("U2", &[("1", "TXD", kind, LINK)]);
+        let nets = [(LINK, "GPS_TX"), (2, "LED"), (3, "UART_TX")];
+        let silent = |parts: Vec<Component>, why: &str| {
+            let b = board(&nets, parts);
+            let found = transmit(&b);
+            assert!(found.is_empty(), "{why}: {found:?}");
+        };
+        // The GPS's TXD into the MCU's RXD pad (PD0, pad 2).
+        silent(
+            vec![mcu("U1", &[("2", LINK)]), gps_tx("output")],
+            "tx into rx",
+        );
+        // The MCU's TXD pad into a device that only listens.
+        silent(
+            vec![
+                mcu("U1", &[("3", LINK)]),
+                serial_part("U2", &[("1", "RXD", "input", LINK)]),
+            ],
+            "tx into rx pin",
+        );
+        // One MCU transmit pad on a serial net, alone.
+        silent(vec![mcu("U1", &[("3", 3)])], "alone");
+        // PB1 (pad 15) is no UART pad: a GPIO's direction is firmware state.
+        silent(
+            vec![mcu("U1", &[("15", LINK)]), gps_tx("output")],
+            "gpio pad",
+        );
+        // A transmit pad on a line that is not serial.
+        let other = serial_part("U2", &[("1", "OUT", "output", 2)]);
+        silent(vec![mcu("U1", &[("3", 2)]), other], "not a serial line");
+        // A partner that may release the line (tri-state) is how a line is shared.
+        silent(
+            vec![mcu("U1", &[("3", LINK)]), gps_tx("tri_state")],
+            "tri-state",
+        );
+        // A partner whose direction is untyped.
+        silent(vec![mcu("U1", &[("3", LINK)]), gps_tx("")], "untyped");
+        // A part not fitted drives nothing.
+        let mut dnp = gps_tx("output");
+        dnp.dnp = true;
+        silent(vec![mcu("U1", &[("3", LINK)]), dnp], "dnp");
     }
 }

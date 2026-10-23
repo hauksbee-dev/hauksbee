@@ -44,7 +44,7 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 /// What a pin does to the net it is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Dir {
+pub(super) enum Dir {
     /// A push-pull output: drives the net.
     Out,
     /// A tri-state or open-drain pin: may drive the net low (or either way)
@@ -148,7 +148,7 @@ fn is_bus_transceiver(c: &Component) -> bool {
 }
 
 /// One pin of a net, as the check reads it.
-enum Member {
+pub(super) enum Member {
     /// Takes no part: a capacitor, a test point, a part not fitted, a pin
     /// marked no-connect.
     Ignored,
@@ -158,7 +158,7 @@ enum Member {
     Unknown,
 }
 
-fn classify(comp: &Component, pin: &Pin, model: Option<&ModelEntry>) -> Member {
+pub(super) fn classify(comp: &Component, pin: &Pin, model: Option<&ModelEntry>) -> Member {
     match AssemblyState::of(comp) {
         AssemblyState::DnpAbsent(_) => return Member::Ignored,
         AssemblyState::IdentityUnknown(_) => return Member::Unknown,
