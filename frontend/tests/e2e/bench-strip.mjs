@@ -7,18 +7,17 @@
 //
 // Run:  cd frontend && bun run build && node tests/e2e/bench-strip.mjs
 // Playwright comes from the shared install in ~/.claude/tools/playwright.
-// Screenshots go to $BENCH_SHOTS (default: the WP2 scratchpad folder).
+// Screenshots go to $BENCH_SHOTS (default: hauksbee-bench-shots in the system temp folder).
 
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const FRONTEND = join(here, '../..')
-const SHOTS = process.env.BENCH_SHOTS
-  ?? '/private/tmp/claude-501/-Users-hauksbee-user-public-public-repos-hauksbee-developer/5e3d9da3-a1f2-42a2-b4a1-484c1ce37da8/scratchpad/wp2'
+const SHOTS = process.env.BENCH_SHOTS ?? join(tmpdir(), 'hauksbee-bench-shots')
 mkdirSync(SHOTS, { recursive: true })
 
 const { chromium } = await import(join(homedir(), '.claude/tools/playwright/node_modules/playwright/index.mjs'))
