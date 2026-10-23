@@ -244,20 +244,11 @@ impl ExecutionEvidence {
         if let Some(stall) = &stall {
             blockers.push(stall.detail.clone());
         } else if !executed {
-            blockers.push(match reached_entry {
-                Observed::No => format!(
-                    "the core never reached {} and produced no UART or GPIO activity",
-                    probe.entry_symbol.as_deref().unwrap_or("its entry symbol")
-                ),
-                _ if uart_bytes > 0 => format!(
-                    "no evidence the firmware executed: no {} seen and no GPIO toggles; \
-                     the {uart_bytes} UART bytes may be the boot ROM's own log",
-                    probe.entry_symbol.as_deref().unwrap_or("entry symbol")
-                ),
-                _ => "no evidence the firmware executed: no entry symbol seen, no UART \
-                      bytes and no GPIO toggles"
-                    .to_string(),
-            });
+            blockers.push(not_executed_blocker(
+                reached_entry,
+                uart_bytes,
+                probe.entry_symbol.as_deref(),
+            ));
         }
         if !probe.faults.is_empty() {
             blockers.push(format!("the core faulted: {}", probe.faults.join("; ")));
@@ -381,6 +372,30 @@ fn stall_of(
         symbol,
         detail,
     })
+}
+
+/// Why a core that did not stall still shows no sign of running the
+/// firmware: it never reached `entry_symbol`, or its only output was UART
+/// bytes a boot ROM may have logged, or nothing at all.
+fn not_executed_blocker(
+    reached_entry: Observed,
+    uart_bytes: u64,
+    entry_symbol: Option<&str>,
+) -> String {
+    match reached_entry {
+        Observed::No => format!(
+            "the core never reached {} and produced no UART or GPIO activity",
+            entry_symbol.unwrap_or("its entry symbol")
+        ),
+        _ if uart_bytes > 0 => format!(
+            "no evidence the firmware executed: no {} seen and no GPIO toggles; \
+             the {uart_bytes} UART bytes may be the boot ROM's own log",
+            entry_symbol.unwrap_or("entry symbol")
+        ),
+        _ => "no evidence the firmware executed: no entry symbol seen, no UART \
+              bytes and no GPIO toggles"
+            .to_string(),
+    }
 }
 
 /// Whether the board supplies the core's clock, and where it comes from, in words.

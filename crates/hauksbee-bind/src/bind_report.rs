@@ -182,6 +182,29 @@ pub struct BindReport {
     /// prefix does, so an IC drawn under a switch-like designator is still
     /// offered for a model.
     pub identity_ics: std::collections::BTreeSet<String>,
+    /// Every connected pin of every fitted part the pass bound or left open
+    /// (not the skipped ones: connectors, test points, mechanicals), with the
+    /// role its card lists for it and the card's id, so a check can name the
+    /// pins on a net that the DC netlist gives no behaviour (see
+    /// [`crate::control_inputs`]).
+    pub part_pins: Vec<PartPin>,
+}
+
+/// One connected pin of a fitted part, as the bind pass saw it.
+#[derive(Debug, Clone)]
+pub struct PartPin {
+    /// The part's reference designator.
+    pub reference: String,
+    /// The pad number as printed.
+    pub pin: String,
+    /// The node the pin lands on.
+    pub node: hauksbee_ir::NodeId,
+    /// The id of the card the part bound to; `None` when it bound to none.
+    pub card: Option<String>,
+    /// The role the card's `[models.pins]` lists for this pad, if any.
+    pub role: Option<String>,
+    /// Whether the pin could drive its net ([`pin_can_drive`]).
+    pub can_drive: bool,
 }
 
 /// One unresolved (open-circuit) part and where its pins land, so the scheduler

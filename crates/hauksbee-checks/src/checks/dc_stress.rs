@@ -29,6 +29,9 @@ use std::collections::{BTreeMap, HashMap};
 use hauksbee_bind::binder::{
     bind_board, held_off_rails, is_ground, power_rail_voltage, BoundBoard,
 };
+use hauksbee_bind::control_inputs::{
+    hold_off, undetermined_gate_note, undetermined_gates, UndeterminedGate,
+};
 use hauksbee_bind::stress::{
     bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, unbounded_note, FaultEvent,
     FaultKind, GateDrive, RegulatorHeat, StandInExceedance, StressMonitor,
@@ -305,8 +308,13 @@ fn note_under_driven(
 /// [`dc_stress_lint`] over an already bound board.
 #[must_use]
 pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
+    // A FET whose gate only a pin with no DC behaviour drives is held off and
+    // not judged: its gate level is the board's, not the solver's 0 V.
+    let held = undetermined_gates(&bound);
+    hold_off(&mut bound, &held);
+    let held: Vec<LintFinding> = held.iter().map(undetermined_gate_finding).collect();
     if bound.device_meta.is_empty() {
-        return NetLintReport::default();
+        return NetLintReport { findings: held };
     }
     // part -> (state labels, clauses); one finding per physical part.
     let mut by_part: BTreeMap<String, PartFaults> = BTreeMap::new();
@@ -414,6 +422,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         held_unsolved,
     ));
     findings.extend(abstained_note(&unsolved));
+    findings.extend(held);
     findings.extend((dead.filter(|d| !d.is_empty())).map(|d| dead_rail_note(d, &overloaded)));
     NetLintReport { findings }
 }
@@ -526,6 +535,15 @@ fn dead_rail_note(
         ),
         dead.into_keys().collect(),
     )
+}
+
+/// The low-severity note that `gate`'s FET was held off and not judged
+/// because nothing the DC model drives sets its gate level.
+fn undetermined_gate_finding(gate: &UndeterminedGate) -> LintFinding {
+    LintFinding {
+        refs: vec![gate.reference.clone()],
+        ..not_judged_note(&undetermined_gate_note(gate), vec![gate.net.clone()])
+    }
 }
 
 /// The low-severity note that the pass did not run to a result for `what`.
@@ -1559,6 +1577,102 @@ mod tests {
         let report = dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin());
         assert!(
             !report.findings.iter().any(|f| f.severity == Severity::High),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// A `SI7461DP` P-FET switching +30V onto a `load` resistor, its gate net `/G`
+    /// carrying pin 4 of an XC6206 regulator (a pin its card does not list)
+    /// and, when `pull` is set, a 10k pull-down that sets the gate's level.
+    fn gate_on_unmodelled_pin(load: &str, pull: bool) -> NetLintReport {
+        let nets = [
+            (1, "GND"),
+            (2, "+30V"),
+            (3, "/OUT"),
+            (4, "/G"),
+            (5, "+5V"),
+            (6, "+3V3"),
+        ];
+        let fet = [
+            ("1", 2),
+            ("2", 2),
+            ("3", 2),
+            ("4", 4),
+            ("5", 3),
+            ("6", 3),
+            ("7", 3),
+            ("8", 3),
+        ];
+        let mut parts = vec![
+            part("Q1", "SI7461DP", &fet),
+            part("R1", load, &[("1", 3), ("2", 1)]),
+            part(
+                "U1",
+                "XC6206P332MR",
+                &[("1", 1), ("2", 6), ("3", 5), ("4", 4)],
+            ),
+        ];
+        if pull {
+            parts.push(part("R2", "10k", &[("1", 4), ("2", 1)]));
+        }
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// Faulty as solved, clean as built: a FET gate whose net carries only a
+    /// pin the DC model gives no behaviour is not read as 0 V. Its gate-source
+    /// rating and the conduction path it would close are not judged (no
+    /// overstress, no unbounded-current or near-short warning), and one
+    /// low-severity abstention names the pin, its card and the gate net.
+    #[test]
+    fn a_gate_driven_only_by_an_unmodelled_pin_abstains_with_a_note() {
+        use hauksbee_bind::control_inputs::UNDETERMINED_GATE_MARKER;
+        for load in ["1R", "1k"] {
+            let report = gate_on_unmodelled_pin(load, false);
+            assert!(
+                !(report.findings.iter())
+                    .any(|f| matches!(f.severity, Severity::High | Severity::Medium)),
+                "{load}: {:#?}",
+                report.findings
+            );
+        }
+        let report = gate_on_unmodelled_pin("1R", false);
+        assert!(
+            !(report.findings.iter())
+                .any(|f| f.message.contains(hauksbee_bind::stress::UNBOUNDED_MARKER)),
+            "{:#?}",
+            report.findings
+        );
+        let note = (report.findings.iter())
+            .find(|f| f.message.contains(UNDETERMINED_GATE_MARKER))
+            .unwrap_or_else(|| panic!("no undetermined-gate note: {:#?}", report.findings));
+        assert_eq!(note.severity, Severity::Low);
+        assert!(note.is_abstention(), "{}", note.message);
+        assert_eq!(note.refs, vec!["Q1".to_string()]);
+        assert_eq!(note.nets, vec!["/G".to_string()]);
+        assert!(
+            note.message.contains("U1 pin 4") && note.message.contains("xc6206"),
+            "{}",
+            note.message
+        );
+    }
+
+    /// The contrast: the same gate with a pull-down on its net has a level
+    /// the board sets, so it is judged as before: 30 V across a 20 V gate is
+    /// a serious finding, and no undetermined-gate note is made.
+    #[test]
+    fn a_gate_with_a_pull_resistor_is_still_judged() {
+        use hauksbee_bind::control_inputs::UNDETERMINED_GATE_MARKER;
+        let report = gate_on_unmodelled_pin("1k", true);
+        let on = findings_on(&report, "Q1");
+        assert!(
+            on.iter()
+                .any(|f| f.severity == Severity::High && f.message.contains("gate-source")),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.contains(UNDETERMINED_GATE_MARKER)),
             "{:#?}",
             report.findings
         );
