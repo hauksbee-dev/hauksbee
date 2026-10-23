@@ -37,8 +37,16 @@
 //! (`~{RESET}`, `!RESET`, `RESET#`, `nRST`, `NRST`, `RESET_N`). A pin the
 //! symbol types as an output, tri-state or open collector / drain is never
 //! judged. A trailing `_<digits>` pad suffix (`CHIP_PU_3`) is ignored.
-//! Anything else, including an active-low enable or an active-high reset, is
-//! not judged.
+//!
+//! The opposite polarities are judged the same way, mirrored, only when the
+//! card states them: an enable the card says runs the part on a low level
+//! (`en_on_level = "low"`, or a role that names itself active-low, `en_n`) and
+//! a reset the card says holds the part in reset while high
+//! (`reset_input.active_high`). A pull to the part's own supply with nothing on
+//! the net that can take the pin low is the wrong rail for them: the part is
+//! never enabled, or never leaves reset. A name or a symbol never sets these
+//! polarities, and a card that is silent leaves the pin unjudged.
+//! Anything else is not judged.
 //!
 //! An internal pull-up inside the part can still win against a weak external
 //! pull-down, so the check computes the level: the pin sits at most
@@ -121,6 +129,11 @@ struct Control {
     label: String,
     /// The card's role for the pad, lower case.
     role: Option<String>,
+    /// Whether the part runs with the pin at its HIGH level. An active-high
+    /// enable and an active-low reset do; an active-low enable and an
+    /// active-high reset, whose polarity only the card can give, run low and
+    /// are held off by a pull to the supply.
+    run_high: bool,
 }
 
 /// An Eagle-style `!RESET` spelling reads as the active-low reset it is.
@@ -135,6 +148,20 @@ fn reset_role(role: &str) -> bool {
 
 fn enable_role(role: &str) -> bool {
     matches!(role, "en" | "enable" | "chip_en" | "chip_pu")
+}
+
+/// A card role that names itself an active-low enable.
+fn active_low_enable_role(role: &str) -> bool {
+    matches!(role, "en_n" | "enable_n")
+}
+
+/// Whether the card gives the reset role the opposite of the usual polarity:
+/// the part is held in reset while the pin reads high.
+fn card_reset_active_high(model: &ModelEntry, role: &str) -> bool {
+    model
+        .reset_input
+        .as_ref()
+        .is_some_and(|r| r.active_high && r.role.eq_ignore_ascii_case(role))
 }
 
 /// A pin function without a trailing `_<digits>` pad suffix (`CHIP_PU_3`,
@@ -205,6 +232,16 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
     if let Some(r) = role.as_deref() {
         let model = model?;
         if reset_role(r) {
+            // The card says the part resets on a high level: held in reset by
+            // a pull-up, released by a low.
+            if card_reset_active_high(model, r) {
+                return Some(Control {
+                    kind: Kind::Reset,
+                    label: label("RESET"),
+                    role: role.clone(),
+                    run_high: false,
+                });
+            }
             let low = model.kind == ComponentKind::Mcu
                 || r.ends_with("_n")
                 || r.contains("nrst")
@@ -216,15 +253,21 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
                 kind: Kind::Reset,
                 label: label("RESET"),
                 role: role.clone(),
+                run_high: true,
             });
         }
-        if enable_role(r) {
-            let high = model.params.get_str("en_on_level") != Some("low")
-                && !name_suggests_active_low(function);
-            return high.then(|| Control {
+        if enable_role(r) || active_low_enable_role(r) {
+            // The card's polarity: `en_on_level = "low"` or a role that names
+            // itself active-low runs the part on a low level. A symbol that
+            // only hints at the opposite polarity is not enough to judge.
+            let card_low =
+                model.params.get_str("en_on_level") == Some("low") || active_low_enable_role(r);
+            let run_high = !card_low;
+            return (card_low || !name_suggests_active_low(function)).then(|| Control {
                 kind: Kind::Enable,
                 label: label("EN"),
                 role: role.clone(),
+                run_high,
             });
         }
         // The card maps this pad to something else; a symbol's name for it
@@ -241,16 +284,23 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
             kind: Kind::Enable,
             label: label("EN"),
             role: None,
+            run_high: true,
         });
     }
     (control_role(bare(name)) == Some("reset") && reset_spelled_active_low(name)).then(|| Control {
         kind: Kind::Reset,
         label: label("RESET"),
         role: None,
+        run_high: true,
     })
 }
 
-fn internal_pull(kind: Kind, role: Option<&str>, model: Option<&ModelEntry>) -> InternalPull {
+fn internal_pull(
+    kind: Kind,
+    role: Option<&str>,
+    model: Option<&ModelEntry>,
+    run_high: bool,
+) -> InternalPull {
     let Some(model) = model else {
         return InternalPull::Unknown;
     };
@@ -264,6 +314,11 @@ fn internal_pull(kind: Kind, role: Option<&str>, model: Option<&ModelEntry>) -> 
         if declared {
             return InternalPull::Absent;
         }
+    }
+    // The printed values are pull-ups toward the high level; a pin that runs on
+    // a low level has no printed pull toward it, so the floor is assumed.
+    if !run_high {
+        return InternalPull::Unknown;
     }
     let key = match kind {
         Kind::Enable => "en_pull_up_ohms",
@@ -290,51 +345,73 @@ fn parallel(pulls: &[Option<f64>]) -> Option<f64> {
     (conductance > 0.0).then(|| 1.0 / conductance)
 }
 
-/// The finding's words on how far the pin can rise, or `None` when the
-/// internal pull could lift it to a valid high.
-fn level_claim(pull: &InternalPull, rpd: f64) -> Option<String> {
+/// The finding's words on how far the pin can move toward its run level, or
+/// `None` when the internal pull could take it to a valid one. `run_high` is
+/// the level the part runs at: the held-off pull is a pull-down when it is
+/// set, a pull-up when not.
+fn level_claim(pull: &InternalPull, rext: f64, run_high: bool) -> Option<String> {
+    let (held, own) = if run_high {
+        ("pull-down", "pull-up")
+    } else {
+        ("pull-up", "pull-down")
+    };
     let (rint, source) = match pull {
-        InternalPull::Absent => return Some(
-            "the part has no pull of its own on this pin, so the pull-down alone sets its level"
-                .to_string(),
-        ),
-        InternalPull::Known(r) => (*r, "the card's internal pull-up minimum"),
+        InternalPull::Absent => {
+            return Some(format!(
+                "the part has no pull of its own on this pin, so the {held} alone sets its level"
+            ));
+        }
+        InternalPull::Known(r) => (*r, format!("the card's internal {own} minimum")),
         InternalPull::Unknown => (
             ASSUMED_INTERNAL_PULL_OHMS,
-            "an assumed internal pull-up floor",
+            format!("an assumed internal {own} floor"),
         ),
     };
-    let fraction = rpd / (rpd + rint);
+    // The pin's distance from the off rail, as a fraction of the supply.
+    let fraction = rext / (rext + rint);
     (fraction <= NEVER_HIGH_FRACTION).then(|| {
-        format!(
-            "even against {source} of {} the pin sits at no more than {:.2} of the supply, below \
-             any valid high",
-            ohms(rint),
-            fraction
-        )
+        if run_high {
+            format!(
+                "even against {source} of {} the pin sits at no more than {fraction:.2} of the \
+                 supply, below any valid high",
+                ohms(rint),
+            )
+        } else {
+            format!(
+                "even against {source} of {} the pin sits at no less than {:.2} of the supply, \
+                 above any valid low",
+                ohms(rint),
+                1.0 - fraction,
+            )
+        }
     })
 }
 
 /// The supply net the part's logic runs from: by its card's pin roles, else
 /// the first positive supply rail on one of its pads.
-fn supply_name(board: &ExtractedBoard, comp: &Component, model: Option<&ModelEntry>) -> String {
+fn supply_net<'a>(
+    board: &'a ExtractedBoard,
+    comp: &Component,
+    model: Option<&ModelEntry>,
+) -> Option<&'a hauksbee_extract::Net> {
     let by_card = model.and_then(|m| {
         ["vdd", "vcc", "dvdd", "vddio", "vdd_io", "3v3", "vcc_io"]
             .iter()
             .find_map(|role| role_net_id(comp, m, role))
     });
-    by_card
-        .and_then(|id| board.net(id))
-        .or_else(|| {
-            comp.pins
-                .iter()
-                .filter_map(|p| p.net.and_then(|id| board.net(id)))
-                .find(|n| netclass::is_positive_supply(&n.name))
-        })
-        .map_or_else(
-            || "the part's logic supply".to_string(),
-            |n| format!("'{}'", n.name),
-        )
+    by_card.and_then(|id| board.net(id)).or_else(|| {
+        comp.pins
+            .iter()
+            .filter_map(|p| p.net.and_then(|id| board.net(id)))
+            .find(|n| netclass::is_positive_supply(&n.name))
+    })
+}
+
+fn supply_name(board: &ExtractedBoard, comp: &Component, model: Option<&ModelEntry>) -> String {
+    supply_net(board, comp, model).map_or_else(
+        || "the part's logic supply".to_string(),
+        |n| format!("'{}'", n.name),
+    )
 }
 
 /// One finding per enable or reset pin the board holds off permanently.
@@ -375,6 +452,24 @@ pub fn control_held_off_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
     report
 }
 
+/// What to change: return the pull to the level the part runs at, or drive the
+/// pin from something that can release it.
+fn fix_sentence(run_high: bool, supply: &str, label: &str) -> String {
+    if run_high {
+        format!(
+            "Return the pull resistor to {supply} instead of ground (a pull-up), or drive {label} \
+             from a GPIO or a supervisor; a pull to ground belongs on {label} only when something \
+             else releases the pin."
+        )
+    } else {
+        format!(
+            "Return the pull resistor to ground instead of {supply} (a pull-down), or drive \
+             {label} from a GPIO or a supervisor; a pull to {supply} belongs on {label} only \
+             when something else releases the pin."
+        )
+    }
+}
+
 fn judge(
     board: &ExtractedBoard,
     comp: &Component,
@@ -392,10 +487,18 @@ fn judge(
     {
         return None;
     }
+    // The off level sits on ground for a pin that runs high and on the part's
+    // own supply for one that runs low. A low-running pin with no supply net
+    // on the board has no off rail to read, so it is not judged.
+    let off_rail = if control.run_high {
+        0
+    } else {
+        supply_net(board, comp, model)?.id
+    };
     let reg = Reg {
         comp,
-        on_high: true,
-        input: 0,
+        on_high: control.run_high,
+        input: off_rail,
         gnd: None,
     };
     let Survey {
@@ -411,8 +514,14 @@ fn judge(
     }
     let rpd = parallel(&pulls)?;
     let claim = level_claim(
-        &internal_pull(control.kind, control.role.as_deref(), model),
+        &internal_pull(
+            control.kind,
+            control.role.as_deref(),
+            model,
+            control.run_high,
+        ),
         rpd,
+        control.run_high,
     )?;
     let unfitted = unfitted_note(&unfitted);
     let supply = supply_name(board, comp, model);
@@ -425,11 +534,7 @@ fn judge(
         net.name,
         held.join(", "),
     );
-    let fix = format!(
-        "Return the pull resistor to {supply} instead of ground (a pull-up), or drive {label} \
-         from a GPIO or a supervisor; a pull to ground belongs on {label} only when something \
-         else releases the pin."
-    );
+    let fix = fix_sentence(control.run_high, &supply, label);
     let (severity, message) = if external.is_empty() {
         (
             Severity::High,
@@ -934,6 +1039,107 @@ mod tests {
         let (mine, theirs) = ldo("OFFOPEN", "en_open = \"off\"", vec![pull_down("R1", "1k")]);
         assert!(mine.is_empty(), "{mine:#?}");
         assert_eq!(theirs.len(), 1, "{theirs:#?}");
+    }
+
+    /// A digital part (1 vcc, 2 gnd, 3 the control pin) whose card states the
+    /// control pin's polarity in a param line (`param`) or a table (`table`),
+    /// on `/RST` with `parts`.
+    fn polar(
+        tag: &str,
+        role: &str,
+        (param, table): (&str, &str),
+        parts: Vec<Component>,
+    ) -> Vec<LintFinding> {
+        let card = format!(
+            "[[models]]\nid = \"held_off_polar_{tag}\"\nkind = \"digital\"\n\
+             description = \"polarity fixture\"\n[models.match]\n\
+             value_re = \"^POLAR-{tag}$\"\n[models.params]\nidentity_only = true\n\
+             warning = \"identity only\"\nunlocked_by = \"validated behavior\"\n{param}\n\
+             [models.pins]\n\"1\" = \"vcc\"\n\"2\" = \"gnd\"\n\"3\" = \"{role}\"\n{table}\n"
+        );
+        let dir = hauksbee_testkit::fresh_scratch_dir("control_held_off", tag);
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{tag}: {errors:?}");
+        let mut all = vec![part(
+            "U1",
+            &format!("POLAR-{tag}"),
+            &[("1", V3), ("2", GND), ("3", RST)],
+        )];
+        all.extend(parts);
+        control_held_off_lint(&board(&NETS, all), &lib)
+            .of_check(LintCheck::ControlHeldOff)
+            .cloned()
+            .collect()
+    }
+
+    fn pull_up(reference: &str, value: &str) -> Component {
+        part(reference, value, &[("1", RST), ("2", V3)])
+    }
+
+    /// An enable the card runs on a low level, pulled to the supply with
+    /// nothing able to take it low, is held off for good: the wrong rail.
+    #[test]
+    fn an_active_low_enable_pulled_to_the_supply_is_held_off_and_pulled_to_ground_is_not() {
+        for (tag, role, card) in [
+            ("ENN", "en_n", ("", "")),
+            ("ENLOW", "en", ("en_on_level = \"low\"", "")),
+        ] {
+            let found = polar(tag, role, card, vec![pull_up("R1", "1k")]);
+            assert_eq!(found.len(), 1, "{tag}: {found:#?}");
+            assert_eq!(found[0].severity, Severity::High, "{tag}");
+            says(
+                &found[0],
+                &[
+                    "pin 3 is on net '/RST'",
+                    "R1 to '+3V3'",
+                    "the part is never enabled",
+                    "above any valid low",
+                    "Return the pull resistor to ground instead of '+3V3'",
+                ],
+            );
+            // Fixed: the same pin pulled to ground enables the part.
+            assert!(
+                polar(tag, role, card, vec![pull_down("R1", "10k")]).is_empty(),
+                "{tag}"
+            );
+            // Something that can take the pin low releases it: a GPIO, a button
+            // to ground.
+            let gpio = part("U2", "ATmega328P", &[("5", RST), ("8", GND)]);
+            assert!(polar(tag, role, card, vec![pull_up("R1", "1k"), gpio]).is_empty());
+            let button = part("SW1", "SW_Push", &[("1", RST), ("2", GND)]);
+            assert!(polar(tag, role, card, vec![pull_up("R1", "1k"), button]).is_empty());
+        }
+    }
+
+    /// A reset the card holds while the pin reads high is held in reset by a
+    /// pull-up nothing releases.
+    #[test]
+    fn an_active_high_reset_pulled_to_the_supply_is_held_in_reset_and_pulled_to_ground_is_not() {
+        let card = (
+            "",
+            "[models.reset_input]\nrole = \"rst\"\nactive_high = true\n",
+        );
+        let found = polar("RSTHI", "rst", card, vec![pull_up("R1", "1k")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        says(
+            &found[0],
+            &[
+                "R1 to '+3V3'",
+                "the part is held in reset and never runs",
+                "Return the pull resistor to ground instead of '+3V3'",
+            ],
+        );
+        assert!(polar("RSTHI", "rst", card, vec![pull_down("R1", "10k")]).is_empty());
+        // Another supply is not the part's off rail: a pull there is not judged.
+        let mut other = pull_up("R1", "1k");
+        other.pins[1].net = Some(GPIO);
+        assert!(polar("RSTHI", "rst", card, vec![other]).is_empty());
+        // A card that says nothing about the polarity leaves the pin unjudged.
+        assert!(polar("RSTNONE", "rst", ("", ""), vec![pull_up("R1", "1k")]).is_empty());
+        assert!(polar("RSTNONE", "rst", ("", ""), vec![pull_down("R1", "10k")]).is_empty());
     }
 
     #[test]

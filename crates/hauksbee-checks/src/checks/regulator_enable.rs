@@ -49,7 +49,7 @@ use hauksbee_extract::{
     ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity, REMEDY_MARKER,
 };
 use hauksbee_models::refdes::RefClass;
-use hauksbee_models::{ComponentKind, Confidence, ModelEntry, ModelLibrary};
+use hauksbee_models::{CapSide, ComponentKind, Confidence, ModelEntry, ModelLibrary};
 
 use super::envelope::role_net_id;
 use super::model_controls::low_side_sink;
@@ -578,7 +578,7 @@ fn island_member(board: &ExtractedBoard, (o, q): (&Component, &Pin), net: i64) -
 /// when anything on them might source a level, or a record is refused.
 fn output_island(
     board: &ExtractedBoard,
-    (reg, out): (&Component, i64),
+    (reg, out, out_role): (&Component, i64, &str),
     models: &HashMap<&str, ModelEntry>,
 ) -> Option<std::collections::BTreeSet<i64>> {
     let mut island = std::collections::BTreeSet::from([out]);
@@ -597,7 +597,7 @@ fn output_island(
             if std::ptr::eq(o, reg) {
                 // The part's own output sources the island; no other pad may
                 // drive or share it.
-                let own_out = net == out && role.as_deref() == Some("out");
+                let own_out = net == out && role.as_deref() == Some(out_role);
                 if !own_out
                     && (pin_drives(q) || q.kind.trim().eq_ignore_ascii_case("bidirectional"))
                 {
@@ -636,6 +636,69 @@ fn output_island(
     Some(island)
 }
 
+/// The on-high enable of a device that has an input and an output, with the
+/// roles of both.
+struct SelfFedGate {
+    role: &'static str,
+    pad: String,
+    in_role: String,
+    out_role: String,
+}
+
+/// The enable `self_fed_enable` judges on a card: a regulator's on-high `en`
+/// or `shdn`, or a single-channel load switch's `ctrl` (every load switch card
+/// is active-high: an active-low option is excluded from its match rule by
+/// name). A load switch's two terminals are named `in_out_a` and `in_out_b`
+/// with no direction, so the input is the one the card gives an input-side
+/// `[[models.supply_cap]]` row; with none the output is unknown and the
+/// switch is not judged.
+fn self_fed_gate(model: &ModelEntry) -> Option<SelfFedGate> {
+    match model.kind {
+        ComponentKind::Vreg => {
+            let (role, pad, on_high) = enable_pad(model)?;
+            on_high.then(|| SelfFedGate {
+                role,
+                pad,
+                in_role: "in".into(),
+                out_role: "out".into(),
+            })
+        }
+        ComponentKind::AnalogSwitch => {
+            let has = |role: &str| model.pins.values().any(|r| r.eq_ignore_ascii_case(role));
+            let pad = model
+                .pins
+                .iter()
+                .find(|(_, r)| r.eq_ignore_ascii_case("ctrl"))
+                .map(|(pad, _)| pad.clone())?;
+            if !(has("in_out_a") && has("in_out_b")) {
+                return None;
+            }
+            let inputs: Vec<&str> = model
+                .supply_cap
+                .iter()
+                .filter(|c| c.side == CapSide::Input)
+                .map(|c| c.role.as_str())
+                .filter(|r| matches!(*r, "in_out_a" | "in_out_b"))
+                .collect();
+            let [input] = inputs.as_slice() else {
+                return None;
+            };
+            let out_role = if *input == "in_out_a" {
+                "in_out_b"
+            } else {
+                "in_out_a"
+            };
+            Some(SelfFedGate {
+                role: "ctrl",
+                pad,
+                in_role: (*input).to_string(),
+                out_role: out_role.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// A regulator or load switch whose on-high enable is fed only by the part's
 /// own output: wired to it directly, or to a net downstream of it that nothing
 /// else drives. The output is 0 V until the part runs, so the enable never
@@ -648,18 +711,16 @@ fn self_fed_enable(
     models: &HashMap<&str, ModelEntry>,
 ) -> Option<LintFinding> {
     let model = models.get(comp.reference.as_str())?;
-    if model.kind != ComponentKind::Vreg || !super::card_fits(board, comp, model) {
+    if !super::card_fits(board, comp, model) {
         return None;
     }
-    let (role, pad, on_high) = enable_pad(model)?;
-    if !on_high {
-        return None;
-    }
+    let gate = self_fed_gate(model)?;
+    let (role, pad) = (gate.role, gate.pad);
     let pin = comp.pins.iter().find(|p| p.number == pad)?;
     let en = pin.net.filter(|id| *id != 0)?;
-    let out = role_net_id(comp, model, "out")?;
-    let input = role_net_id(comp, model, "in");
-    let island = output_island(board, (comp, out), models)?;
+    let out = role_net_id(comp, model, &gate.out_role)?;
+    let input = role_net_id(comp, model, &gate.in_role);
+    let island = output_island(board, (comp, out, &gate.out_role), models)?;
     if !island.contains(&en) || input.is_some_and(|i| island.contains(&i)) {
         return None;
     }
@@ -1180,6 +1241,99 @@ mod tests {
             &["is on net '/EN', which is fed only from its own output '+3V3'"],
         );
         assert_eq!(found[0].nets, ["/EN", "+3V3"]);
+    }
+
+    /// AP2553 load switch (SOT-26: 1 IN, 2 GND, 3 EN, 4 FAULT, 5 ILIM, 6 OUT)
+    /// from `+5V` to `+3V3` with EN on `en`, plus `extra` parts. The card names
+    /// the terminals `in_out_b` (IN, the input-side supply capacitor row) and
+    /// `in_out_a` (OUT); EN is `ctrl`, active high (DS35404 Rev. 12-3).
+    fn load_switch(en: i64, extra: Vec<Component>) -> Vec<LintFinding> {
+        let mut parts = vec![
+            part(
+                "U1",
+                "AP2553W6-7",
+                &[("1", VIN), ("2", GND), ("3", en), ("6", V3)],
+            ),
+            part("C1", "1u", &[("1", VIN), ("2", GND)]),
+            part("C2", "1u", &[("1", V3), ("2", GND)]),
+            part("R9", "10k", &[("1", VIN), ("2", 7)]),
+        ];
+        parts.extend(extra);
+        let nets = [
+            (VIN, "+5V"),
+            (V3, "+3V3_SW"),
+            (GND, "GND"),
+            (EN, "/EN"),
+            (GPIO, "/MCU_PA3"),
+            (7, "/FAULT"),
+        ];
+        regulator_enable_lint(&board(&nets, parts), &ModelLibrary::builtin())
+            .of_check(LintCheck::RegulatorHeldOff)
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_load_switch_enable_wired_to_its_own_output_can_never_start() {
+        // Straight to OUT, and through a series resistor from OUT.
+        let found = load_switch(V3, vec![load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["U1"]);
+        says(
+            f,
+            &[
+                "U1 (AP2553W6-7)",
+                "is wired straight to its own output '+3V3_SW'",
+                "can never start",
+            ],
+        );
+        assert!(
+            f.own_remedy()
+                .is_some_and(|r| r.starts_with("Tie") && r.contains("the input '+5V'")),
+            "{}",
+            f.message
+        );
+        let r = part("R1", "10k", &[("1", V3), ("2", EN)]);
+        let found = load_switch(EN, vec![r, load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(
+            &found[0],
+            &["is on net '/EN', which is fed only from its own output '+3V3_SW'"],
+        );
+    }
+
+    /// A real LDO card that states an open enable is off (MIC5205) with EN on
+    /// its own output, directly or through a resistor, is reported once.
+    #[test]
+    fn a_carded_ldo_enable_on_its_own_output_is_flagged_once() {
+        let found = mic5205(MIC, Some(V3), vec![load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        says(&found[0], &["its own output '+3V3'", "can never start"]);
+        let r = part("R1", "100k", &[("1", V3), ("2", EN)]);
+        let found = mic5205(MIC, Some(EN), vec![r, load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["fed only from its own output '+3V3'"]);
+    }
+
+    #[test]
+    fn a_load_switch_enable_something_else_can_drive_is_silent() {
+        let silent = |en: i64, extra: Vec<Component>| {
+            let mut parts = vec![load_on(V3)];
+            parts.extend(extra);
+            load_switch(en, parts)
+        };
+        assert!(silent(VIN, vec![]).is_empty(), "tied to the input");
+        // A GPIO enables the switch, with a pull-down for the idle state.
+        let mut mcu = part("U3", "SomeMCU", &[("7", EN)]);
+        mcu.pins[0].kind = "bidirectional".into();
+        let pull = part("R2", "100k", &[("1", EN), ("2", GND)]);
+        assert!(silent(EN, vec![mcu, pull]).is_empty(), "a GPIO drives it");
+        // Pulled up to the input through a resistor.
+        let up = part("R3", "100k", &[("1", VIN), ("2", EN)]);
+        assert!(silent(EN, vec![up]).is_empty(), "pulled up to the input");
     }
 
     #[test]

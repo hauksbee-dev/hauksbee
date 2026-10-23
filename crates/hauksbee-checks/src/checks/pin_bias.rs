@@ -374,6 +374,7 @@ pub fn pin_bias_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRepor
         models: &models,
         senses: &senses,
         strict: true,
+        open_jumpers: false,
     };
     for comp in &board.components {
         let Some(model) = models.get(comp.reference.as_str()) else {
