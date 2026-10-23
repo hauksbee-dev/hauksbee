@@ -193,8 +193,13 @@ fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
     }
 }
 
-/// The first pin that drives the gate net, or one series gate resistor away.
-fn gate_driver(idx: &Index<'_>, q: &Component, gate: i64) -> Option<String> {
+/// The first pin that drives the gate net, or one series gate resistor away:
+/// the part it belongs to and a "REF pin N" label for it.
+fn gate_driver<'a>(
+    idx: &Index<'a>,
+    q: &Component,
+    gate: i64,
+) -> Option<(&'a Component, String)> {
     // A gate tied to a rail or ground is not switched by anything.
     if idx.level(gate).is_some() {
         return None;
@@ -214,8 +219,37 @@ fn gate_driver(idx: &Index<'_>, q: &Component, gate: i64) -> Option<String> {
         idx.members(n)
             .iter()
             .find(|(o, p)| !same(o, q) && drives(idx, o, p))
-            .map(|(o, p)| format!("{} pin {}", o.reference, p.number))
+            .map(|(o, p)| (*o, format!("{} pin {}", o.reference, p.number)))
     })
+}
+
+/// True when the part driving the gate is a controller that also has a pin on
+/// each side of the channel: a power-path, ideal-diode, hot-swap or charger
+/// IC sensing the battery on one side and its own converter output on the
+/// other. Such a controller servos the FET to its documented topology (the
+/// body diode carrying the battery or the input to the output is usually the
+/// point), and the schematic alone cannot say which side is the load, so the
+/// check abstains. A microcontroller is excluded: it switches a rail, it does
+/// not own the power path.
+fn controller_spans_channel(
+    idx: &Index<'_>,
+    q: &Component,
+    driver: &Component,
+    (s, d): (i64, i64),
+) -> bool {
+    if idx
+        .model(driver)
+        .is_some_and(|m| m.kind == ComponentKind::Mcu)
+    {
+        return false;
+    }
+    let touches = |near: &[i64]| {
+        driver.pins.iter().any(|p| {
+            p.net
+                .is_some_and(|n| n != 0 && near.contains(&n) && !is_ground(idx.name(n)))
+        })
+    };
+    touches(&cluster(idx, s, q)) && touches(&cluster(idx, d, q))
 }
 
 /// A two-pin resistor, capacitor or diode: biases a node, never drives one.
@@ -348,7 +382,10 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
             ("source", "drain")
         };
         let channel = if pmos { "P" } else { "N" };
-        if let Some(driver) = gate_driver(&idx, q, g) {
+        if let Some((driver_part, driver)) = gate_driver(&idx, q, g) {
+            if controller_spans_channel(&idx, q, driver_part, (s, d)) {
+                continue;
+            }
             // Driven switch: the supply must not sit on the diode's anode.
             let supply = supply_side(&idx, q, (s, d))
                 .filter(|n| *n == anode && !is_ground(idx.name(*n)))
@@ -524,6 +561,44 @@ mod tests {
             "{}",
             found[0].message
         );
+    }
+
+    /// A power-path or charger controller: a gate-driver output on `GATE`
+    /// plus a battery-sense pin on `bat` and an output-sense pin on `out`.
+    fn controller(bat: Option<i64>, out: Option<i64>) -> Component {
+        let mut gate = pin_fn("21", GATE, "BGATE");
+        gate.kind = "output".into();
+        let mut pins = vec![gate];
+        pins.extend(bat.map(|n| pin_fn("20", n, "BAT")));
+        pins.extend(out.map(|n| pin_fn("22", n, "CSN")));
+        Component {
+            reference: "U3".into(),
+            value: "PowerPathCtl".into(),
+            lib_id: "Power:PowerPathCtl".into(),
+            footprint: "X".into(),
+            pins,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_power_path_controller_that_senses_both_sides_of_its_fet_is_left_alone() {
+        // The LTC4020 shape: the PowerPath P-FET's drain is the battery, its
+        // source the converter output, and the controller drives the gate and
+        // senses both. The body diode carrying the battery to the output is the
+        // vendor topology, so nothing is reported.
+        let board = |ctl: Component| {
+            lint(
+                vec![header(V5), pfet(SW, V5, GATE), ctl, load(SW)],
+                &[],
+            )
+        };
+        let found = board(controller(Some(V5), Some(SW)));
+        assert!(found.is_empty(), "{found:#?}");
+        // The same gate driver with no pin on the load side is a plain switch.
+        let found = board(controller(Some(V5), None));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].refs, ["Q1"]);
     }
 
     #[test]
