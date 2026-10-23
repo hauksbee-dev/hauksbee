@@ -10,13 +10,14 @@
 //!   - internal pull to a rail through a resistance (the nPM1300 SHPHLD shape);
 //!   - an open-drain output asserted by an FSM state;
 //!   - an expression-law current (the LTC6803 balancer-leak shape);
-//!   - averaged-converter output regulation, output-current foldback, and the
-//!     programmable input-current limit (the LTC4020 ILIMIT shape).
+//!   - averaged-converter output regulation, output-current foldback, the
+//!     programmable input-current limit (the LTC4020 ILIMIT shape), and the
+//!     input lockout that releases the output below the input's floor.
 
 use crate::support::{resistor, vsource};
 use std::collections::BTreeMap;
 
-use hauksbee_engine::behavioral::{program_iin_limit, BehavioralDevice};
+use hauksbee_engine::behavioral::{program_iin_limit, BehavioralDevice, ConverterBoard};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;
@@ -740,6 +741,66 @@ fn converter_efficiency_below_5_percent_is_honoured() {
     assert!(
         (iin_02 - expected).abs() / expected < 0.02,
         "2%-efficient stage must reflect {expected:.3} A, got {iin_02:.3} A"
+    );
+}
+
+/// A buck-boost stage holding `OUT` at 28.8 V from a `vin` brick, with the
+/// input lockout `floor` (V) the binder reads off the card's `supply_range`,
+/// and, when `pack` is set, a battery of that voltage on `OUT` through a
+/// 50 mOhm power-path FET.
+fn lockout_harness(floor: Option<f64>, vin: f64, pack: Option<f64>) -> Harness {
+    let mut c = Circuit::new();
+    let pvin = c.node("PVIN");
+    let out = c.node("OUT");
+    stamp_rail(&mut c, pvin, "Vbrick", vin);
+    c.add(resistor("Rload".into(), out, NodeId::GROUND, 100.0));
+    if let Some(volts) = pack {
+        let cells = c.node("PACK");
+        stamp_rail(&mut c, cells, "Vpack", volts);
+        c.add(resistor("Rfet".into(), cells, out, 0.05));
+    }
+    let toml = "[converter]\ntopology = \"buck_boost\"\nout_pin = \"out\"\nin_pin = \"pvin\"\n\
+                vout_setpoint = 28.8\nout_r_ohms = 0.01\n";
+    let model: Behavioral = toml::from_str(toml).unwrap();
+    let roles = BTreeMap::from([("pvin".to_string(), pvin), ("out".to_string(), out)]);
+    let board = ConverterBoard {
+        out_node: None,
+        input_floor_v: floor,
+    };
+    let params = Params::default();
+    let dev =
+        BehavioralDevice::stamp_on_board(&mut c, "U2", &model, &params, &roles, &|_| None, board)
+            .unwrap();
+    let mut h = Harness::new(c, dev);
+    h.run(40, 5e-4);
+    h
+}
+
+#[test]
+fn converter_below_its_input_lockout_releases_the_output() {
+    // The brick gone (or below the card's 4.5 V floor), the stage is off: it
+    // neither feeds the rail nor holds it at the dead input's 0 V through its
+    // 10 mOhm output, so the pack behind the FET keeps the rail.
+    let held = 25.6 * 100.0 / 100.05;
+    for vin in [0.0, 4.0] {
+        let h = lockout_harness(Some(4.5), vin, Some(25.6));
+        let v_out = h.v("OUT");
+        assert!(
+            (v_out - held).abs() < 0.05,
+            "VIN = {vin} V is below the lockout: the pack must hold OUT at {held:.3} V, got {v_out:.3} V"
+        );
+        let iin = h.dev.converter_iin().unwrap_or(0.0);
+        assert!(
+            iin.abs() < 1e-3,
+            "an off stage draws nothing, got {iin:.4} A at VIN = {vin} V"
+        );
+    }
+    // Above the floor the same stage regulates as before.
+    let h = lockout_harness(Some(4.5), 19.0, None);
+    let v_out = h.v("OUT");
+    assert!(
+        (28.4..=29.0).contains(&v_out),
+        "above the lockout the stage regulates OUT to ~28.8 V, got {v_out:.3} V"
     );
 }
 

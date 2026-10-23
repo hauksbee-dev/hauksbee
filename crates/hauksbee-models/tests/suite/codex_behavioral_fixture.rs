@@ -38,7 +38,10 @@ fn codex_extracted_ltc4020_matches_hand_model_structurally() {
         assert_eq!(m.pins.get(pad).map(String::as_str), Some(role), "pad {pad}");
     }
 
-    // Converter: same topology, pins, output voltage, efficiency as the hand model.
+    // Converter: same topology, input pin, output voltage, efficiency as the
+    // hand model. Its output differs: the hand model now lands it on the rail
+    // CSP senses (out_pin = "csp", out_via = "sense_filter", the datasheet's
+    // PowerPath diagram), where this captured draft named BAT.
     let c = m.behavioral.converter.as_ref().expect("converter");
     assert_eq!(
         c.topology,

@@ -149,6 +149,19 @@ pub fn is_sense_input_role(role: &str) -> bool {
     measure(word) || r.split('_').any(measure)
 }
 
+/// Whether `role` names a switching converter's switch node.
+///
+/// That is `lx`, `ph`, `phase`, `sw` or `sw` with a channel number. Such a pin
+/// carries the chopped inductor current, so it senses nothing and is never a
+/// quiet regulated rail.
+#[must_use]
+pub fn is_switch_node_role(role: &str) -> bool {
+    let r = role.trim().to_ascii_lowercase();
+    matches!(r.as_str(), "lx" | "ph" | "phase")
+        || r.strip_prefix("sw")
+            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

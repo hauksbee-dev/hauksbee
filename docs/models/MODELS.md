@@ -1082,6 +1082,29 @@ A `[models.behavioral]` block is a bag of optional facts:
      switch node never exceeds `max_duty * vin`, so a low input drops out
      below it rather than passing through; a minimum off-time converts as
      `1 - t_off_min * f_sw`). Without it the ceiling is `vin`.
+   - `out_via = "sense_filter"` (optional), for a controller with no output
+     pin of its own whose `out_pin` is a sense input that reads the output
+     through a filter resistor (the LTC4020's CSP, 100 ohms to the DC/DC
+     output, Rev E p.12). The output lands on the rail at that resistor's
+     far side. When every other fitted part on the sense pin's net is a
+     capacitor or a two-terminal resistor, the rail is the far net of the
+     resistor that leads neither to ground nor back to one of the part's own
+     pins (a feedback divider). A net with any other part on it (test points
+     and other one-pad parts aside), or a pin with no such resistor, is the
+     rail itself. Resistors to two different
+     nets leave the part open, since which rail it regulates cannot be
+     told. Validation refuses `out_via` on an input, supply, ground, output
+     (`out`/`vout`) or switch-node pin. The binder stamps the converter on
+     that rail and the envelope check judges the regulator's range there,
+     both from the one rule in `hauksbee_bind::sense_filter`.
+   - Input lockout: below the card's `supply_range` minimum on `in_pin` the
+     stage is off. It neither sources nor sinks, so a dead input releases
+     the output to whatever else holds it, such as a battery behind a
+     power-path FET, instead of pulling it to the input's 0 V. The
+     converter's update reads the solved input against the floor, as it
+     reads the enable, and turns the stage on or off for the next solve, so
+     no solve sees it switch part-way. A card with no `supply_range` row on
+     `in_pin` has no lockout.
    - `[models.behavioral.converter.iin_program]`: a programmable
      input-current limit set by a sense resistor and a programming
      resistor, both read off the board by reference designator
@@ -1484,8 +1507,11 @@ The LTC4020 fixture demonstrates the expected output: base kind `vreg`, exact
 pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`, `vout_setpoint = 28.8`
 for an 8S LiFePO4 pack, `efficiency = 0.92`, and a populated `iin_program`
 block. Unknown transfer-function constants remain zero instead of being fitted
-to a desired result. The checked-in model sources its ILIMIT transfer directly
-from the primary datasheet (`VILIMIT = 50 uA * RILIMIT`, effective over 0--1 V,
+to a desired result. The captured draft names BAT as the output; the checked-in
+card lands it on the rail CSP senses (`out_pin = "csp"`,
+`out_via = "sense_filter"`), the DC/DC output of the datasheet's PowerPath
+diagram, with the battery behind the FET. The checked-in model sources its
+ILIMIT transfer directly from the primary datasheet (`VILIMIT = 50 uA * RILIMIT`, effective over 0--1 V,
 scaling the 50 mV input-sense threshold). Offline coverage lives in
 `crates/hauksbee-models/tests/suite/codex_behavioral_fixture.rs`; the live
 backend check is `extract_ltc4020_charger_live` and is ignored by default.

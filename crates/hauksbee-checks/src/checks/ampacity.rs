@@ -545,10 +545,7 @@ fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) 
 
 /// A converter pin role that names the switch node itself.
 fn is_switch_role(role: &str) -> bool {
-    let r = role.to_ascii_lowercase();
-    matches!(r.as_str(), "lx" | "ph" | "phase")
-        || r.strip_prefix("sw")
-            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+    hauksbee_models::pin_roles::is_switch_node_role(role)
 }
 
 /// Fitted inductors with a pin on the switch node `sw`.

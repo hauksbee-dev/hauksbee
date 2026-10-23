@@ -45,6 +45,7 @@ pub mod program_resistor;
 pub mod rail_basis;
 pub mod rail_owner;
 pub mod schematic_ties;
+pub mod sense_filter;
 pub mod shorts;
 pub mod stress;
 pub mod thermal;
