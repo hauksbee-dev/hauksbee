@@ -30,6 +30,11 @@ pub enum ClockKind {
     /// part can run, but the firmware's or fuses' clock selection is not
     /// checked, so the evidence reports this as unknown, not valid.
     Internal,
+    /// The part sits on a module whose card declares the clock source (a
+    /// crystal soldered inside the module, cited to the vendor datasheet).
+    /// The oscillator is not a board part and not on the module's header, so
+    /// the pad map has no oscillator pins to read; the card is the evidence.
+    Module,
     /// The board wires the clock pins so no clock can run.
     Broken,
 }
@@ -51,7 +56,30 @@ impl McuClock {
     /// (what the Renode descriptor calls external-clock presence).
     #[must_use]
     pub const fn external_present(&self) -> bool {
-        matches!(self.kind, ClockKind::Crystal | ClockKind::External)
+        matches!(
+            self.kind,
+            ClockKind::Crystal | ClockKind::External | ClockKind::Module
+        )
+    }
+
+    /// The clock a module card declares: `source` is the card's citation and
+    /// `hz` the declared frequency.
+    #[must_use]
+    pub fn module(hz: Option<u64>, source: &str) -> Self {
+        let rate = hz.map_or_else(String::new, |hz| {
+            if hz % 1_000_000 == 0 {
+                format!("{} MHz ", hz / 1_000_000)
+            } else {
+                format!("{hz} Hz ")
+            }
+        });
+        Self {
+            kind: ClockKind::Module,
+            detail: format!(
+                "module-internal {rate}clock source declared by the module card ({source})"
+            ),
+            crystal_hz: hz,
+        }
     }
 
     const fn of(kind: ClockKind, detail: String) -> Self {

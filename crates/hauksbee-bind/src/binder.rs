@@ -803,12 +803,16 @@ pub fn bind_board_driven(
         else {
             continue;
         };
-        mcu.clock = classify_clock(
-            &clock_board,
-            comp,
-            &mcu.pad_roles,
-            mcu.internal_clock.as_deref(),
-        );
+        // A module card that declares its own crystal already set the verdict:
+        // the module's header carries no oscillator pins to read.
+        if mcu.clock.kind != ClockKind::Module {
+            mcu.clock = classify_clock(
+                &clock_board,
+                comp,
+                &mcu.pad_roles,
+                mcu.internal_clock.as_deref(),
+            );
+        }
         if mcu.clock.kind == ClockKind::Broken {
             let note = format!("clock source broken: {}", mcu.clock.detail);
             if let Some(row) = report
@@ -1989,6 +1993,48 @@ fn is_rating_string(value: &str) -> bool {
     value.contains('/') && value.split('/').all(rated)
 }
 
+/// A module the board places under a value that names nothing (`~`, `MCU`, a
+/// project part number) is still identified by a footprint or symbol made for
+/// exactly that module (`db/mcu_modules.toml`): resolve the record again as if
+/// its value were the module's, and keep the answer only if a card takes it.
+/// The result is `Guessed`: the footprint is the only evidence, and the card's
+/// warning says so.
+fn module_identity_resolution(
+    lib: &ModelLibrary,
+    comp: &Component,
+    q: &ComponentQuery,
+    first: &hauksbee_models::Resolution,
+) -> Option<hauksbee_models::Resolution> {
+    // A card that names the part wins; a connector or mechanical class card is
+    // what a library gives any socket-shaped record, and does not.
+    let named = first
+        .model
+        .as_ref()
+        .is_some_and(|m| !matches!(m.kind, ComponentKind::Ignore | ComponentKind::Connector));
+    if named || first.selection.is_some() {
+        return None;
+    }
+    let entry =
+        hauksbee_models::mcu_modules::mcu_module_by_identity(&comp.lib_id, &comp.footprint)?;
+    let as_value = entry.as_value.as_ref()?;
+    let mut by_module = q.clone();
+    (by_module.value, by_module.mpn) = (Some(as_value.clone()), None);
+    let mut res = lib.resolve(&by_module);
+    let model = res
+        .model
+        .as_mut()
+        .filter(|m| m.kind == ComponentKind::Mcu)?;
+    model.params.set_str(
+        "identity_guess",
+        format!(
+            "identified as {as_value} by its footprint '{}' (value '{}' names no part): {}",
+            comp.footprint, comp.value, entry.source
+        ),
+    );
+    (res.confidence, res.query) = (Confidence::Guessed, q.clone());
+    Some(res)
+}
+
 /// [`library_resolution`] from the record's own value, footprint and fields,
 /// without trying a part-number field in place of the value.
 fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
@@ -2009,6 +2055,9 @@ fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::R
     }
     q.mpn = component_mpn(comp);
     let mut res = lib.resolve(&q);
+    if let Some(by_module) = module_identity_resolution(lib, comp, &q, &res) {
+        res = by_module;
+    }
     // A MOSFET named only by class binds that class's assumed-corner set, ahead
     // of any package catch-all (which cannot tell N from P), but never ahead of
     // a card that names the part.
@@ -2778,6 +2827,9 @@ const MCU_ROUTES: &[(&[&str], &str, Option<&str>)] = &[
         Some("qemu:esp32"),
     ),
     (&["NRF52"], "nRF52", Some("renode:nrf52840")),
+    // The RP2350 is not the RP2040 the rp2040 cards bind: named, so a Pico 2
+    // refusal says which chip it was.
+    (&["RP2350"], "RP2350", None),
 ];
 
 fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
@@ -3345,6 +3397,26 @@ fn unresolved_outcome(
             Some(msg),
         );
     }
+    // A module the table cannot bind says why, in plain words, instead of the
+    // generic "no model".
+    let module_blocker =
+        hauksbee_models::mcu_modules::mcu_module_by_identity(&comp.lib_id, &comp.footprint)
+            .or_else(|| hauksbee_models::mcu_modules::mcu_module_alias(&comp.value))
+            .and_then(|entry| entry.blocker.as_ref());
+    if let Some(blocker) = module_blocker {
+        let msg = format!(
+            "[auto-bind] {} \"{}\" not bound: {blocker}.",
+            comp.reference, comp.value
+        );
+        eprintln!("{msg}");
+        return (
+            None,
+            BindOutcome::Unresolved {
+                reason: blocker.clone(),
+            },
+            Some(msg),
+        );
+    }
     let connected = comp.pins.iter().any(|p| node_of(p.net).is_some());
     let two_terminal = comp.pins.len() == 2;
     let warning = connected.then(|| {
@@ -3618,7 +3690,15 @@ fn bind_component(
             || {
                 let backend = mcu_backend_string(comp, model);
                 let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
-                (BindOutcome::Mcu { backend }, warning)
+                // A part identified only by its footprint is a disclosed guess.
+                let guess = model
+                    .params
+                    .get_str("identity_guess")
+                    .map(|g| format!("{} ({}): {g}", comp.reference, comp.value));
+                (
+                    BindOutcome::Mcu { backend },
+                    merge_bind_warnings(guess, warning),
+                )
             },
             |reason| {
                 eprintln!("[bind] {}: {reason}", comp.reference);
@@ -7872,6 +7952,24 @@ fn is_module_supply_pin_name(name: &str) -> bool {
 /// instead. A bare chip binds through its own pin names as before, and a card
 /// with a curated pin map, and the family router (which records its own
 /// derivation), are not judged here.
+/// The clock a module card declares for the oscillator soldered inside the
+/// module (`module_clock_source` cites the vendor datasheet, `module_clock_hz`
+/// is the frequency it states). A card without `module_clock_source` declares
+/// nothing and the board's own oscillator pins decide, as for a bare chip.
+fn module_clock(model: &ModelEntry) -> McuClock {
+    let Some(source) = model.params.get_str("module_clock_source") else {
+        return McuClock::default();
+    };
+    // Whole Hz from a positive finite card value; the cast cannot wrap.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hz = model
+        .params
+        .get_f64("module_clock_hz")
+        .filter(|hz| hz.is_finite() && *hz > 0.0)
+        .map(|hz| hz.round() as u64);
+    McuClock::module(hz, source)
+}
+
 fn unpowerable_mcu_card(
     comp: &Component,
     model: &ModelEntry,
@@ -8107,7 +8205,7 @@ fn bind_mcu(
         // e.g. STM32F411RET6 -> the stm32f4 backend. Empty when the board gives no
         // value (we still bind, but cannot name what was asked for).
         requested_part: comp.value.trim().to_string(),
-        clock: McuClock::default(),
+        clock: module_clock(model),
         internal_clock: model.params.get_str("internal_clock").map(str::to_string),
         pad_roles,
         role_nets,

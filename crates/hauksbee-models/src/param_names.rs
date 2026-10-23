@@ -93,6 +93,32 @@ const DIODE: &[&str] = &[
     "is", "n", "rs", "cjo", "vj", "m", "tt", "bv", "ibv", "xti", "eg",
 ];
 
+/// The MCU card's params.
+const MCU: &[&str] = &[
+    "backend",
+    "module",
+    "max_adc_source_impedance_ohms",
+    "internal_clock",
+    "default_clock_hz",
+    // A module's own crystal and flash, soldered inside the module and so never
+    // on the board: the clock the vendor datasheet states (`module_clock_hz`),
+    // where it states it (`module_clock_source`), and the flash the module
+    // carries (`module_flash`). `identity_guess` is set by the binder, not a
+    // card, when a part is identified by its footprint.
+    "module_clock_hz",
+    "module_clock_source",
+    "module_flash",
+    "identity_guess",
+    // The datasheet's recommended range for each external crystal load
+    // capacitor (C1, C2), read by the crystal load-cap check.
+    "xtal_cap_min_f",
+    "xtal_cap_max_f",
+    // The datasheet's minimum resistance of the reset input's permanent
+    // internal pull-up, read by the held-off check to judge an external
+    // pull-down against it.
+    "reset_pull_up_ohms",
+];
+
 /// Gummel-Poon params, plus `pair_count` for a dual-transistor package.
 const BJT: &[&str] = &[
     "is",
@@ -325,21 +351,7 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],
         ComponentKind::Dac => &CONVERTER_AND_DIGITAL[..DAC_TO],
         ComponentKind::Adc => &ADC_WITH_BUS_LIMITS[..],
-        ComponentKind::Mcu => &[
-            "backend",
-            "module",
-            "max_adc_source_impedance_ohms",
-            "internal_clock",
-            "default_clock_hz",
-            // The datasheet's recommended range for each external crystal load
-            // capacitor (C1, C2), read by the crystal load-cap check.
-            "xtal_cap_min_f",
-            "xtal_cap_max_f",
-            // The datasheet's minimum resistance of the reset input's
-            // permanent internal pull-up, read by the held-off check to
-            // judge an external pull-down against it.
-            "reset_pull_up_ohms",
-        ],
+        ComponentKind::Mcu => MCU,
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }
 }

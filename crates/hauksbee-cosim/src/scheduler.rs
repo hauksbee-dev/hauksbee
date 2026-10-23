@@ -3605,6 +3605,9 @@ impl Scheduler {
         // chunk-failure accounting after the analog solve so the run refuses to
         // report a fake-quiet chunk.
         let mut mcu_run_failed = false;
+        // The first backend error of this chunk, so the failed-chunk record
+        // names what the emulator reported, not only that it failed.
+        let mut mcu_run_error: Option<String> = None;
 
         // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
         // PL load (it fires inside the MCU run below, so it must reflect the
@@ -3718,6 +3721,7 @@ impl Scheduler {
                     m.binding.reference, self.sim_time,
                 );
                 mcu_run_failed = true;
+                mcu_run_error.get_or_insert_with(|| format!("{}: {e:#}", m.binding.reference));
             }
             let cyc_end = m.core.current_cycle();
             let cycle_exact = m.core.cycle_exact();
@@ -3930,9 +3934,10 @@ impl Scheduler {
         if mcu_run_failed && chunk_converged {
             self.record_failed_chunk(
                 chunk,
-                Some(
-                    "MCU refused to advance; the digital side of this chunk never ran".to_string(),
-                ),
+                Some(format!(
+                    "MCU refused to advance ({}); the digital side of this chunk never ran",
+                    mcu_run_error.as_deref().unwrap_or("no error text")
+                )),
             );
         }
         // The consecutive-failure streak resets ONLY on a fully-successful chunk
@@ -8099,10 +8104,12 @@ pub(crate) fn drive_evidence_for(
     mcus: &[&McuBinding],
 ) -> HashMap<u32, Vec<u32>> {
     let mut pin_legs: HashSet<u32> = HashSet::new();
+    let mut pad_nets: HashSet<u32> = HashSet::new();
     for m in mcus {
         for drv in m.gpio_drivers.values() {
             pin_legs.insert(drv.vsource.0);
             pin_legs.insert(drv.resistor.0);
+            pad_nets.insert(drv.net.0);
         }
     }
     let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -8117,7 +8124,84 @@ pub(crate) fn drive_evidence_for(
             evidence.entry(n.0).or_default().push(i);
         }
     }
+    prune_dead_end_resistors(&circuit.devices, &pad_nets, &mut evidence);
     evidence
+}
+
+/// Drop the resistor evidence of a net whose resistive neighbourhood leads
+/// nowhere. A resistor to a node nothing else touches (a series resistor to a
+/// push-button that is open, a stub) carries no current, so the net it sits on
+/// still floats and its ~0 V solve is the pins' own legs talking, not a drive.
+///
+/// The resistors under [`WEAK_DIGITAL_DRIVE_OHMS`] join their nodes into one
+/// DC component. A component is anchored when it holds ground, a node touched
+/// by a non-R/C device (a rail source, a diode, an inductor, a switch), or the pads of two
+/// or more MCU pins (one MCU pin can drive another through a series resistor).
+/// Only an anchored component keeps its resistors as drive evidence.
+fn prune_dead_end_resistors(
+    devices: &[Device],
+    pad_nets: &HashSet<u32>,
+    evidence: &mut HashMap<u32, Vec<u32>>,
+) {
+    fn find(parent: &mut HashMap<u32, u32>, x: u32) -> u32 {
+        let mut root = x;
+        while let Some(&p) = parent.get(&root) {
+            if p == root {
+                break;
+            }
+            root = p;
+        }
+        parent.insert(x, root);
+        root
+    }
+    let low_ohm =
+        |d: &Device| matches!(d, Device::Resistor { ohms, .. } if *ohms < WEAK_DIGITAL_DRIVE_OHMS);
+    let mut parent: HashMap<u32, u32> = HashMap::new();
+    let mut seen: HashSet<u32> = HashSet::new();
+    for devs in evidence.values() {
+        for &di in devs {
+            if !seen.insert(di) {
+                continue;
+            }
+            if let Some(Device::Resistor { a, b, .. }) =
+                devices.get(di as usize).filter(|d| low_ohm(d))
+            {
+                parent.entry(a.0).or_insert(a.0);
+                parent.entry(b.0).or_insert(b.0);
+                let (ra, rb) = (find(&mut parent, a.0), find(&mut parent, b.0));
+                if ra != rb {
+                    parent.insert(ra, rb);
+                }
+            }
+        }
+    }
+    let mut anchored: HashSet<u32> = HashSet::new();
+    let mut pad_count: HashMap<u32, u32> = HashMap::new();
+    let ground_root = parent.contains_key(&0).then(|| find(&mut parent, 0));
+    anchored.extend(ground_root);
+    for (&net, devs) in evidence.iter() {
+        if !parent.contains_key(&net) {
+            continue;
+        }
+        let root = find(&mut parent, net);
+        if pad_nets.contains(&net) {
+            *pad_count.entry(root).or_default() += 1;
+        }
+        if devs.iter().any(|&di| {
+            devices
+                .get(di as usize)
+                .is_some_and(|d| !matches!(d, Device::Resistor { .. } | Device::Capacitor { .. }))
+        }) {
+            anchored.insert(root);
+        }
+    }
+    anchored.extend(pad_count.iter().filter(|(_, &c)| c >= 2).map(|(&r, _)| r));
+    for (&net, devs) in evidence.iter_mut() {
+        if !parent.contains_key(&net) || anchored.contains(&find(&mut parent, net)) {
+            continue;
+        }
+        devs.retain(|&di| !devices.get(di as usize).is_some_and(low_ohm));
+    }
 }
 
 /// [`is_direct_supply_role`] for a role that may carry a domain number.
@@ -8238,7 +8322,9 @@ pub fn avr_clock_plan(binding: &McuBinding, firmware: Option<&std::path::Path>) 
     let external = match binding.clock.kind {
         ClockKind::Crystal | ClockKind::External => Some(true),
         ClockKind::Internal => Some(false),
-        ClockKind::Unknown | ClockKind::Broken => None,
+        // A module's own crystal is not a board part the fuses can be checked
+        // against: the check stays silent, as it does for an unknown clock.
+        ClockKind::Unknown | ClockKind::Broken | ClockKind::Module => None,
     };
     let finding = select.and_then(|(fuses, select)| {
         let why = external.and_then(|present| select.board_mismatch(present))?;
@@ -8897,6 +8983,91 @@ impl NodeNames {
             || Cow::Owned(format!("node {node}")),
             |n| Cow::Borrowed(n.as_str()),
         )
+    }
+}
+
+#[cfg(test)]
+mod dead_end_resistor_tests {
+    use super::*;
+
+    fn resistor(a: u32, b: u32, ohms: f64) -> Device {
+        Device::Resistor {
+            name: format!("R{a}_{b}"),
+            a: NodeId(a),
+            b: NodeId(b),
+            ohms,
+            tc1: None,
+        }
+    }
+
+    /// Evidence as `drive_evidence_for` builds it: every non-ground node a
+    /// device touches maps to that device.
+    fn evidence_of(devices: &[Device]) -> HashMap<u32, Vec<u32>> {
+        let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (i, d) in (0u32..).zip(devices) {
+            for n in d.nodes() {
+                if n != NodeId::GROUND {
+                    evidence.entry(n.0).or_default().push(i);
+                }
+            }
+        }
+        evidence
+    }
+
+    #[test]
+    fn a_series_resistor_into_a_dead_end_is_not_drive_evidence() {
+        // QSPI_SS (5) --1k-- BTN (6), the BOOTSEL switch open: nothing else on 6.
+        let devices = [resistor(5, 6, 1_000.0)];
+        let mut evidence = evidence_of(&devices);
+        assert!(
+            net_has_drive_evidence(&evidence, &devices, 5),
+            "before pruning"
+        );
+        prune_dead_end_resistors(&devices, &HashSet::from([5]), &mut evidence);
+        assert!(!net_has_drive_evidence(&evidence, &devices, 5));
+        assert!(!net_has_drive_evidence(&evidence, &devices, 6));
+    }
+
+    #[test]
+    fn a_resistor_to_ground_stays_drive_evidence() {
+        // The same net with the switch closed: 1k then 0 ohm to ground is a real low.
+        let devices = [resistor(5, 6, 1_000.0), resistor(6, 0, 1.0)];
+        let mut evidence = evidence_of(&devices);
+        prune_dead_end_resistors(&devices, &HashSet::from([5]), &mut evidence);
+        assert!(net_has_drive_evidence(&evidence, &devices, 5));
+    }
+
+    #[test]
+    fn a_pull_up_chain_to_a_rail_source_stays_drive_evidence() {
+        let devices = [
+            resistor(5, 7, 10_000.0),
+            Device::Vsource {
+                name: "V3V3".into(),
+                p: NodeId(7),
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(3.3),
+            },
+        ];
+        let mut evidence = evidence_of(&devices);
+        prune_dead_end_resistors(&devices, &HashSet::from([5]), &mut evidence);
+        assert!(net_has_drive_evidence(&evidence, &devices, 5));
+    }
+
+    #[test]
+    fn a_resistor_between_two_mcu_pads_stays_drive_evidence() {
+        // One pin can drive another through a series resistor.
+        let devices = [resistor(5, 6, 330.0)];
+        let mut evidence = evidence_of(&devices);
+        prune_dead_end_resistors(&devices, &HashSet::from([5, 6]), &mut evidence);
+        assert!(net_has_drive_evidence(&evidence, &devices, 5));
+    }
+
+    #[test]
+    fn a_weak_resistor_never_counts() {
+        let devices = [resistor(5, 6, 1e9)];
+        let mut evidence = evidence_of(&devices);
+        prune_dead_end_resistors(&devices, &HashSet::from([5]), &mut evidence);
+        assert!(!net_has_drive_evidence(&evidence, &devices, 5));
     }
 }
 

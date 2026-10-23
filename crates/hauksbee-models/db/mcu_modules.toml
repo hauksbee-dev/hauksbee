@@ -15,6 +15,14 @@
 #
 # ONLY ADD AN ENTRY WHEN THE MODULE'S MCU IS CERTAIN, and cite where it is
 # stated in `source`. A guessed alias runs firmware on the wrong core.
+#
+# A module whose value says nothing (`~`, `MCU`, a project part number) can
+# still be identified by its footprint or symbol, when that is specific to one
+# module: `footprint_re` / `lib_re` (case-insensitive, against the footprint
+# `Library:Name` and the symbol id) plus `as_value`, the value the part is then
+# resolved as. When a footprint is shared by boards carrying different chips, or
+# the library has no pad map for the module, say so with `blocker` instead: the
+# binder leaves the part unresolved and the report prints that sentence.
 
 [[mcu_modules]]
 id = "esp32_wroom32_skinny"
@@ -50,3 +58,65 @@ id = "seeed_xiao_esp32c6"
 value_re = '^(Seeed[-_ ]?)?XIAO[-_ ]?ESP32[-_ ]?C6$'
 mcu = "ESP32-C6"
 source = "wiki.seeedstudio.com/xiao_esp32c6_getting_started (ESP32-C6 SoC)"
+
+# --- Raspberry Pi Pico 2 (RP2350): named so the refusal says which chip -------
+[[mcu_modules]]
+id = "raspberry_pi_pico_2"
+# Pico 2 / Pico 2 W carry the RP2350, not the RP2040 of the Pico / Pico W, and no
+# emulator platform exists for it, so this entry's job is to make the refusal name
+# the RP2350 instead of binding the RP2040 card.
+value_re = '^(RPi[-_ ]?|Raspberry[-_ ]?Pi[-_ ]?)?Pico[-_ ]?2([-_ ]?W)?([-_ ]?(SMD|THT|H))?$'
+mcu = "RP2350"
+source = "Raspberry Pi Pico 2 datasheet (datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf, sha256 cbcfaf881018c686495a2e53c7bd281e7e0a8217d79447d73eda7c8f74b7f675) PDF p.4: 'RP2350A microcontroller with 4 MB flash'"
+
+# --- Module-specific footprints: the footprint fixes the module --------------
+# The KiCad RF_Module footprints below are drawn for one Espressif module each,
+# and each module integrates one chip family (ESP32-WROOM-32E datasheet v2.1 s1
+# Module Overview PDF p.2: ESP32-D0WD-V3; ESP32-WROVER-E datasheet PDF p.2:
+# ESP32-D0WD-V3 / ESP32-D0WDR2-V3; ESP32-S3-WROOM-1 datasheet PDF p.2: ESP32-S3
+# series; ESP32-C3-MINI-1 datasheet PDF p.2: ESP32-C3 series).
+[[mcu_modules]]
+id = "esp32_wroom32_footprint"
+footprint_re = '(?:^|[:/])ESP32[-_ ]?WROOM[-_ ]?32'
+as_value = "ESP32-WROOM-32"
+source = "Espressif ESP32-WROOM-32E datasheet v2.1, Module Overview, PDF p.2 (sha256 4c7a345d1c1bfec34c38665639e39a7f43b79a35a12f6adcc2c7c0f83850f8b8): the module integrates the classic ESP32"
+
+[[mcu_modules]]
+id = "esp32_wrover_footprint"
+footprint_re = '(?:^|[:/])ESP32[-_ ]?WROVER'
+as_value = "ESP32-WROVER"
+source = "Espressif ESP32-WROVER-E datasheet, Module Overview, PDF p.2 (sha256 611e8506f352225e9ab09b4c2c3286885022b2f77a44ee8f0ab88a6302616f32): the module integrates the classic ESP32"
+
+[[mcu_modules]]
+id = "esp32_s3_wroom_footprint"
+footprint_re = '(?:^|[:/])ESP32[-_ ]?S3[-_ ]?WROOM[-_ ]?[12]'
+as_value = "ESP32-S3-WROOM-1"
+source = "Espressif ESP32-S3-WROOM-1 datasheet, Module Overview, PDF p.2 (sha256 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435): the module integrates the ESP32-S3"
+
+[[mcu_modules]]
+id = "esp32_c3_mini_footprint"
+footprint_re = '(?:^|[:/])ESP32[-_ ]?C3[-_ ]?MINI[-_ ]?1'
+as_value = "ESP32-C3-MINI-1"
+source = "Espressif ESP32-C3-MINI-1 datasheet, Module Overview, PDF p.2 (sha256 de7361381348d82a1abd337f10170be7a420675987568f71fe3c5b100deed270): the module integrates the ESP32-C3"
+
+# --- Footprints shared by boards with different chips: say so, plainly -------
+[[mcu_modules]]
+id = "pico_40pin_footprint"
+footprint_re = '(?:^|[:/])(RaspberryPi|RPi|Raspberry_Pi)[-_ ]?Pico'
+blocker = "the footprint is the Raspberry Pi Pico 40-pin module footprint, which fits the RP2040 Pico / Pico W and the RP2350 Pico 2 alike, so it does not say which chip runs the firmware; set the part value to 'Pico' (RP2040) or 'Pico 2' (RP2350)"
+source = "Raspberry Pi Pico datasheet (datasheets.raspberrypi.com/pico/pico-datasheet.pdf, sha256 757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb) PDF p.4: RP2040 on a '40 pin 21x51 DIP style' board; Raspberry Pi Pico 2 datasheet (datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf, sha256 cbcfaf881018c686495a2e53c7bd281e7e0a8217d79447d73eda7c8f74b7f675) PDF p.4: RP2350A on the same '40 pin 21 x 51 DIP style' board; a footprint names the form factor, not the chip"
+
+[[mcu_modules]]
+id = "arduino_nano_footprint"
+footprint_re = '(?:^|[:/])Arduino[-_ ]?Nano'
+blocker = "the footprint is the Arduino Nano 30-pin module footprint, shared by the ATmega328P Nano and by Nano boards with other chips (Nano Every, Nano 33), so it does not say which chip runs the firmware; set the part value to 'Arduino Nano' for the ATmega328P board"
+source = "Arduino Nano datasheet A000005 (docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf, sha256 6f44122fb9a9a356aa54e5043f5dc69ec50ff61099f3e92b135f66aa3f06e6d5) PDF p.1: ATmega328; the footprint is a form factor"
+
+# --- Modules whose pad map the library does not have --------------------------
+[[mcu_modules]]
+id = "arduino_pro_mini"
+value_re = '^(Arduino[-_ ]?)?Pro[-_ ]?Mini([-_ ]?v?[0-9.]+)?$'
+footprint_re = '(?:^|[:/])(Arduino[-_ ]?)?Pro[-_ ]?Mini'
+mcu = "ATmega328P"
+blocker = "Arduino Pro Mini carries an ATmega328P, but the model library has no header pad map for it (which header pad is which port pin), so its pins cannot be tied to the processor and the firmware is not run; use the bare ATmega328P footprint or add a --models-dir card with the header map"
+source = "SparkFun Arduino Pro Mini v14 schematic (cdn.sparkfun.com/datasheets/Dev/Arduino/Boards/Arduino-Pro-Mini-v14.pdf, sha256 a9e0a3b366454e04c6a894b96883fd43e5012b1578e655b6b9895437ea33e584) PDF p.1: ATmega328 TQFP part with PB6/PB7 as XTAL1/XTAL2"

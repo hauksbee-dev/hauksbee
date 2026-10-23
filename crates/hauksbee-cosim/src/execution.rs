@@ -407,6 +407,7 @@ fn clock_reading(clock: &McuClock) -> (Observed, String) {
     match clock.kind {
         ClockKind::Crystal => (Observed::Yes, format!("external crystal or resonator: {d}")),
         ClockKind::External => (Observed::Yes, format!("external oscillator: {d}")),
+        ClockKind::Module => (Observed::Yes, d.clone()),
         // The firmware's (or the fuses') clock selection is not checked, so an
         // internal-only board is not evidence of a valid clock.
         ClockKind::Internal => (
