@@ -227,7 +227,9 @@ fn known_backend_limitations_reach_all_four_surfaces() {
         std::env::temp_dir().join(format!("hauksbee-timing-surface-{}", std::process::id()));
     std::fs::create_dir_all(&override_dir).expect("mkdir");
     let stock = std::fs::read_to_string(repo("crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml"))
-        .expect("read the F103 descriptor");
+        .expect("read the F103 descriptor")
+        // A Windows checkout may carry CRLF line endings; the anchor below is LF.
+        .replace("\r\n", "\n");
     let with_timing = stock.replacen(
         "\n[soc]\n",
         "\n[soc]\ntiming_limitation = \"The STM32F103 TIMx test limitation: injected so the \
