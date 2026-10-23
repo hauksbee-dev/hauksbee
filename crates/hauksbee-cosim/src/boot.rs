@@ -342,6 +342,10 @@ pub enum CorePlan {
     /// The normal emulated core; `strap` is handed to a backend that latches
     /// the pins itself (QEMU), so its own ROM takes the boot path.
     Emulated(Option<hauksbee_mcu::boot_mode::QemuStrapMode>),
+    /// The emulated core, built when the chip first has to run. A chip held in
+    /// reset, or whose straps select no defined mode, reports its decision
+    /// without an emulator; the core is only needed once a chunk runs.
+    Deferred,
 }
 
 /// ROM-stub clock when the board names none: the 8 MHz internal oscillator
@@ -350,37 +354,36 @@ pub const ROM_STUB_HZ: u64 = 8_000_000;
 
 /// Choose the core for a resolved boot mode.
 ///
-/// A chip whose model is a QEMU machine runs its own emulated ROM, so the
-/// strap value goes to QEMU and the ROM's behaviour is the real one. Any other
-/// chip that does not run the user firmware gets the stand-in. An undefined or
-/// held mode runs the normal core (held is gated per chunk; undefined is a
-/// caveat, not a guess).
+/// No outcome needs an emulator to be reported; only running a chip does.
+/// Only the user-flash outcome builds its core up front. A chip that boots its
+/// ROM or SRAM gets the stand-in (the user firmware never loads), except on a
+/// QEMU machine, whose own emulated ROM is the real bootloader and receives
+/// the strap value. A held chip runs nothing until reset releases, and a chip
+/// whose straps select no defined mode is a caveat, not a guess (the normal
+/// core runs, as it would on the bench, with the decision reported); both
+/// build their core when a chunk first has to run.
 #[must_use]
 pub fn plan_core(spec: &BootSpec, resolved: &Resolved) -> CorePlan {
     use hauksbee_mcu::boot_mode::{RomPersonality, StBootloaderInfo, StUsartBootloader};
     use hauksbee_models::boot_mode::RomProtocol;
-    if let Some(q) = &spec.qemu {
-        // The machine's own ROM takes the boot path the straps select. A board
-        // that boots from flash (or whose straps are undefined) leaves QEMU's
-        // default flash-boot value alone.
-        let strap = matches!(
-            resolved.decision.outcome,
-            BootOutcome::RomBootloader | BootOutcome::Sram
-        )
-        .then(|| hauksbee_mcu::boot_mode::QemuStrapMode {
-            device: q.device.clone(),
-            property: q.property.clone(),
-            value: q.strap_value(&resolved.latched),
-        });
-        return CorePlan::Emulated(strap);
-    }
-    match resolved.decision.outcome {
+    let outcome = resolved.decision.outcome;
+    match outcome {
+        BootOutcome::UserFlash => CorePlan::Emulated(None),
+        BootOutcome::HeldInReset | BootOutcome::Undefined => CorePlan::Deferred,
         BootOutcome::RomBootloader | BootOutcome::Sram => {
+            if let Some(q) = &spec.qemu {
+                // The machine's own ROM takes the boot path the straps select.
+                return CorePlan::Emulated(Some(hauksbee_mcu::boot_mode::QemuStrapMode {
+                    device: q.device.clone(),
+                    property: q.property.clone(),
+                    value: q.strap_value(&resolved.latched),
+                }));
+            }
             let personality = match &spec.rom {
                 Some(rom) if rom.protocol == RomProtocol::StUsart => {
                     match (rom.version, rom.product_id) {
                         (Some(version), Some(product_id))
-                            if resolved.decision.outcome == BootOutcome::RomBootloader =>
+                            if outcome == BootOutcome::RomBootloader =>
                         {
                             RomPersonality::StUsart(StUsartBootloader::new(StBootloaderInfo {
                                 version,
@@ -395,22 +398,26 @@ pub fn plan_core(spec: &BootSpec, resolved: &Resolved) -> CorePlan {
             };
             CorePlan::RomStub(personality)
         }
-        _ => CorePlan::Emulated(None),
     }
 }
 
 /// Build the core a resolved boot mode calls for, with its bookkeeping.
-/// `instantiate` makes the normal emulated core (given the QEMU strap value).
+///
+/// `instantiate` makes the normal emulated core (given the QEMU strap value);
+/// it runs now (user flash), later (a held or undefined chip, when it first
+/// has to run) or never (ROM and SRAM stand-ins), so it owns what it needs.
 ///
 /// # Errors
 ///
-/// When `instantiate` fails.
+/// When `instantiate` fails and the outcome needs the emulated core now.
 pub fn build_core(
     spec: &BootSpec,
     resolved: &Resolved,
     instantiate: impl FnOnce(
-        Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
-    ) -> anyhow::Result<Box<dyn hauksbee_mcu::Mcu + Send>>,
+            Option<hauksbee_mcu::boot_mode::QemuStrapMode>,
+        ) -> anyhow::Result<Box<dyn hauksbee_mcu::Mcu + Send>>
+        + Send
+        + 'static,
 ) -> anyhow::Result<(Box<dyn hauksbee_mcu::Mcu + Send>, BootState)> {
     let rom_outcome = matches!(
         resolved.decision.outcome,
@@ -421,7 +428,11 @@ pub fn build_core(
             personality,
             ROM_STUB_HZ,
         )),
-        CorePlan::Emulated(strap) => instantiate(strap.as_ref())?,
+        CorePlan::Emulated(strap) => instantiate(strap)?,
+        CorePlan::Deferred => Box::new(hauksbee_mcu::boot_mode::DeferredMcu::new(
+            Box::new(move || instantiate(None)),
+            ROM_STUB_HZ,
+        )),
     };
     Ok((core, BootState::new(spec.clone(), resolved, rom_outcome)))
 }
@@ -482,8 +493,8 @@ pub struct BootState {
     pub spec: BootSpec,
     /// The decision reported for this MCU (updated when reset releases late).
     pub decision: BootDecision,
-    /// Whether the core is the ROM bootloader stand-in (user firmware never
-    /// loaded).
+    /// Whether the chip boots its ROM or SRAM (the user firmware never loaded):
+    /// nothing to gate or re-read.
     pub rom: bool,
     /// Whether reset was asserted on the last chunk.
     pub held: bool,
@@ -716,5 +727,66 @@ mod tests {
         };
         let (level, _) = read_reset(&spec, &snap).unwrap();
         assert_eq!(level, ResetLevel::Asserted);
+    }
+
+    fn resolved_as(outcome: BootOutcome, mode: &str) -> Resolved {
+        Resolved {
+            decision: BootDecision::new(outcome, mode, Vec::new(), "RM0008", Vec::new()),
+            levels: BTreeMap::new(),
+            latched: BTreeMap::new(),
+        }
+    }
+
+    /// Reporting an outcome needs no emulator: only the user-flash outcome
+    /// builds its core while the engine is built, whatever backend is installed.
+    #[test]
+    fn building_the_engine_starts_an_emulator_only_for_the_user_firmware() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let spec = spec_f1();
+        for (outcome, mode, starts) in [
+            (BootOutcome::RomBootloader, "System memory", false),
+            (BootOutcome::Sram, "Embedded SRAM", false),
+            (BootOutcome::Undefined, "undefined", false),
+            (BootOutcome::HeldInReset, "held in reset", false),
+            (BootOutcome::UserFlash, "Main flash memory", true),
+        ] {
+            let started = Arc::new(AtomicBool::new(false));
+            let flag = started.clone();
+            let built = build_core(&spec, &resolved_as(outcome, mode), move |_| {
+                flag.store(true, Ordering::SeqCst);
+                anyhow::bail!("the emulator is not installed")
+            });
+            assert_eq!(built.is_err(), starts, "{outcome:?}");
+            assert_eq!(started.load(Ordering::SeqCst), starts, "{outcome:?}");
+        }
+    }
+
+    /// The stand-ins run nothing, ever; a held or undefined chip starts its
+    /// core on the first chunk that really runs, and says why when it cannot.
+    #[test]
+    fn a_held_or_undefined_chip_starts_its_core_when_a_chunk_first_runs() {
+        let spec = spec_f1();
+        for outcome in [BootOutcome::HeldInReset, BootOutcome::Undefined] {
+            let (mut core, state) = build_core(&spec, &resolved_as(outcome, "x"), |_| {
+                anyhow::bail!("the emulator is not installed")
+            })
+            .unwrap();
+            assert!(!state.rom, "{outcome:?}");
+            // A chunk the boot logic holds in reset runs for zero time.
+            core.run_micros(0).unwrap();
+            let err = core
+                .run_micros(50)
+                .expect_err("a running chunk needs the core");
+            assert!(format!("{err:#}").contains("not installed"), "{outcome:?}");
+        }
+        for outcome in [BootOutcome::RomBootloader, BootOutcome::Sram] {
+            let (mut core, state) = build_core(&spec, &resolved_as(outcome, "x"), |_| {
+                anyhow::bail!("the emulator is not installed")
+            })
+            .unwrap();
+            assert!(state.rom, "{outcome:?}");
+            core.run_micros(50).unwrap();
+        }
     }
 }

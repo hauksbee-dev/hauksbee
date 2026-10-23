@@ -1528,8 +1528,21 @@ impl Scheduler {
             let (core, boot_state) = match boot {
                 None => (instantiate_mcu(&binding, firmware, &clock)?, None),
                 Some((spec, resolved)) => {
-                    let (core, state) = crate::boot::build_core(&spec, &resolved, |strap| {
-                        instantiate_mcu_with_strap(&binding, firmware, &clock, strap)
+                    // Owned, because a chip held in reset builds its core later.
+                    let backend = binding.backend.clone();
+                    let reference = binding.reference.clone();
+                    let external_clock = binding.clock.external_present();
+                    let firmware_path = firmware.map(std::path::Path::to_path_buf);
+                    let clock = clock.clone();
+                    let (core, state) = crate::boot::build_core(&spec, &resolved, move |strap| {
+                        instantiate_core(
+                            &backend,
+                            &reference,
+                            external_clock,
+                            firmware_path.as_deref(),
+                            &clock,
+                            strap.as_ref(),
+                        )
                     })?;
                     (core, Some(state))
                 }
@@ -7670,8 +7683,26 @@ fn instantiate_mcu_with_strap(
     clock: &AvrClockPlan,
     strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
-    let backend = binding.backend.as_str();
+    instantiate_core(
+        &binding.backend,
+        &binding.reference,
+        binding.clock.external_present(),
+        firmware,
+        clock,
+        strap,
+    )
+}
 
+/// [`instantiate_mcu_with_strap`] from the few binding fields it reads, so a
+/// chip held in reset can carry them (owned) until its core is first needed.
+fn instantiate_core(
+    backend: &str,
+    reference: &str,
+    external_clock: bool,
+    firmware: Option<&std::path::Path>,
+    clock: &AvrClockPlan,
+    strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
     // Backstop: validate the path before it reaches ANY native loader (simavr
     // segfaults on a missing file; QEMU spawns from the flash image inside
     // instantiate_qemu, so the check must sit above the backend dispatch, and
@@ -7684,9 +7715,7 @@ fn instantiate_mcu_with_strap(
     }
 
     let mut core: Box<dyn Mcu + Send> = match BackendId::parse(backend) {
-        Some(BackendId::Renode(part)) => {
-            instantiate_renode(part, binding.clock.external_present())?
-        }
+        Some(BackendId::Renode(part)) => instantiate_renode(part, external_clock)?,
         Some(BackendId::Qemu(part)) => instantiate_qemu(part, firmware, strap)?,
         Some(BackendId::None(family)) => {
             // The binder recognized the MCU family but knows no emulator models
@@ -7705,10 +7734,10 @@ fn instantiate_mcu_with_strap(
             let Some(hz) = clock.frequency_hz else {
                 anyhow::bail!(
                     "{}",
-                    clock.guess.clone().unwrap_or_else(|| format!(
-                        "{}: no AVR core clock is known",
-                        binding.reference
-                    ))
+                    clock
+                        .guess
+                        .clone()
+                        .unwrap_or_else(|| format!("{reference}: no AVR core clock is known"))
                 )
             };
             instantiate_avr(backend, hz)?

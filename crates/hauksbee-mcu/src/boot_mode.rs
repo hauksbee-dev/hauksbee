@@ -29,12 +29,16 @@
 //! outside the identification commands: the stand-in identifies the chip and
 //! its bootloader, and does not emulate flashing.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::traits::{ExecutionProbe, I2cCb, Mcu, McuState, PinChangeCb, PinId, SpiCb, UartCb};
+use crate::traits::{
+    ExecutionProbe, I2cCb, InputResponderBatchCb, InputResponderCb, InputResponderDirectionCb, Mcu,
+    McuState, PinChangeCb, PinId, SpiCb, UartCb,
+};
 
 /// The bootloader's positive acknowledge.
 pub const ACK: u8 = 0x79;
@@ -233,6 +237,334 @@ impl Mcu for RomBootMcu {
     }
 }
 
+/// What a [`DeferredMcu`] does once the core is first needed.
+type Replay = Box<dyn FnOnce(&mut (dyn Mcu + Send)) + Send>;
+/// Builds the real core, loading its firmware.
+pub type CoreFactory = Box<dyn FnOnce() -> Result<Box<dyn Mcu + Send>> + Send>;
+
+/// A core that does not exist until the chip first has to run.
+///
+/// A chip held in reset runs nothing, so it needs no emulator; but reset can
+/// release later in the run, and then the user firmware must run. This core
+/// stands in until the first run request for a non-zero time, then builds the
+/// real one and replays everything the board attached in the meantime (the
+/// pin, serial, bus and responder hooks, the last input levels). Until then it
+/// is the silent stand-in: asleep, not at the entry point, no console.
+///
+/// If building the real core fails, the failure is returned from the run that
+/// asked for it and from every later one, so the cause stays visible.
+pub struct DeferredMcu {
+    /// The real core, once built.
+    live: Option<Box<dyn Mcu + Send>>,
+    /// Waiting for the first run: the factory and the attachments to replay.
+    factory: Option<CoreFactory>,
+    replay: Vec<Replay>,
+    firmware: Option<PathBuf>,
+    digital_in: HashMap<PinId, bool>,
+    analog_in: HashMap<u8, f64>,
+    failure: Option<String>,
+    idle: RomBootMcu,
+}
+
+impl DeferredMcu {
+    /// `idle_hz` is the clock reported while the real core does not exist.
+    #[must_use]
+    pub fn new(factory: CoreFactory, idle_hz: u64) -> Self {
+        Self {
+            live: None,
+            factory: Some(factory),
+            replay: Vec::new(),
+            firmware: None,
+            digital_in: HashMap::new(),
+            analog_in: HashMap::new(),
+            failure: None,
+            idle: RomBootMcu::new(RomPersonality::Silent, idle_hz),
+        }
+    }
+
+    /// Whether the real core has been built.
+    #[must_use]
+    pub fn is_started(&self) -> bool {
+        self.live.is_some()
+    }
+
+    fn core(&self) -> &dyn Mcu {
+        match self.live.as_deref() {
+            Some(c) => c,
+            None => &self.idle,
+        }
+    }
+
+    fn core_mut(&mut self) -> &mut dyn Mcu {
+        match self.live.as_deref_mut() {
+            Some(c) => c,
+            None => &mut self.idle,
+        }
+    }
+
+    /// Build the real core and bring it to the state the board left the stand-in in.
+    fn start(&mut self) -> Result<()> {
+        if self.live.is_some() {
+            return Ok(());
+        }
+        if let Some(why) = &self.failure {
+            anyhow::bail!("{why}");
+        }
+        let Some(factory) = self.factory.take() else {
+            anyhow::bail!("the core was already consumed");
+        };
+        let mut core = match factory() {
+            Ok(core) => core,
+            Err(e) => {
+                self.failure = Some(format!("{e:#}"));
+                return Err(e);
+            }
+        };
+        if let Some(path) = self.firmware.take() {
+            core.load_firmware(&path)?;
+        }
+        for attach in self.replay.drain(..) {
+            attach(core.as_mut());
+        }
+        for (pin, high) in self.digital_in.drain() {
+            core.set_digital_in(pin, high);
+        }
+        for (channel, volts) in self.analog_in.drain() {
+            core.set_analog_in(channel, volts);
+        }
+        self.live = Some(core);
+        Ok(())
+    }
+
+    /// Forward an attachment now, or keep it for when the core starts.
+    fn attach(&mut self, f: impl FnOnce(&mut (dyn Mcu + Send)) + Send + 'static) {
+        if let Some(core) = self.live.as_deref_mut() {
+            f(core);
+        } else {
+            self.replay.push(Box::new(f));
+        }
+    }
+}
+
+impl Mcu for DeferredMcu {
+    fn load_firmware(&mut self, path: &Path) -> Result<()> {
+        if let Some(core) = self.live.as_deref_mut() {
+            return core.load_firmware(path);
+        }
+        self.firmware = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    fn run_cycles(&mut self, n: u64) -> Result<u64> {
+        if self.live.is_none() && n == 0 {
+            return Ok(0);
+        }
+        self.start()?;
+        self.core_mut().run_cycles(n)
+    }
+
+    fn run_micros(&mut self, us: u64) -> Result<()> {
+        if self.live.is_none() && us == 0 {
+            return Ok(());
+        }
+        self.start()?;
+        self.core_mut().run_micros(us)
+    }
+
+    fn run_millis(&mut self, ms: u64) -> Result<()> {
+        if self.live.is_none() && ms == 0 {
+            return Ok(());
+        }
+        self.start()?;
+        self.core_mut().run_millis(ms)
+    }
+
+    fn supports_reset(&self) -> bool {
+        self.live.is_none() || self.core().supports_reset()
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // Nothing has run, so there is nothing to put back.
+        if let Some(core) = self.live.as_deref_mut() {
+            return core.reset();
+        }
+        Ok(())
+    }
+
+    fn frequency(&self) -> u64 {
+        self.core().frequency()
+    }
+
+    fn set_digital_in(&mut self, pin: PinId, high: bool) {
+        if let Some(core) = self.live.as_deref_mut() {
+            core.set_digital_in(pin, high);
+        } else {
+            self.digital_in.insert(pin, high);
+        }
+    }
+
+    fn set_analog_in(&mut self, channel: u8, volts: f64) {
+        if let Some(core) = self.live.as_deref_mut() {
+            core.set_analog_in(channel, volts);
+        } else {
+            self.analog_in.insert(channel, volts);
+        }
+    }
+
+    fn on_pin_change(&mut self, cb: PinChangeCb) {
+        self.attach(move |core| core.on_pin_change(cb));
+    }
+
+    fn current_cycle(&self) -> u64 {
+        self.core().current_cycle()
+    }
+
+    fn cycle_exact(&self) -> bool {
+        self.core().cycle_exact()
+    }
+
+    fn on_input_responder(&mut self, responder: InputResponderCb) {
+        self.attach(move |core| core.on_input_responder(responder));
+    }
+
+    fn input_responder_synchronous(&self) -> bool {
+        self.core().input_responder_synchronous()
+    }
+
+    fn input_responder_batches_atomic(&self) -> bool {
+        self.core().input_responder_batches_atomic()
+    }
+
+    fn input_responder_tracks_direction(&self) -> bool {
+        self.core().input_responder_tracks_direction()
+    }
+
+    fn on_input_responder_batch(&mut self, responder: InputResponderBatchCb) {
+        self.attach(move |core| core.on_input_responder_batch(responder));
+    }
+
+    fn on_input_responder_direction(&mut self, responder: InputResponderDirectionCb) {
+        self.attach(move |core| core.on_input_responder_direction(responder));
+    }
+
+    /// A chip that has not started receives nothing: serial bytes sent while it
+    /// is held in reset are lost, as on the bench.
+    fn uart_write(&mut self, bytes: &[u8]) {
+        self.core_mut().uart_write(bytes);
+    }
+
+    fn uart_rx_overflow(&self) -> u64 {
+        self.core().uart_rx_overflow()
+    }
+
+    fn uart_rx_pending(&self) -> usize {
+        self.core().uart_rx_pending()
+    }
+
+    fn on_uart(&mut self, cb: UartCb) {
+        self.attach(move |core| core.on_uart(cb));
+    }
+
+    fn on_i2c(&mut self, cb: I2cCb) {
+        self.attach(move |core| core.on_i2c(cb));
+    }
+
+    fn on_spi(&mut self, cb: SpiCb) {
+        self.attach(move |core| core.on_spi(cb));
+    }
+
+    fn on_spi_controller(&mut self, controller: &str, cb: SpiCb) {
+        let controller = controller.to_string();
+        self.attach(move |core| core.on_spi_controller(&controller, cb));
+    }
+
+    fn state(&self) -> McuState {
+        self.core().state()
+    }
+
+    fn set_active_ports(&mut self, ports: &[char]) {
+        let ports = ports.to_vec();
+        self.attach(move |core| core.set_active_ports(&ports));
+    }
+
+    fn pins_configured_output(&self) -> Vec<PinId> {
+        self.core().pins_configured_output()
+    }
+
+    fn read_register(&mut self, addr: u32) -> Option<u32> {
+        self.core_mut().read_register(addr)
+    }
+
+    fn drive_direction_observable(&self) -> bool {
+        self.core().drive_direction_observable()
+    }
+
+    fn pins_routed_to_peripheral(&self) -> Vec<PinId> {
+        self.core().pins_routed_to_peripheral()
+    }
+
+    fn peripheral_routing_unobserved(&self, pin: PinId) -> Option<String> {
+        self.core().peripheral_routing_unobserved(pin)
+    }
+
+    fn pin_can_drive(&self, pin: PinId) -> bool {
+        self.core().pin_can_drive(pin)
+    }
+
+    fn adc_dropped_channels(&self) -> Vec<u8> {
+        self.core().adc_dropped_channels()
+    }
+
+    fn watchdog_limitation(&self) -> Option<String> {
+        self.core().watchdog_limitation()
+    }
+
+    fn timing_limitation(&self) -> Option<String> {
+        self.core().timing_limitation()
+    }
+
+    fn peripheral_config(&mut self) -> Option<crate::periph_snapshot::PeripheralConfig> {
+        self.core_mut().peripheral_config()
+    }
+
+    fn clock_assumption(&self) -> Option<String> {
+        self.core().clock_assumption()
+    }
+
+    fn external_clock_modelled(&self) -> bool {
+        self.core().external_clock_modelled()
+    }
+
+    fn clock_host_paced(&self) -> bool {
+        self.core().clock_host_paced()
+    }
+
+    fn watchdog_resets(&self) -> u64 {
+        self.core().watchdog_resets()
+    }
+
+    fn execution_probe(&mut self) -> ExecutionProbe {
+        self.core_mut().execution_probe()
+    }
+
+    fn i2c_bus_modeled(&self) -> bool {
+        self.core().i2c_bus_modeled()
+    }
+
+    fn spi_bus_modeled(&self, controller: Option<&str>) -> bool {
+        self.core().spi_bus_modeled(controller)
+    }
+
+    fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
+        let addresses = addresses.to_vec();
+        self.attach(move |core| core.set_i2c_slave_addresses(&addresses));
+    }
+
+    fn set_i2c_device_temperature(&mut self, addr: u8, milli_c: i32) {
+        self.attach(move |core| core.set_i2c_device_temperature(addr, milli_c));
+    }
+}
+
 /// The strap value for one QEMU GPIO device, passed at spawn as
 /// `-global driver=<device>,property=<property>,value=<value>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +682,54 @@ mod tests {
         let probe = core.execution_probe();
         assert_eq!(probe.reached_entry, Some(false));
         assert!(probe.boot_rom_console);
+    }
+
+    #[test]
+    fn a_deferred_core_is_built_only_when_it_first_has_to_run() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let built = Arc::new(AtomicBool::new(false));
+        let flag = built.clone();
+        let mut core = DeferredMcu::new(
+            Box::new(move || {
+                flag.store(true, Ordering::SeqCst);
+                Ok(Box::new(RomBootMcu::new(
+                    RomPersonality::StUsart(bootloader()),
+                    8_000_000,
+                )) as Box<dyn Mcu + Send>)
+            }),
+            1_000_000,
+        );
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let sink = got.clone();
+        core.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+        core.set_analog_in(0, 1.5);
+        // Held: zero-length chunks, serial sent to a chip that is not running.
+        core.run_micros(0).unwrap();
+        assert_eq!(core.run_cycles(0).unwrap(), 0);
+        core.uart_write(&[SYNC]);
+        assert!(!built.load(Ordering::SeqCst), "nothing runs, nothing built");
+        assert!(!core.is_started());
+        assert_eq!(core.frequency(), 1_000_000);
+        assert_eq!(core.state().cycles, 0);
+        assert!(core.supports_reset() && core.reset().is_ok());
+        assert!(got.lock().unwrap().is_empty());
+        // Released: the real core appears with the hook attached before.
+        core.run_micros(1000).unwrap();
+        assert!(built.load(Ordering::SeqCst));
+        assert!(core.is_started());
+        assert_eq!(core.frequency(), 8_000_000);
+        core.uart_write(&[SYNC]);
+        assert_eq!(*got.lock().unwrap(), vec![ACK]);
+    }
+
+    #[test]
+    fn a_deferred_core_that_cannot_be_built_says_so_every_time() {
+        let mut core = DeferredMcu::new(Box::new(|| anyhow::bail!("no emulator here")), 1_000_000);
+        core.run_micros(0).unwrap();
+        for _ in 0..2 {
+            let err = core.run_micros(10).expect_err("the core cannot start");
+            assert!(format!("{err:#}").contains("no emulator here"), "{err:#}");
+        }
     }
 
     #[test]
