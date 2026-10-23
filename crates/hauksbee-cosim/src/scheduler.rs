@@ -1546,13 +1546,14 @@ impl Scheduler {
                     // Owned, because a chip held in reset builds its core later.
                     let backend = binding.backend.clone();
                     let reference = binding.reference.clone();
+                    let requested_part = binding.requested_part.clone();
                     let external_clock = binding.clock.external_present();
                     let firmware_path = firmware.map(std::path::Path::to_path_buf);
                     let clock = clock.clone();
                     let (core, state) = crate::boot::build_core(&spec, &resolved, move |strap| {
                         instantiate_core(
                             &backend,
-                            &reference,
+                            (&reference, &requested_part),
                             external_clock,
                             firmware_path.as_deref(),
                             &clock,
@@ -7709,7 +7710,7 @@ fn instantiate_mcu_with_strap(
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     instantiate_core(
         &binding.backend,
-        &binding.reference,
+        (&binding.reference, &binding.requested_part),
         binding.clock.external_present(),
         firmware,
         clock,
@@ -7721,7 +7722,7 @@ fn instantiate_mcu_with_strap(
 /// chip held in reset can carry them (owned) until its core is first needed.
 fn instantiate_core(
     backend: &str,
-    reference: &str,
+    (reference, requested_part): (&str, &str),
     external_clock: bool,
     firmware: Option<&std::path::Path>,
     clock: &AvrClockPlan,
@@ -7776,11 +7777,7 @@ fn instantiate_core(
     if let Some(fw) = firmware {
         // Name the footprint: the loader knows only the core it was given.
         core.load_firmware(fw).map_err(|e| {
-            anyhow::anyhow!(
-                "{} ({}, simulated as {backend}): {e:#}",
-                binding.reference,
-                binding.requested_part
-            )
+            anyhow::anyhow!("{reference} ({requested_part}, simulated as {backend}): {e:#}")
         })?;
     }
     Ok(core)
