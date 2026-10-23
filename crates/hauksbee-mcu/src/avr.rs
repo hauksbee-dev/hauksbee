@@ -8,6 +8,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
+use crate::avr_image::{AvrImage, Capacity, Region};
 use crate::ffi;
 use crate::periph_snapshot::{BlockKind, DecodeBlock, PeripheralConfig, RegisterReader};
 use crate::traits::{
@@ -1204,59 +1205,78 @@ impl AvrMcu {
         self.register_port_hooks(&['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
     }
 
-    /// Load a `.hex` file by parsing it and flashing the MCU.
-    fn load_hex(&mut self, path: &Path) -> Result<()> {
-        let hex_cstr = path_cstr(path)?;
+    /// The memories this core allocated, as its loaders bound them.
+    fn capacity(&self) -> Capacity {
+        // SAFETY: `self.avr` is the live core this value owns.
+        unsafe { capacity_of(self.avr) }
+    }
 
-        unsafe {
-            let mut boot_base: u32 = 0;
-            let mut boot_size: u32 = 0;
-            let boot =
-                ffi::read_ihex_file(hex_cstr.as_ptr(), &raw mut boot_size, &raw mut boot_base);
-            if boot.is_null() {
-                bail!("read_ihex_file failed for '{}'", path.display());
-            }
-            // Bounds gate: simavr allocated exactly `flashend + 1` bytes of
-            // flash for THIS part, and `copy_nonoverlapping` below trusts the
-            // hex's own addresses. A hex built for a larger part (a mega2560
-            // image loaded onto a 328p) would memcpy straight past the buffer,
-            // silent heap corruption, not a diagnostic. The `.elf` path is
-            // arch-gated; give the `.hex` path the equivalent fail-loud check.
-            let flash_size = (*self.avr).flashend as usize + 1;
-            let base = boot_base as usize;
-            let size = boot_size as usize;
-            let end = base.checked_add(size);
-            if end.is_none_or(|e| e > flash_size) {
-                libc::free(boot.cast::<libc::c_void>());
+    /// The simavr part name this core was made as (`"atmega168"`).
+    fn part_name(&self) -> String {
+        // SAFETY: `mmcu` points at the static name string of the core template.
+        unsafe { mmcu_name(self.avr) }
+    }
+
+    /// Read `path`'s layout and refuse it unless every byte fits this part,
+    /// BEFORE any native loader sees it (see [`crate::avr_image`]).
+    fn checked_image(&self, path: &Path) -> Result<AvrImage> {
+        let image = AvrImage::read(path)?;
+        image.check_fits(&self.capacity(), &self.part_name(), path)?;
+        Ok(image)
+    }
+
+    /// Load a `.hex` file: parsed and bounds-checked in Rust (simavr's own
+    /// reader keeps only the first data run and dereferences null on a file
+    /// with no data), then every run copied into flash.
+    fn load_hex(&mut self, path: &Path) -> Result<()> {
+        let image = self.checked_image(path)?;
+        if let Some(other) = image.segments.iter().find(|s| s.region != Region::Flash) {
+            bail!(
+                "firmware '{}' carries {:?} data at 0x{:05X} as well as program memory; \
+                 a .hex is loaded into flash only. Load the .elf (which carries every \
+                 memory), or a flash-only .hex. Nothing was loaded.",
+                path.display(),
+                other.region,
+                other.start,
+            );
+        }
+        let flash_bytes = self.capacity().flash;
+        for (start, run) in &image.hex_runs {
+            // `check_fits` bounded every run by the part's flash; re-checked
+            // here so the copy below can never leave the buffer.
+            let end = u64::from(*start) + run.len() as u64;
+            if end > flash_bytes {
                 bail!(
-                    "firmware '{}' does not fit this MCU's flash: the image spans \
-                     0x{:05X}..0x{:05X} but flash is only {} bytes (0x00000..0x{:05X}); \
-                     was this hex built for a larger part?",
-                    path.display(),
-                    base,
-                    base.saturating_add(size),
-                    flash_size,
-                    flash_size,
+                    "firmware '{}' overruns flash at 0x{end:05X}",
+                    path.display()
                 );
             }
-            ptr::copy_nonoverlapping(
-                boot,
-                (*self.avr).flash.add(boot_base as usize),
-                boot_size as usize,
-            );
-            libc::free(boot.cast::<libc::c_void>());
-            (*self.avr).pc = boot_base;
+            // SAFETY: `start + run.len() <= flashend + 1`, the flash allocation.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    run.as_ptr(),
+                    (*self.avr).flash.add(*start as usize),
+                    run.len(),
+                );
+            }
+        }
+        // SAFETY: plain field writes on the live core.
+        unsafe {
+            (*self.avr).pc = image.hex_runs.first().map_or(0, |(start, _)| *start);
             (*self.avr).codeend = (*self.avr).flashend;
         }
-
         Ok(())
     }
 
-    /// Load an `.elf` file using simavr's ELF loader.
+    /// Load an `.elf` file using simavr's ELF loader, once its layout is known
+    /// to fit: simavr's loader zero-fills an oversize segment past the end of
+    /// its buffer (heap corruption, a later `free`/`realloc` abort) and calls
+    /// `exit` on a truncated file, so neither may reach it.
     fn load_elf(&mut self, path: &Path) -> Result<()> {
         // Arch gate: refuse a non-AVR ELF before simavr maps it into flash and
         // silently runs garbage. Raw images without an ELF header are skipped.
         crate::elf::validate_arch(path, crate::elf::EM_AVR, "atmega (AVR)")?;
+        self.checked_image(path)?;
 
         let elf_cstr = path_cstr(path)?;
 
@@ -1355,6 +1375,63 @@ impl AvrMcu {
             );
         }
         s.watchdog_resets += 1;
+    }
+}
+
+/// The memories a simavr core allocates, read from its template fields
+/// (`flashend`, `ramend`/`ioend`, `e2end`, the fuse and lock bytes), which are
+/// the limits its loaders bound by.
+///
+/// # Safety
+///
+/// `avr` must point at a core made by `avr_make_mcu_by_name`.
+unsafe fn capacity_of(avr: *const ffi::avr_t) -> Capacity {
+    let a = &*avr;
+    Capacity {
+        flash: u64::from(a.flashend) + 1,
+        data: u64::from(a.ramend).saturating_sub(u64::from(a.ioend)),
+        eeprom: if a.e2end == 0 {
+            0
+        } else {
+            u64::from(a.e2end) + 1
+        },
+        fuses: std::mem::size_of_val(&a.fuse) as u64,
+        lock: std::mem::size_of_val(&a.lockbits) as u64,
+    }
+}
+
+/// The part name a core was made as.
+///
+/// # Safety
+///
+/// `avr` must point at a core made by `avr_make_mcu_by_name`.
+unsafe fn mmcu_name(avr: *const ffi::avr_t) -> String {
+    let name = (*avr).mmcu;
+    if name.is_null() {
+        return "AVR".to_string();
+    }
+    std::ffi::CStr::from_ptr(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The memories simavr part `part` (`"atmega168"`) has, without building a
+/// core: what a caller needs to refuse an image before choosing which part
+/// runs it. `None` for a part simavr does not know.
+#[must_use]
+pub fn avr_part_capacity(part: &str) -> Option<Capacity> {
+    let name = CString::new(part).ok()?;
+    // SAFETY: `avr_make_mcu_by_name` returns a malloc'd copy of the part's
+    // template (`avr_core_allocate`), nothing else allocated until `avr_init`,
+    // so reading its fields and `free`ing it is the whole lifetime.
+    unsafe {
+        let avr = ffi::avr_make_mcu_by_name(name.as_ptr());
+        if avr.is_null() {
+            return None;
+        }
+        let capacity = capacity_of(avr);
+        libc::free(avr.cast::<libc::c_void>());
+        Some(capacity)
     }
 }
 

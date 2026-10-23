@@ -644,6 +644,9 @@ pub struct Scheduler {
     /// firmware was given, each with the nodes of its GPIO pads. They never
     /// execute, so nothing in the run is a reading of what they would do.
     idle_mcus: Vec<IdleMcu>,
+    /// One line per MCU footprint left without a processor because it is an
+    /// alternate footprint of another (see [`alternate_footprints`]).
+    alternate_footprint_notes: Vec<String>,
     /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
     /// granularity inside the owning MCU's run loop via its synchronous input
     /// responder (the read-direction analogue of `chains`). Wrapped in
@@ -1101,6 +1104,7 @@ pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
                 .iter()
                 .map(|t| t.reason.clone()),
         )
+        .chain(scheduler.alternate_footprint_notes().iter().cloned())
         .collect()
 }
 
@@ -1475,10 +1479,21 @@ impl Scheduler {
         } else {
             HashMap::new()
         };
+        // Alternate footprints of one processor get one core between them
+        // (two cores running one firmware would fight on every shared pin).
+        let alternates = firmware.map_or_else(AlternateFootprints::default, |fw| {
+            alternate_footprints(&mcus, &circuit, fw)
+        });
+        for note in &alternates.notes {
+            eprintln!("WARNING: {note}");
+        }
         for binding in mcus {
             let evidence_subject = mcu_subjects
                 .next()
                 .unwrap_or_else(|| binding.reference.trim().to_string());
+            if alternates.dropped.contains(&binding.reference) {
+                continue;
+            }
             // A firmware-less run is a board analysis, not a co-simulation.
             // Leave every MCU backend out of the live scheduler (including
             // in-process AVR), so a board can be analysed as a passive circuit
@@ -1639,6 +1654,7 @@ impl Scheduler {
             clock_assumptions,
             unexercised_buses: Vec::new(),
             idle_mcus,
+            alternate_footprint_notes: alternates.notes,
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
             parallel_memory_drives: Vec::new(),
@@ -3290,6 +3306,14 @@ impl Scheduler {
     #[must_use]
     pub fn idle_mcu_refs(&self) -> Vec<String> {
         self.idle_mcus.iter().map(|m| m.reference.clone()).collect()
+    }
+
+    /// One sentence per MCU footprint that got no processor because it is an
+    /// alternate footprint of another one the run kept (empty when the board
+    /// has none).
+    #[must_use]
+    pub fn alternate_footprint_notes(&self) -> &[String] {
+        &self.alternate_footprint_notes
     }
 
     /// Reference strings of the live MCUs (for serial routing).
@@ -7750,9 +7774,184 @@ fn instantiate_core(
         ),
     };
     if let Some(fw) = firmware {
-        core.load_firmware(fw)?;
+        // Name the footprint: the loader knows only the core it was given.
+        core.load_firmware(fw).map_err(|e| {
+            anyhow::anyhow!(
+                "{} ({}, simulated as {backend}): {e:#}",
+                binding.reference,
+                binding.requested_part
+            )
+        })?;
     }
     Ok(core)
+}
+
+/// MCU footprints left without a processor because each is an alternate
+/// footprint of another, and why.
+#[derive(Debug, Default)]
+struct AlternateFootprints {
+    /// References that get no core.
+    dropped: HashSet<String>,
+    /// One sentence per dropped footprint: which footprint it is an alternate
+    /// of, which one runs the firmware, and how to choose the other.
+    notes: Vec<String>,
+}
+
+/// GPIO pins (port, bit) of `binding` and the net each lands on, leaving out
+/// ground and pads whose net reaches nothing but this MCU's own pin driver (an
+/// unconnected pad, which KiCad gives a net of its own).
+fn connected_gpio_nets(
+    binding: &McuBinding,
+    devices_on: &HashMap<NodeId, Vec<&str>>,
+) -> HashMap<(char, u8), NodeId> {
+    let own = [
+        format!("Rdrv_{}_", binding.reference),
+        format!("Vdrv_{}_", binding.reference),
+    ];
+    binding
+        .gpio_drivers
+        .iter()
+        .filter(|(_, d)| !d.net.is_ground())
+        .filter(|(_, d)| {
+            devices_on.get(&d.net).is_some_and(|names| {
+                names
+                    .iter()
+                    .any(|n| !own.iter().any(|prefix| n.starts_with(prefix.as_str())))
+            })
+        })
+        .map(|(pin, d)| (*pin, d.net))
+        .collect()
+}
+
+/// Whether two MCU bindings are footprints of ONE processor: the same emulator
+/// family, and every GPIO both connect lands on the same net in both (at least
+/// three of them, and at least half of the smaller one's connected GPIO). Two
+/// separate processors share a bus at most; an alternate footprint (a
+/// smaller-flash variant's pad pattern beside the bigger part's, a DIP beside
+/// a TQFP) repeats the whole pin-to-net map, because only one of them is ever
+/// assembled.
+fn is_alternate_pair(a: &HashMap<(char, u8), NodeId>, b: &HashMap<(char, u8), NodeId>) -> bool {
+    let mut same = 0usize;
+    for (pin, net) in a {
+        match b.get(pin) {
+            Some(other) if other == net => same += 1,
+            Some(_) => return false,
+            None => {}
+        }
+    }
+    same >= 3 && same * 2 >= a.len().min(b.len())
+}
+
+/// Group a board's MCU footprints that are alternates of one processor (see
+/// [`is_alternate_pair`]) and keep one core per group: the first footprint, in
+/// board order, whose part's flash holds `firmware` (a simavr part's flash is
+/// read from the emulator; any other part counts as holding it), else the
+/// first footprint, whose load then refuses the image with both sizes named.
+/// A footprint the board marks do-not-fit never reaches the binder, so this
+/// only meets footprints that are both nominally fitted.
+fn alternate_footprints(
+    mcus: &[McuBinding],
+    circuit: &Circuit,
+    firmware: &std::path::Path,
+) -> AlternateFootprints {
+    let mut out = AlternateFootprints::default();
+    if mcus.len() < 2 {
+        return out;
+    }
+    let mut devices_on: HashMap<NodeId, Vec<&str>> = HashMap::new();
+    for device in &circuit.devices {
+        for node in device.nodes() {
+            devices_on.entry(node).or_default().push(device.name());
+        }
+    }
+    let family = |b: &McuBinding| b.backend.split(':').next().unwrap_or("").to_string();
+    let nets: Vec<_> = mcus
+        .iter()
+        .map(|b| connected_gpio_nets(b, &devices_on))
+        .collect();
+    // Union-find over alternate pairs, rooted at the earliest footprint.
+    let mut root: Vec<usize> = (0..mcus.len()).collect();
+    let find = |root: &[usize], mut i: usize| {
+        while root[i] != i {
+            i = root[i];
+        }
+        i
+    };
+    for i in 0..mcus.len() {
+        for j in i + 1..mcus.len() {
+            if family(&mcus[i]) == family(&mcus[j]) && is_alternate_pair(&nets[i], &nets[j]) {
+                let (ri, rj) = (find(&root, i), find(&root, j));
+                root[ri.max(rj)] = ri.min(rj);
+            }
+        }
+    }
+    let image_flash = image_flash_bytes(firmware);
+    let holds = |b: &McuBinding| match (BackendId::parse(&b.backend), image_flash) {
+        (Some(BackendId::Simavr(part)), Some(need)) => {
+            simavr_flash_bytes(part).is_none_or(|have| need <= have)
+        }
+        _ => true,
+    };
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..mcus.len() {
+        let r = find(&root, i);
+        match groups.iter_mut().find(|g| g[0] == r) {
+            Some(group) => group.push(i),
+            None => groups.push(vec![i]),
+        }
+    }
+    for group in groups.into_iter().filter(|g| g.len() > 1) {
+        let keep = group
+            .iter()
+            .copied()
+            .find(|&i| holds(&mcus[i]))
+            .unwrap_or(group[0]);
+        let kept = &mcus[keep];
+        for &i in group.iter().filter(|&&i| i != keep) {
+            let dropped = &mcus[i];
+            let size = match image_flash {
+                Some(need) if !holds(dropped) => format!(
+                    " The {need}-byte firmware image does not fit the {}'s flash, so it                      could not run there anyway.",
+                    dropped.requested_part
+                ),
+                _ => String::new(),
+            };
+            out.notes.push(format!(
+                "{} ({}) is an alternate footprint of {} ({}): every GPIO both connect                  sits on the same net, so only one of them is assembled. {} runs the                  firmware and {} gets no processor in this run.{size} If {} is the part                  fitted, mark {} do-not-fit (DNP) and give firmware built for it.",
+                dropped.reference,
+                dropped.requested_part,
+                kept.reference,
+                kept.requested_part,
+                kept.reference,
+                dropped.reference,
+                dropped.reference,
+                kept.reference,
+            ));
+            out.dropped.insert(dropped.reference.clone());
+        }
+    }
+    out
+}
+
+/// The flash an AVR firmware image needs, or `None` when it is not a readable
+/// AVR image (another family's firmware, or a file its loader will refuse
+/// with its own message).
+fn image_flash_bytes(firmware: &std::path::Path) -> Option<u64> {
+    hauksbee_mcu::avr_image::AvrImage::read(firmware)
+        .ok()
+        .map(|image| image.flash_bytes())
+}
+
+/// A simavr part's flash, read from the emulator's own part table.
+#[cfg(feature = "avr")]
+fn simavr_flash_bytes(part: &str) -> Option<u64> {
+    hauksbee_mcu::avr_part_capacity(part).map(|c| c.flash)
+}
+
+/// Without the AVR backend no simavr part runs at all, so none is preferred.
+#[cfg(not(feature = "avr"))]
+const fn simavr_flash_bytes(_part: &str) -> Option<u64> {
+    None
 }
 
 /// Build an Espressif-QEMU-backed core for a `qemu:<part>` backend string. The

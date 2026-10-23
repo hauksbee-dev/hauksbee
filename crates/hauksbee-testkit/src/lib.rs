@@ -14,6 +14,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+pub mod avr_firmware;
 pub mod circuits;
 
 /// Print `SKIP: <why>` and return from the enclosing test when `cond` holds.

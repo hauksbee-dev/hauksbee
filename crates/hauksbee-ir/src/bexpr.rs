@@ -299,14 +299,27 @@ const fn num(value: &Value) -> Option<Num> {
 
 /// Run a lowered program: its result, or `None` where evalexpr would fault.
 fn run(prog: &[Step], deps: &[f64], time: f64) -> Option<Num> {
-    let mut regs = Vec::with_capacity(prog.len());
-    for step in prog {
-        regs.push(match step {
+    // The solver evaluates every B-source `1 + n_deps` times per stamp, so a
+    // heap register file per call was a measurable share of an MCU co-sim's
+    // wall time; typical programs fit this stack file, longer ones allocate.
+    const STACK_REGS: usize = 48;
+    if prog.len() <= STACK_REGS {
+        let mut regs = [F(0.0); STACK_REGS];
+        run_into(prog, deps, time, &mut regs[..prog.len()])
+    } else {
+        run_into(prog, deps, time, &mut vec![F(0.0); prog.len()])
+    }
+}
+
+/// [`run`] over a register file exactly `prog.len()` long.
+fn run_into(prog: &[Step], deps: &[f64], time: f64, regs: &mut [Num]) -> Option<Num> {
+    for (k, step) in prog.iter().enumerate() {
+        regs[k] = match step {
             Step::Num(v) => *v,
-            Step::Dep(k) => F(*deps.get(*k)?),
+            Step::Dep(d) => F(*deps.get(*d)?),
             Step::Time => F(time),
-            Step::Apply(f, args) => f(&regs, args)?,
-        });
+            Step::Apply(f, args) => f(&regs[..k], args)?,
+        };
     }
     regs.last().copied()
 }
