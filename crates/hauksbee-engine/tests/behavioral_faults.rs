@@ -161,7 +161,7 @@ fn net_members(path: &PathBuf, refdes: &str, pad: &str) -> Vec<String> {
 const LTC4020_INPUT_POWER_COMPONENTS: &[&str] = &["U2", "R8", "R49", "R50"];
 
 /// Run the LTC4020 focused subcircuit with a 19 V brick on VIN and a heavy
-/// system load on the charge output, returning the converter's input power (W).
+/// system load on the DC/DC output, returning the converter's input power (W).
 fn ltc4020_input_power(path: &PathBuf) -> Option<f64> {
     let mut bound = focused_with_required(
         path,
@@ -169,15 +169,24 @@ fn ltc4020_input_power(path: &PathBuf) -> Option<f64> {
         LTC4020_INPUT_POWER_COMPONENTS,
     )?;
     let vin_name = pin_net_name(path, "U2", "36")?; // PVIN
-    let bat_name = pin_net_name(path, "U2", "20")?; // BAT
+                                                    // The DC/DC output is the rail CSP senses through its filter resistor; the
+                                                    // focused subcircuit drops that resistor, so the rail is CSP's own net.
+    let out_name = pin_net_name(path, "U2", "23")?; // CSP
     let vin = *bound.net_nodes.get(&vin_name)?;
-    let bat = *bound.net_nodes.get(&bat_name)?;
+    let out = *bound.net_nodes.get(&out_name)?;
+    let stamped =
+        (bound.behavioral.iter()).find_map(hauksbee_engine::BehavioralDevice::converter_out_node);
+    assert_eq!(
+        stamped,
+        Some(out),
+        "the converter drives the rail CSP senses"
+    );
     bound
         .circuit
         .add(vsource("Vbrick_test".into(), vin, NodeId::GROUND, Dc(19.0)));
     bound.circuit.add(resistor(
         "Rsysload_test".into(),
-        bat,
+        out,
         NodeId::GROUND,
         5.0, // heavy load: demands more than any brick can supply
     ));

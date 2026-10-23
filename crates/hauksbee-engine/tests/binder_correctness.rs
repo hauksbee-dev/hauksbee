@@ -195,15 +195,18 @@ fn a_fitted_modules_5v_pin_sources_the_rail_it_feeds() {
     assert!(bound.report.row("RAIL:MOD_3V3").is_none());
 }
 
+/// The LTC4020 with its input, its battery monitor and its CSP sense pin, on
+/// which the converter's output lands (no filter resistor here, so the rail is
+/// CSP's own net).
 fn ltc4020_program_board() -> ExtractedBoard {
     board(
-        &[(1, "PVIN"), (2, "BAT")],
+        &[(1, "PVIN"), (2, "BAT"), (3, "VOUT")],
         vec![
             comp(
                 "U2",
                 "LTC4020EUHFPBF",
                 "QFN-38",
-                vec![pin("36", 1, ""), pin("20", 2, "")],
+                vec![pin("36", 1, ""), pin("20", 2, ""), pin("23", 3, "")],
             ),
             comp("R8", "7.15k", "R_0603", Vec::new()),
             comp("R49", "0.01R", "R_2512", Vec::new()),
@@ -280,6 +283,54 @@ fn duplicate_programming_reference_never_uses_last_record_wins() {
         sole_converter_limit(&duplicated),
         None,
         "two physical records with one designator are contradictory evidence, even when both parse"
+    );
+}
+
+/// The LTC4020 has no output pin: CSP reads the DC/DC output through a 100 ohm
+/// filter resistor (Rev E, PDF p.12), so the converter lands on that resistor's
+/// far side, the rail itself, not on CSP's filtered stub. A second resistor
+/// from CSP to another rail leaves no telling which one it regulates, so the
+/// converter is left open rather than guessed.
+#[test]
+fn ltc4020_output_lands_on_the_rail_past_its_csp_filter() {
+    let filtered = |extra: Vec<Component>| {
+        let mut b = ltc4020_program_board();
+        b.nets.extend(
+            [(4, "SYS"), (5, "GND"), (6, "OTHER")]
+                .map(|(id, name)| crate::support::net(id, name.to_string())),
+        );
+        b.components.push(resistor_0402("R175", "100", 3, 4));
+        let cap = vec![pin("1", 3, ""), pin("2", 5, "")];
+        b.components
+            .push(comp("C1", "100n", "Capacitor_SMD:C_0402_1005Metric", cap));
+        b.components.extend(extra);
+        b
+    };
+    let converter_out = |bound: &BoundBoard| {
+        (bound.behavioral.iter()).find_map(hauksbee_engine::BehavioralDevice::converter_out_node)
+    };
+
+    let bound = bind_board(&filtered(Vec::new()), &ModelLibrary::builtin());
+    let sys = bound.net_nodes.get("SYS").copied();
+    assert!(sys.is_some(), "the rail is on the board");
+    assert_eq!(
+        converter_out(&bound),
+        sys,
+        "the output is the far side of R175"
+    );
+
+    let second = resistor_0402("R176", "100", 3, 6);
+    let bound = bind_board(&filtered(vec![second]), &ModelLibrary::builtin());
+    assert_eq!(
+        converter_out(&bound),
+        None,
+        "two candidate rails: no output"
+    );
+    let row = bound.report.row("U2").expect("U2 bind row");
+    assert!(
+        matches!(&row.outcome, BindOutcome::Unresolved { reason } if reason.contains("two resistors")),
+        "{:?}",
+        row.outcome
     );
 }
 

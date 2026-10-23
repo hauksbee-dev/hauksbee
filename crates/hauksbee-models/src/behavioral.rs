@@ -286,6 +286,22 @@ pub enum Topology {
     BuckBoost,
 }
 
+/// How a converter's output net relates to its `out_pin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutVia {
+    /// The output is the rail `out_pin` senses through a filter resistor.
+    ///
+    /// The rail is the far end of the one resistor on the pin's net that
+    /// leads neither to ground nor back to the part (a divider resistor from
+    /// the pin to the part's own feedback pin is not the filter). A pin on a
+    /// net with other active parts, or with no such resistor, sits on the rail
+    /// itself. A controller whose power stage has no output pin of its own
+    /// (the LTC4020's output is the far side of its CSP filter) states its
+    /// rail this way.
+    SenseFilter,
+}
+
 /// An averaged (cycle-averaged) switching-converter block.
 ///
 /// The runtime realises it as an averaged current-mode regulation loop: a PI
@@ -300,6 +316,11 @@ pub struct Converter {
 
     /// Output pin role (the regulated rail).
     pub out_pin: String,
+
+    /// Where the output lands when it is not `out_pin`'s own net. Absent, the
+    /// converter drives `out_pin`. See [`OutVia`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_via: Option<OutVia>,
 
     /// Input pin role (where the converter draws its current).
     pub in_pin: String,
@@ -663,6 +684,26 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     if let Some(c) = &b.converter {
         p.non_empty("converter: out_pin", &c.out_pin);
         p.non_empty("converter: in_pin", &c.in_pin);
+        if c.out_via == Some(OutVia::SenseFilter) {
+            // A filter moves the rail one resistor off a pin that only senses
+            // it. From the input, a supply, ground or output pin, or the switch
+            // node, it would land the output on whatever that pin's resistor
+            // reaches.
+            let pin = c.out_pin.trim();
+            let power = crate::pin_roles::power_pin(pin, crate::ComponentKind::Vreg).is_some()
+                || ["out", "vout"].iter().any(|o| pin.eq_ignore_ascii_case(o));
+            let switch = crate::pin_roles::is_switch_node_role(pin);
+            p.require(
+                !pin.eq_ignore_ascii_case(c.in_pin.trim()) && !power && !switch,
+                || {
+                    format!(
+                        "converter: out_via = \"sense_filter\" needs out_pin to be a sense \
+                         input, but '{pin}' is the input, a supply, ground or output pin, or \
+                         the switch node"
+                    )
+                },
+            );
+        }
         p.positive("converter: vout_setpoint", c.vout_setpoint);
         if let Some(fb) = &c.feedback {
             p.non_empty("converter.feedback: pin", &fb.pin);
@@ -995,6 +1036,31 @@ mod tests {
                 ..Default::default()
             },
             "only modelled for a buck",
+        );
+    }
+
+    #[test]
+    fn a_sense_filter_output_needs_a_sense_pin() {
+        let conv = |out: &str| {
+            parse(&format!(
+                "[converter]\ntopology=\"buck_boost\"\nout_pin=\"{out}\"\nout_via=\"sense_filter\"\n\
+                 in_pin=\"pvin\"\nvout_setpoint = 28.8\n"
+            ))
+        };
+        let b = conv("csp");
+        assert_eq!(
+            b.converter.as_ref().unwrap().out_via,
+            Some(OutVia::SenseFilter)
+        );
+        clean(&b);
+        for out in ["pvin", "gnd", "vcc", "vout", "sw", "lx", "sw2"] {
+            flags(&conv(out), "sense_filter");
+        }
+        let unknown = "[converter]\nout_pin=\"csp\"\nout_via=\"far_side\"\nin_pin=\"pvin\"\n\
+                       vout_setpoint = 1.0\n";
+        assert!(
+            toml::from_str::<Behavioral>(unknown).is_err(),
+            "an unknown out_via is refused at parse"
         );
     }
 

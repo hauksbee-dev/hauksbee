@@ -108,8 +108,10 @@ basis = "TI BQ2407x SLUS810N, Section 8.1 Absolute Maximum Ratings, BAT with res
 
 # ── LTC4020: 55V buck-boost battery charger controller ────────────────────────
 #
-# MNT Reform motherboard U2. The averaged buck-boost block charges the 8S
-# LiFePO4 pack (BAT) from the laptop brick (PVIN) with an input-current limit
+# MNT Reform motherboard U2. The averaged buck-boost block regulates the system
+# rail (the DC/DC output, at the far side of CSP's filter resistor) from the
+# laptop brick (PVIN), and that rail charges the 8S LiFePO4 pack (BAT) through
+# the PowerPath FET, with an input-current limit
 # programmed by the ILIMIT resistor R8 against the input sense shunt R49. The
 # documented mb2.5->3.0 fault: R8 = 100k programs the input limit too high; the
 # fix is R8 = 7.15k. The model reads R8 and R49 off the board, so the two
@@ -141,16 +143,16 @@ iq_a = 0.001
 "6"  = "senstop"   # SENSTOP, input current sense (top)
 "7"  = "sensvin"   # SENSVIN, input supply sense
 "15" = "rng_ss"    # RNG/SS, frequency range + soft-start (the mb2.0->2.5 pin)
-"20" = "bat"       # BAT, battery / charge output
+# BAT (Rev E, Pin Functions, PDF p.11): "Battery Voltage Monitor Pin. This pin serves as the positive reference for
+# the LTC4020 ideal diode function." The battery sits behind the PowerPath FET; the converter does not drive this pin.
+"20" = "bat"       # BAT, battery voltage monitor (the battery side of the PowerPath FET)
 # BGATE, PowerPath FET gate driver output (Rev E, Pin Functions, PDF p.11, "BGATE (Pin 21)"): pulled low in a normal
 # charge cycle and while the DC/DC is disabled, with CSP - BGATE clamped at 9.5 V; pulled HIGH to disconnect the battery
 # once the charge cycle terminates or on NTC faults; servoed (14 mV ideal-diode drop) when the battery sources load.
-# Its level therefore depends on the charger state: the card records the pin's identity only and stamps NO drive on it
-# (the behavioural block below does not model the charge-cycle state machine), so a gate net it alone drives is not a
-# known level.
-"21" = "bgate"     # BGATE, PowerPath FET gate driver output (identity only; no drive modelled)
+# The card drives it at its default (charging / DC-DC disabled) level: the bgate_clamp law below.
+"21" = "bgate"     # BGATE, PowerPath FET gate driver output (driven: see the bgate_clamp law)
 "22" = "csn"       # CSN, battery current sense (-)
-"23" = "csp"       # CSP, battery current sense (+)
+"23" = "csp"       # CSP, battery current sense (+), 100 ohms from the DC/DC output (the converter's out_pin, see below)
 "25" = "ilimit"    # ILIMIT, input-current-limit program pin (R8)
 "36" = "pvin"      # PVIN, power input
 
@@ -165,7 +167,7 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.analog.com/media/en/technical-documentation/data-sheets/LTC4020.pdf"
 title = "Analog Devices LTC4020 55V Buck-Boost Multi-Chemistry Battery Charger datasheet, Rev. E, 2023-03"
-locator = "PDF p.2 pinout drawing (UHF 38-lead QFN); p.8-13 Pin Functions, pin 21 BGATE on p.11"
+locator = "PDF p.2 pinout drawing (UHF 38-lead QFN); p.3 Electrical Characteristics (VIN range, UVLO); p.8-13 Pin Functions, VFB on p.10, BAT and BGATE on p.11, CSP and VFBMAX on p.12; p.16-18 Operation, Figure 5 PowerPath diagram on p.18"
 sha256 = "82cfef2de7f519b6a66660bf5d65e2795b396f02c956e354329b3c8c518cbfc9"
 
 [[models.source.characteristic]]
@@ -177,6 +179,14 @@ conditions = "UHF package, 38-lead (5 mm x 7 mm) plastic QFN"
 basis = "Analog Devices LTC4020 datasheet Rev E, Pin Configuration, UHF package 38-lead (5mm x 7mm) plastic QFN, TJMAX = 125°C, θJA = 34°C/W, θJC = 2°C/W"
 
 # The 4.5-55 V operating range is the check that fires below the 60 V abs max.
+# Its 4.5 V minimum is also the converter's input lockout: below it the
+# behavioural stage neither sources nor sinks. Electrical Characteristics, PDF
+# p.3: "VIN Supply UVLO (Rising) DC/DC Functions Enabled" 3.6 min / 4.0 typ /
+# 4.4 max V, "VIN Supply UVLO Hysteresis VIN Falling" 0.4 V. 4.5 V is above
+# the worst-case rising threshold, so the stage surely runs at the floor. From
+# about 3.2 V (the 3.6 V minimum rising threshold less the 0.4 V falling
+# hysteresis) up to 4.5 V the real part may still run where the model has it
+# off.
 [[models.envelope]]
 kind = "supply_range"
 pin = "pvin"
@@ -185,11 +195,37 @@ max_v = 55.0
 abs_max_v = 60.0
 basis = "ADI LTC4020 Rev E, Features and Electrical Characteristics, VIN operating range 4.5 V to 55 V; Absolute Maximum Ratings, PVIN and SENSVIN -0.3 V to 60 V"
 
+# The DC/DC output is the system rail, and the battery hangs off it behind the
+# PowerPath FET. Operation, PDF p.17: "During the majority of a normal battery
+# charge cycle, the LTC4020 makes a low impedance connection between the
+# battery and the DC/DC converter output through the PowerPath FET, as in
+# Figure 5" and "When charging is disabled, the FET is disabled, disconnecting
+# the battery from the converter output". PDF p.18, Figure 5 "Battery Charger
+# PowerPath Diagram", draws VOUT at the CSP end of RCS and BAT behind the BGATE
+# FET. The part has no output pin; CSP reads the rail through its filter. Pin
+# Functions, PDF p.12, "CSP (Pin 23)": "Connect this pin to the positive
+# terminal of the battery charge current sense resistor (RCS) through a 100Ω
+# resistor", and "VFBMAX (Pin 26)": "With a resistor (RMAX1) connected from CSP
+# to VFBMAX and a resistor (RMAX2) connected from VFBMAX to FBG, the ratio of
+# RMAX1/RMAX2 for the desired maximum DC/DC converter output voltage follows
+# the relation". So the output is the rail at the far side of CSP's filter
+# resistor (out_via = "sense_filter"; on MNT Reform mb3.0, R175 to 30V_GATE).
+# With VIN absent the stage is off and the battery feeds that rail through the
+# FET (PDF p.16: "Should there be no input power available (VIN), the LTC4020
+# makes a low impedance connection from the battery to VOUT though the
+# PowerPath FET").
 [models.behavioral.converter]
 topology = "buck_boost"
-out_pin = "bat"
+out_pin = "csp"
+out_via = "sense_filter"
 in_pin = "pvin"
-# 8S LiFePO4 charge voltage: 8 * 3.6 V = 28.8 V CV target.
+# 8S LiFePO4 charge voltage: 8 * 3.6 V = 28.8 V CV target. The real part
+# regulates the battery to it (PDF p.10, "VFB (Pin 17)": "Battery voltages are
+# programmed through a feedback resistor divider placed from the BAT pin to
+# FBG"). The model holds it on the system rail, which with the PowerPath FET on
+# sits above the battery only by the RCS and FET drops. Not modelled: the
+# VFBMAX ceiling the rail servos to once charging terminates and the FET opens
+# (PDF p.12, VFBMAX).
 vout_setpoint = 28.8
 efficiency = 0.92          # datasheet high-efficiency buck-boost
 out_r_ohms = 0.01
@@ -244,6 +280,31 @@ from = "destabilised"
 to = "stable"
 guard = "v_rng_ss > 0.8"
 min_dwell_s = 0.001
+
+# BGATE drive in the default state: charging, or the DC/DC disabled. Rev E,
+# Pin Functions, PDF p.11, "BGATE (Pin 21)": "This pin is pulled low during a
+# normal charging cycle" and "The BGATE pin is also forced low when the DC/DC
+# converter is disabled"; PDF p.11 (same entry): "When BGATE is pulled low, CSP
+# BGATE is limited internally to 9.5V, so if CSP > 9.5V, BGATE is maintained by
+# an internal clamp at CSP - BGATE = 9.5V". Electrical Characteristics, PDF p.5:
+# "Gate Clamp Voltage VCSN - VBGATE" 7 min / 9.5 typ / 12 max V; the table's
+# measured reference is CSN, which the sense resistor puts within its 50 mV
+# full-scale drop of CSP (PDF p.4, "Charger Current Sense Limit Voltage
+# VCSP - VCSN" 50 mV typ), so the law reads CSN. Hence BGATE = max(0, VCSN - 9.5):
+# ground below a 9.5 V CSN, 9.5 V under it above. Not modelled: the pull-HIGH
+# after charge termination or on an NTC fault, and the instant-on / ideal-diode
+# servo (PDF p.11), which need the charge-cycle state machine this card does
+# not carry.
+[[models.behavioral.laws]]
+name = "bgate_clamp"
+kind = "voltage"
+a = "bgate"
+expr = "max(0.0, v_csn - 9.5)"
+# MODELLING CHOICE, not a datasheet figure: the datasheet states BGATE's
+# drive as a current (PDF p.5, "BGATE Pull-Down Current, Charging Enabled"
+# 15 uA typ), not a resistance. A FET gate draws no DC current, so the series
+# value does not move the gate's DC level.
+r_ohms = 10000.0
 
 # ── LTC6803-4: multicell battery stack monitor / balancer ─────────────────────
 #

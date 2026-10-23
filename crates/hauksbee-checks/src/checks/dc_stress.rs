@@ -1678,6 +1678,47 @@ mod tests {
         );
     }
 
+    /// A gate a card drives is a known level. The LTC4020's BGATE law holds
+    /// the P-FET gate 9.5 V below CSN (on the 30 V source here), so the FET is
+    /// judged as driven: no undetermined-gate abstention, and VGS reads
+    /// -9.5 V, inside the SI7461DP's +/-20 V, where a 0 V gate would put 30 V
+    /// across it.
+    #[test]
+    fn a_gate_a_card_law_drives_is_judged_at_the_driven_level() {
+        use hauksbee_bind::control_inputs::{undetermined_gates, UNDETERMINED_GATE_MARKER};
+        let nets = [(1, "GND"), (2, "+30V"), (3, "/OUT"), (4, "/G")];
+        let fet = [
+            ("1", 2),
+            ("2", 2),
+            ("3", 2),
+            ("4", 4),
+            ("5", 3),
+            ("6", 3),
+            ("7", 3),
+            ("8", 3),
+        ];
+        let parts = vec![
+            part("Q1", "SI7461DP", &fet),
+            part("R1", "1k", &[("1", 3), ("2", 1)]),
+            part("U1", "LTC4020", &[("21", 4), ("22", 2), ("23", 2)]),
+        ];
+        let board = board(&nets, parts);
+        let lib = ModelLibrary::builtin();
+        let bound = bind_board(&board, &lib);
+        assert!(
+            undetermined_gates(&bound).is_empty(),
+            "{:?}",
+            undetermined_gates(&bound)
+        );
+        let report = dc_stress_lint(&board, &lib);
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.contains(UNDETERMINED_GATE_MARKER)
+                || (f.severity == Severity::High && f.message.contains("gate-source"))),
+            "{:#?}",
+            report.findings
+        );
+    }
+
     /// A load straight across a rail through a 0 ohm link (no series limit),
     /// the rail named `rail`.
     fn straight_across(rail: &str, load: &str) -> NetLintReport {

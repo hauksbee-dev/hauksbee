@@ -1156,18 +1156,76 @@ fn bind_behavioral(
         // Reform mb2.5 fix replaced the LTC6803 tie R52 with a diode); we
         // substitute a large open resistance so a law dividing by it gives ~0.
         resolve_from_ref_params(&mut model.params, &board_resistor);
-        if let Some(dev) = crate::behavioral::BehavioralDevice::stamp(
+        let Ok(converter) = converter_board(&model, comp, &board.components, &role_map, node_of)
+        else {
+            // `bind_vreg` left the part open for the same reason; its other
+            // behaviour (laws, state machine) still stamps.
+            model.behavioral.converter = None;
+            out.extend(crate::behavioral::BehavioralDevice::stamp_on_board(
+                circuit,
+                &comp.reference,
+                &model.behavioral,
+                &model.params,
+                &role_map,
+                &board_resistor,
+                crate::behavioral::ConverterBoard::default(),
+            ));
+            continue;
+        };
+        if let Some(dev) = crate::behavioral::BehavioralDevice::stamp_on_board(
             circuit,
             &comp.reference,
             &model.behavioral,
             &model.params,
             &role_map,
             &board_resistor,
+            converter,
         ) {
             out.push(dev);
         }
     }
     out
+}
+
+/// What the board says about `comp`'s converter before it is stamped.
+///
+/// That is the rail a sense-filter output lands on (`out_via`), and the
+/// input's lockout, the card's `supply_range` minimum on `in_pin`.
+///
+/// # Errors
+/// When the card's sense filter is ambiguous on this board.
+fn converter_board(
+    model: &ModelEntry,
+    comp: &Component,
+    components: &[Component],
+    roles: &std::collections::BTreeMap<String, NodeId>,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Result<crate::behavioral::ConverterBoard, crate::sense_filter::AmbiguousFilter> {
+    let Some(conv) = model.behavioral.converter.as_ref() else {
+        return Ok(crate::behavioral::ConverterBoard::default());
+    };
+    let out_node = match (conv.out_via, roles.get(&conv.out_pin)) {
+        (Some(_), Some(&pin)) => Some(sense_filter_out(comp, components, pin, node_of)?),
+        _ => None,
+    };
+    let floors = supply_floors(model);
+    Ok(crate::behavioral::ConverterBoard {
+        out_node,
+        input_floor_v: floors
+            .get(&conv.in_pin.trim().to_ascii_lowercase())
+            .copied(),
+    })
+}
+
+/// The rail the sense pin of `comp` on `pin` filters, in circuit nodes.
+fn sense_filter_out(
+    comp: &Component,
+    components: &[Component],
+    pin: NodeId,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Result<NodeId, crate::sense_filter::AmbiguousFilter> {
+    let node = |net: i64| node_of(Some(net));
+    crate::sense_filter::sense_filter_net(components, comp, pin, node, NodeId::is_ground)
 }
 
 /// Rewrite every `<name>_from_ref = "Rxx"` param into `<name> = ohms(Rxx)`,
@@ -5518,6 +5576,11 @@ fn bind_vreg(
         if roles.get(&conv.in_pin).is_none_or(|n| n.is_ground()) {
             return open_warning(comp, "vreg input not connected");
         }
+        // A sense-filter output is the rail one resistor off the sense pin;
+        // with two candidates there is no telling which rail it regulates.
+        if conv.out_via.is_some() && sense_filter_out(comp, components, out, node_of).is_err() {
+            return open_warning(comp, SENSE_FILTER_AMBIGUOUS);
+        }
         // A feedback-programmed converter's rail is the board's divider; with
         // the pin unwired or nothing on it to set it, there is no rail to report.
         if let Some(feedback) = &conv.feedback {
@@ -6253,6 +6316,12 @@ fn port_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId, DeviceId)> {
         })
         .collect()
 }
+
+/// Why a converter whose output is the far side of a sense filter is left open
+/// when the board gives that filter two rails.
+const SENSE_FILTER_AMBIGUOUS: &str = "converter output is the rail its sense pin's filter \
+     resistor reaches, but two resistors lead from that pin to different nets, so which rail it \
+     regulates cannot be determined";
 
 /// Why an adjustable regulator is left open when its ADJ/FB pin is unwired.
 const FEEDBACK_UNWIRED: &str = "adjustable vreg ADJ/FB pin not connected, so nothing sets its \

@@ -224,7 +224,8 @@ const DC_FARADS: f64 = 22e-6;
 
 /// The converter loop's delivered-current (`i - V(i)`, onto its hidden node),
 /// PI-state, `g*e` and input-draw expressions over deps
-/// `[out, pi, g*e, lim, vin, sense, ref, sw, i]` (see `stamp_converter`), for
+/// `[out, pi, g*e, lim, vin, sense, ref, sw, i]`, then the lockout's `on`
+/// level when `lockout` is set (see `stamp_converter`), for
 /// `farads = C_out / k` and an input-current limit `full_lim` (1 if
 /// none). "No limit" is 1 kA or 10 kV, not 1e9: a rounded clamp's `hypot`
 /// difference near 1e9 would lose a probe's digits.
@@ -253,7 +254,14 @@ const DC_FARADS: f64 = 22e-6;
 /// allowed: a 95 % duty cycle, beyond any practical converter's maximum.
 const MAX_STEP_UP_RATIO: f64 = 20.0;
 
-fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [String; 4] {
+fn loop_exprs(
+    c: &Converter,
+    farads: f64,
+    r: f64,
+    eff: f64,
+    full_lim: f64,
+    lockout: bool,
+) -> [String; 4] {
     let wc = std::f64::consts::TAU * c.loop_crossover_hz().0;
     let (g, wz, wl) = (wc * farads, wc / 4.0, wc * 1e-5);
     let dmax = c.max_duty.unwrap_or(1.0);
@@ -283,7 +291,20 @@ fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [S
     let top = format!("(({hi})-__d0)/{r:?}");
     let band = format!("max({:?}*__d4*{armed},1e-6)", 4e-3 / r);
     let dip = format!("max(1.0-math::abs({cmd}-{top})/{band},0.0)");
-    let i = format!("max(min({cmd},{top})-0.25*{band}*{dip}*{dip},-__d0/{r:?})-__d8");
+    let i = format!("max(min({cmd},{top})-0.25*{band}*{dip}*{dip},-__d0/{r:?})");
+    // Below the input's lockout the stage is off: it neither sources nor
+    // sinks, rather than holding the output at the dead input's 0 V. The
+    // per-chunk update decides it, as it decides the enable, and holds the
+    // answer on the hidden source `__d9` (1 V on, 0 V off): no Newton iterate
+    // crosses the floor, so a solve sees the stage on or off throughout. The
+    // scale saturates at 1% of the source, as `armed` does, so DC source
+    // stepping keeps an on stage on along the homotopy.
+    let on = if lockout {
+        "min(max(__d9*100.0,0.0),1.0)*"
+    } else {
+        ""
+    };
+    let i = format!("{on}{i}-__d8");
     let pi = format!("1e-6*({wz:?}*(__d8-__d1)-{dc}*{wl:?}*__d1)");
     let (fwd, loss) = (f64::midpoint(1.0 / eff, eff), (1.0 / eff - eff) / 2.0);
     let pw = format!("max(min(__d7,{hi}),0.0)*__d8");
@@ -392,6 +413,37 @@ struct ConverterLeg {
     iin_limit_a: Option<f64>,
     /// Input current (A) the draw took at the last update.
     last_iin_a: f64,
+    /// The input lockout, when the binder read a floor off the card.
+    lockout: Option<InputLockout>,
+}
+
+/// A converter's input lockout: the stage is off while `input` is below
+/// `floor_v`, which the per-chunk update decides and holds on `source`.
+#[derive(Debug, Clone, Copy)]
+struct InputLockout {
+    input: NodeId,
+    floor_v: f64,
+    /// Hidden source the in-circuit current reads: 1 V on, 0 V off.
+    source: DeviceId,
+}
+
+/// What the binder reads off the board for a converter before stamping it.
+///
+/// The default is a converter stamped from its card alone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConverterBoard {
+    /// The rail the output lands on, when not `out_pin`'s own node.
+    ///
+    /// Set when the card's `out_via` moves the output off `out_pin`'s net (the
+    /// far side of a sense filter, see
+    /// [`crate::sense_filter::sense_filter_net`]). `None`: `out_pin`'s node.
+    pub out_node: Option<NodeId>,
+    /// The input's lockout (V): the card's `supply_range` minimum on `in_pin`.
+    ///
+    /// Below it the converter neither sources nor sinks: its stage is off and
+    /// the output is released to whatever else holds it (a battery through a
+    /// power-path FET). `None`: the card states no input range.
+    pub input_floor_v: Option<f64>,
 }
 
 /// A stamped expression law: a controllable source whose value is recomputed
@@ -425,8 +477,10 @@ struct LawLeg {
 enum LawStamp {
     /// Stamped as a solver-implicit [`Device::Behavioral`]: Newton evaluates
     /// the expression at every iterate, nothing to update per chunk. Taken by
-    /// every current law whose expression is a pure function of pin voltages
-    /// and params (no FSM state, no time, no `only_in_state` gating).
+    /// every law, current or voltage, whose expression is a pure function of
+    /// pin voltages and params (no FSM state, no time, no `only_in_state`
+    /// gating); a voltage law's device forces an internal node behind the
+    /// law's series resistor.
     Implicit,
     /// A chunk-updated controllable source (Isource for current, Vsource for
     /// voltage): the value is re-evaluated between chunks from the previous
@@ -703,6 +757,31 @@ impl BehavioralDevice {
         role_nodes: &BTreeMap<String, NodeId>,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
     ) -> Option<Self> {
+        let board = ConverterBoard::default();
+        Self::stamp_on_board(
+            circuit,
+            reference,
+            model,
+            params,
+            role_nodes,
+            board_resistor,
+            board,
+        )
+    }
+
+    /// [`Self::stamp`], with what the binder read off the board.
+    ///
+    /// That is the rail a sense-filter output lands on and the converter
+    /// input's lockout (see [`ConverterBoard`]).
+    pub fn stamp_on_board(
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        params: &Params,
+        role_nodes: &BTreeMap<String, NodeId>,
+        board_resistor: &dyn Fn(&str) -> Option<f64>,
+        board: ConverterBoard,
+    ) -> Option<Self> {
         let mut dev = Self {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
@@ -714,7 +793,7 @@ impl BehavioralDevice {
         dev.stamp_fsm(circuit, reference, model, role_nodes);
         dev.stamp_series_paths(circuit, reference, model, role_nodes);
         dev.stamp_profiled_loads(circuit, reference, model, role_nodes);
-        dev.stamp_converter(circuit, reference, model, role_nodes, board_resistor);
+        dev.stamp_converter(circuit, reference, model, role_nodes, board_resistor, board);
         dev.stamp_laws(circuit, reference, model, params, role_nodes);
 
         if dev.is_inert() {
@@ -1010,6 +1089,18 @@ impl BehavioralDevice {
     /// input instead of vanishing, and the draw has no one-chunk lag. `i` is
     /// solved onto a hidden node like `g*e`, which the output, the PI state and
     /// the draw read, so each probe evaluates the clamp once, not three times.
+    ///
+    /// Below the input's lockout ([`ConverterBoard::input_floor_v`]) `i` is
+    /// scaled to zero, sourcing and sinking alike: the stage is off, so a
+    /// dead input neither feeds the output nor clamps it to the input's 0 V
+    /// through `out_r` (the disarmed ceiling alone would). The per-chunk
+    /// update reads the solved input against the floor, as it reads the
+    /// enable, and sets a hidden source the loop scales `i` by: no Newton
+    /// iterate crosses the floor, so a solve sees the stage on or off
+    /// throughout, and the DC settle takes one more solve for each stage
+    /// whose input another converter makes. The output lands on
+    /// [`ConverterBoard::out_node`] when the binder resolved one.
+    ///
     /// Skipped when a programmable limit has no board evidence to read, or
     /// when either power pin is unconnected.
     fn stamp_converter(
@@ -1019,13 +1110,15 @@ impl BehavioralDevice {
         model: &Behavioral,
         role_nodes: &BTreeMap<String, NodeId>,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
+        board: ConverterBoard,
     ) {
         let Some(c) = &model.converter else { return };
         let iin_limit_a = resolve_iin_limit(c, board_resistor);
-        let (Some(&out), Some(&vin)) = (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
+        let (Some(&pin_out), Some(&vin)) = (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
         else {
             return;
         };
+        let out = board.out_node.unwrap_or(pin_out);
         if c.iin_program.is_some() && iin_limit_a.is_none() {
             return;
         }
@@ -1042,7 +1135,8 @@ impl BehavioralDevice {
                 // has no divider to set the rail: the binder leaves the part
                 // open, and no rail is invented here.
                 let ratio = divider_ratio(circuit, n);
-                let Some(k) = ratio.or_else(|| (n == out || n == reg).then_some(1.0)) else {
+                let unity = n == out || n == reg || n == pin_out;
+                let Some(k) = ratio.or_else(|| unity.then_some(1.0)) else {
                     return;
                 };
                 (n, vref, k)
@@ -1050,14 +1144,27 @@ impl BehavioralDevice {
             _ => (reg, c.vout_setpoint, 1.0),
         };
         let farads = out_farads(circuit, reg).max(1e-6) / k;
-        let [drive, pi, ge, draw] = loop_exprs(c, farads, r, eff, iin_limit_a.unwrap_or(1.0));
+        let full_lim = iin_limit_a.unwrap_or(1.0);
+        let floor = board.input_floor_v.filter(|v| *v > 0.0);
+        let [drive, pi, ge, draw] = loop_exprs(c, farads, r, eff, full_lim, floor.is_some());
         let [drv, src, pi_node, err, i_node] = ["out", "sw", "pi", "err", "i"]
             .map(|t| circuit.node(&format!("__beh_{reference}_conv_{t}")));
         let (lim, limit_vsource) = hidden_dc_node(circuit, reference, "conv_lim", -1.0);
         // The reference as a source, so DC source stepping ramps it with the
         // supplies: a soft start, which is how Newton finds a clamped loop.
         let ref_node = hidden_dc_node(circuit, reference, "conv_ref", vref).0;
-        let deps = [out, pi_node, err, lim, vin, sense, ref_node, drv, i_node];
+        let mut deps = vec![out, pi_node, err, lim, vin, sense, ref_node, drv, i_node];
+        // The input lockout's on/off level, stamped on: until an update reads
+        // the input, the loop is the one a card without a floor gets.
+        let lockout = floor.map(|floor_v| {
+            let (node, source) = hidden_dc_node(circuit, reference, "conv_on", 1.0);
+            deps.push(node);
+            InputLockout {
+                input: vin,
+                floor_v,
+                source,
+            }
+        });
         let mut add = |t: &str, p, n, expr: &str| {
             let name = format!("Bbeh_{reference}_conv_{t}");
             let dev = Device::behavioral(name, (p, n), BOutput::Current, expr, &deps);
@@ -1096,6 +1203,7 @@ impl BehavioralDevice {
             limit_vsource,
             iin_limit_a,
             last_iin_a: 0.0,
+            lockout,
         });
     }
 
@@ -1128,20 +1236,37 @@ impl BehavioralDevice {
                     continue;
                 }
             };
-            // Prefer the solver-implicit form for a current law that is a pure
+            // Prefer the solver-implicit form for a law that is a pure
             // function of pin voltages / params: Newton then owns the
             // law (its conductance is in the Jacobian), where the chunk-updated
             // constant-source form is an explicit relaxation that diverges on
-            // high-impedance nets (see [`LawStamp`]). State-gated laws and
-            // FSM-context expressions cannot be expressed implicitly and keep
-            // the runtime form.
-            if matches!(law.kind, LawKind::Current) && law.only_in_state.is_none() {
+            // high-impedance nets (see [`LawStamp`]) and holds 0 until the
+            // first chunk, so an operating point solved before it (the rest
+            // state, a regulator's input support) never sees the law. A voltage
+            // law forces an internal node through its series resistance, as
+            // the runtime form does. State-gated laws and FSM-context
+            // expressions cannot be expressed implicitly and keep the runtime
+            // form.
+            if law.only_in_state.is_none() {
                 if let Some((expr, deps)) = compile_law_implicit(&law.expr, role_nodes, params) {
+                    let (p, output) = match law.kind {
+                        LawKind::Current => (a_node, BOutput::Current),
+                        LawKind::Voltage => {
+                            let drv = circuit.node(&format!("__beh_{reference}_{}_law", law.name));
+                            circuit.add(Device::resistor(
+                                format!("Rbeh_{reference}_{}_law", law.name),
+                                drv,
+                                a_node,
+                                law.r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS),
+                            ));
+                            (drv, BOutput::Voltage)
+                        }
+                    };
                     circuit.add(Device::Behavioral {
                         name: format!("Bbeh_{reference}_{}", law.name),
-                        p: a_node,
+                        p,
                         n: b_node,
-                        output: BOutput::Current,
+                        output,
                         expr,
                         deps,
                     });
@@ -1540,10 +1665,11 @@ impl BehavioralDevice {
     /// The converter's per-chunk bookkeeping (the loop itself is in-circuit,
     /// see `Self::stamp_converter`): arm it with its input-current limit, or
     /// disarm it while the enable input is low, a needed feedback pin or
-    /// programming evidence is missing; and record the input current the
-    /// in-circuit draw took (none once disarmed: the gated draw is zero from
-    /// the next solve on). Also the DC settle's iteration; returns how far the
-    /// arming moved.
+    /// programming evidence is missing; turn the stage off while its input is
+    /// below the lockout floor; and record the input current the in-circuit
+    /// draw took (none once disarmed: the gated draw is zero from the next
+    /// solve on). Also the DC settle's iteration; returns how far the arming
+    /// or the lockout moved.
     pub fn update_converter(
         &mut self,
         circuit: &mut Circuit,
@@ -1556,17 +1682,25 @@ impl BehavioralDevice {
             c.enable_node
                 .is_some_and(|n| node_v(n) >= en.high_threshold_v)
         };
-        let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
-        let on = c.sensed && evidenced && c.cfg.enable.as_ref().is_none_or(high);
-        let limit = if on { c.iin_limit_a } else { Some(-1.0) }.unwrap_or(1.0);
-        let lim = match circuit.devices.get(c.limit_vsource.0 as usize) {
+        // A source's level at the last solve, the value it is compared to.
+        let solved = |id: DeviceId, otherwise: f64| match circuit.devices.get(id.0 as usize) {
             Some(Device::Vsource { p, .. }) => node_v(*p),
-            _ => limit,
+            _ => otherwise,
         };
+        let powered = (c.lockout.as_ref()).is_none_or(|l| node_v(l.input) >= l.floor_v);
+        let evidenced = c.cfg.iin_program.is_none() || c.iin_limit_a.is_some();
+        let on = c.sensed && evidenced && powered && c.cfg.enable.as_ref().is_none_or(high);
+        let limit = if on { c.iin_limit_a } else { Some(-1.0) }.unwrap_or(1.0);
+        let level = if powered { 1.0 } else { 0.0 };
+        let moved = (c.lockout).map_or(0.0, |l| (level - solved(l.source, level)).abs());
+        let moved = moved.max((limit - solved(c.limit_vsource, limit)).abs());
         let iin = behavioral_draw(circuit, c.in_draw, node_v).1;
         c.last_iin_a = if on { iin } else { 0.0 };
         set_source_dc(circuit, c.limit_vsource, limit);
-        (limit - lim).abs()
+        if let Some(l) = c.lockout {
+            set_source_dc(circuit, l.source, level);
+        }
+        moved
     }
 
     /// Re-evaluate the converter's input-current limit from the board (called if
@@ -1978,6 +2112,71 @@ mod tests {
         let (_, deps) = compile_law_implicit("v_io + max(0.0, v_io - v_vbus)", &roles(), &params())
             .expect("compiles");
         assert_eq!(deps.len(), 2);
+    }
+
+    /// A voltage law that is a pure function of pin voltages is solved
+    /// implicitly, like a current law: a behavioral voltage device forces an
+    /// internal node behind the law's series resistor, so the operating point
+    /// sees the law's level, not the runtime source's 0 V before its first
+    /// chunk.
+    #[test]
+    fn pure_voltage_law_stamps_implicitly_behind_its_series_resistor() {
+        let mut circuit = Circuit::new();
+        let gate = circuit.node("gate");
+        let sense = circuit.node("sense");
+        let roles: BTreeMap<String, NodeId> = [("bgate".into(), gate), ("csn".into(), sense)]
+            .into_iter()
+            .collect();
+        let model = Behavioral {
+            laws: vec![hauksbee_models::behavioral::Law {
+                name: "clamp".into(),
+                kind: LawKind::Voltage,
+                a: "bgate".into(),
+                b: None,
+                expr: "max(0.0, v_csn - 9.5)".into(),
+                r_ohms: Some(1.0e4),
+                only_in_state: None,
+            }],
+            ..Default::default()
+        };
+        let dev = BehavioralDevice::stamp(
+            &mut circuit,
+            "U1",
+            &model,
+            &Params::default(),
+            &roles,
+            &|_| None,
+        )
+        .expect("law stamps");
+        assert!(matches!(dev.laws[0].stamp, LawStamp::Implicit));
+        let forced = (circuit.devices.iter())
+            .find_map(|d| match d {
+                Device::Behavioral {
+                    name,
+                    p,
+                    n,
+                    output: BOutput::Voltage,
+                    deps,
+                    ..
+                } if name == "Bbeh_U1_clamp" => Some((*p, *n, deps.clone())),
+                _ => None,
+            })
+            .expect("a behavioral voltage device");
+        assert_eq!(forced.1, NodeId::GROUND);
+        assert!(matches!(forced.2[..], [BDep::Volt(n)] if n == sense));
+        let series = (circuit.devices.iter()).any(|d| {
+            matches!(d, Device::Resistor { name, a, b, ohms, .. }
+                if name == "Rbeh_U1_clamp_law" && *a == forced.0 && *b == gate
+                    && (*ohms - 1.0e4).abs() < 1e-9)
+        });
+        assert!(
+            series,
+            "the series resistor joins the forced node to the pin"
+        );
+        assert!(
+            !(circuit.devices.iter()).any(|d| matches!(d, Device::Vsource { .. })),
+            "no chunk-updated source"
+        );
     }
 
     /// Scientific-notation literals are numbers, not identifiers: the law

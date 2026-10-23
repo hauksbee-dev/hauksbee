@@ -602,7 +602,24 @@ fn regulator_ranges(
                     .find(|role| model.pins.values().any(|known| known == role))
             });
         let Some(role) = output_role else { continue };
-        if let Some(net_id) = role_net_id(comp, model, role) {
+        // A sense-filter output is the rail one resistor off its sense pin,
+        // the net the binder stamps the converter on; ambiguous, it binds open.
+        let rail = |net: i64| match model.behavioral.converter.as_ref().and_then(|c| c.out_via) {
+            Some(_) => {
+                let ground = |n: i64| board.net(n).is_some_and(|x| is_ground(&x.name));
+                let node = |n: i64| (n != 0).then_some(n);
+                hauksbee_bind::sense_filter::sense_filter_net(
+                    &board.components,
+                    comp,
+                    net,
+                    node,
+                    ground,
+                )
+                .ok()
+            }
+            None => Some(net),
+        };
+        if let Some(net_id) = role_net_id(comp, model, role).and_then(rail) {
             // The library keeps a card's declared uncertainty on the
             // resolution's provenance, not on the compiled entry.
             let uncertainty = AssemblyState::of(comp)
