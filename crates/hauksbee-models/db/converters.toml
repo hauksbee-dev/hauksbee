@@ -44,6 +44,12 @@ warning = "configuration, threshold and conversion registers are executable (16-
 "9" = "sda"
 "10" = "scl"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS1113/ADS1114/ADS1115 SBAS444E (May 2009, rev. Dec 2024), https://www.ti.com/lit/ds/symlink/ads1115.pdf, sha256 eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834.
+[models.pin_capability.open_drain]
+basis = "TI ADS1115 SBAS444E Rev. E PDF p.3 Table 4-1 Pin Functions: ALERT/RDY (Digital output): \"Open-drain output. Connect to VDD using a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"2" = "ALERT/RDY"
+
 [models.ratings]
 max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
 max_pin_current_a = 0.01       # 5.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
@@ -291,6 +297,12 @@ warning = "configuration, threshold and conversion registers are executable (16-
 "8" = "vdd"
 "9" = "sda"
 "10" = "scl"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS1113/ADS1114/ADS1115 SBAS444E (May 2009, rev. Dec 2024), https://www.ti.com/lit/ds/symlink/ads1115.pdf, sha256 eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834.
+[models.pin_capability.open_drain]
+basis = "TI ADS1115 SBAS444E Rev. E PDF p.3 Table 4-1 Pin Functions: ALERT/RDY (Digital output): \"Open-drain output. Connect to VDD using a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"2" = "ALERT/RDY"
 
 [models.ratings]
 max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
@@ -540,6 +552,12 @@ warning = "configuration, threshold and conversion registers are executable (16-
 "9" = "sda"
 "10" = "scl"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS1113/ADS1114/ADS1115 SBAS444E (May 2009, rev. Dec 2024), https://www.ti.com/lit/ds/symlink/ads1115.pdf, sha256 eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834.
+[models.pin_capability.open_drain]
+basis = "TI ADS1115 SBAS444E Rev. E PDF p.3 Table 4-1 Pin Functions: ALERT/RDY (Digital output): \"Open-drain output. Connect to VDD using a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"2" = "ALERT/RDY"
+
 [models.ratings]
 max_voltage_v = 7.0            # 5.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
 max_pin_current_a = 0.01       # 5.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
@@ -788,6 +806,12 @@ warning = "configuration, threshold and conversion registers are executable (12-
 "9" = "sda"
 "10" = "scl"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS1013/ADS1014/ADS1015 SBAS473F (May 2009, rev. Jan 2025), https://www.ti.com/lit/ds/symlink/ads1015.pdf, sha256 4617aa3843b16d23264f5eff63b90b1afffefff7af97ae29f0eb8c5a153156d4.
+[models.pin_capability.open_drain]
+basis = "TI ADS1015 SBAS473F Rev. F PDF p.3 Table 5-1 Pin Functions: ALERT/RDY (Digital output): \"Open-drain output. Connect to VDD using a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"2" = "ALERT/RDY"
+
 [models.ratings]
 max_voltage_v = 7.0            # 6.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V
 max_pin_current_a = 0.01       # 6.1 p.4, continuous input current, any pin except the supply pins, +-10 mA
@@ -1035,6 +1059,12 @@ warning = "configuration, threshold and conversion registers are executable (12-
 "8" = "vdd"
 "9" = "sda"
 "10" = "scl"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS1013/ADS1014/ADS1015 SBAS473F (May 2009, rev. Jan 2025), https://www.ti.com/lit/ds/symlink/ads1015.pdf, sha256 4617aa3843b16d23264f5eff63b90b1afffefff7af97ae29f0eb8c5a153156d4.
+[models.pin_capability.open_drain]
+basis = "TI ADS1015 SBAS473F Rev. F PDF p.3 Table 5-1 Pin Functions: ALERT/RDY (Digital output): \"Open-drain output. Connect to VDD using a pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"2" = "ALERT/RDY"
 
 [models.ratings]
 max_voltage_v = 7.0            # 6.1 Absolute Maximum Ratings p.4, VDD to GND -0.3 V to 7 V

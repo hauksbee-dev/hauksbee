@@ -938,6 +938,14 @@ high_offset = 1.3333333333333333
 implements = ["nominal_cv_output", "program_resistor_static_charge_current", "dynamic_current_limit", "input_current_draw", "quiescent_current", "absolute_ratings"]
 missing = ["cc_cv_state_machine", "input_uvlo", "charge_termination", "recharge_hysteresis", "thermal_regulation", "charge_status_timing"]
 
+# Open-drain outputs: NanJing Top Power TP4054 REV_2.1
+# https://www.toppwr.com/uploadfile/file/20240913/66e3d01d4c944.pdf
+# sha256 331539a57bd9da0f5cee8686e6d393026c05c844c2c147c6a9eee7b28dd4fc4e
+[models.pin_capability.open_drain]
+basis = "NanJing Top Power TP4054 REV_2.1 PDF p.4 Pin Description: \"CHRG (Pin1): Open Drain Charge Status Output When the battery is being charged, the CHRG pin is pulled low by the internal switch to indicate that charging is in progress; otherwise, the CHRG pin is in a high-impedance state.\""
+[models.pin_capability.open_drain.pads]
+"1" = "CHRG"
+
 # ── TP4056: 1 A single-cell Li-ion linear charger, SOP-8 ─────────────────────
 #
 # The charger on every red "TP4056 module" a hobbyist has in a drawer. Same
@@ -1271,6 +1279,16 @@ max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
 
+# Open-drain outputs: Microchip MCP73833/4 DS22005B (2009)
+# https://ww1.microchip.com/downloads/en/DeviceDoc/22005b.pdf
+# sha256 70b297a13b77cebffcbd203b1718c6310c8f341697e462cb35e3dee8bc847b7f
+[models.pin_capability.open_drain]
+basis = "Microchip MCP73833/4 DS22005B PDF p.11 3.2 Charge Status Outputs (STAT1, STAT2): \"STAT1 and STAT2 are open-drain logic outputs for connection to a LED for charge status indication.\"; 3.5 Power Good Indication (PG): \"The power good (PG) option is a pseudo open-drain output. The PG output can sink current, but not source current.\" (pulled low only, to be pulled up to the input); Table 3-1 pins 3 STAT1, 4 STAT2, 7 PG (DFN-10 and MSOP-10)"
+[models.pin_capability.open_drain.pads]
+"3" = "STAT1"
+"4" = "STAT2"
+"7" = "PG"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -1531,6 +1549,14 @@ gnd_pin    = "1"
 "4" = "nc"      # not bonded; the datasheet says to connect it to VSS
 "5" = "sr0_n"   # primary push-button input, active low; also the test-mode pin
 "6" = "vcc"
+
+# Open-drain outputs: ST SR2 DocID026047 Rev 2
+# https://www.st.com/resource/en/datasheet/sr2.pdf
+# sha256 08d927275f1457ef45bbd804ff5748c621e9f0cf13e1d48323d5f58798dfcf8e
+[models.pin_capability.open_drain]
+basis = "ST SR2 DocID026047 Rev 2 PDF p.19 Table 6 Ordering information scheme, Outputs type: \"A = open drain, no pull-up, active low\"; PDF p.20 Table 7 Package marking: all six listed options SR2HARU, SR2LABU, SR2LARU, SR2PARU, SR2UABU, SR2UARU have output type \"OD, AL\" (the six this card matches); PDF p.5 Table 1: pin 3 RST \"open drain with optional pull-up resistor, active low\""
+[models.pin_capability.open_drain.pads]
+"3" = "RST"
 
 [models.ratings]
 # Table 2 Absolute maximum ratings. max_voltage_v is the SUPPLY limit; the
@@ -1818,6 +1844,16 @@ theta_ja_c_per_w = 68.0   # 24 TQFN single-layer board; four-layer is 60 (Rev 12
 id = "mp2650"
 kind = "digital"
 description = "Monolithic Power Systems MP2650 charger (identity-only; NVDC/OTG/ADC behavior not modeled)"
+
+# Open-drain outputs: Monolithic Power MP2650 Rev. 1.0
+# https://www.monolithicpower.com/en/documentview/productdocument/index/version/2/document_type/Datasheet/lang/en/sku/MP2650GV/document_id/9664/
+# sha256 b67631193418c6bd36f2884584168afb642e6637eaa1f20ff177c8e1f053683e
+[models.pin_capability.open_drain]
+basis = "MP2650 Rev. 1.0 PDF p.5 Pin Functions: pin 8 PROCHOT \"This pin is an open-drain structure. ... This pin must be pulled up externally.\"; pin 9 INT \"Open-drain interrupt output. ... It must be pulled up externally.\"; PDF p.6 pin 28 ACOK \"Input power present indication. This pin is an open-drain structure, and must be pulled up externally.\""
+[models.pin_capability.open_drain.pads]
+"8" = "PROCHOT"
+"9" = "INT"
+"28" = "ACOK"
 
 [models.source]
 tier = "curated-library"

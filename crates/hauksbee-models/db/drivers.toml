@@ -84,6 +84,35 @@ vil = [[3.0, 0.9], [5.5, 1.65]]
 "28" = "vbb2"
 "29" = "gnd_ep"
 
+# Supply capacitance, Allegro 4988-DS Rev. 8 (https://www.allegromicro.com/-/media/files/datasheets/a4988-datasheet.pdf,
+# sha256 d1dfba3bb7be2cbf2b689f39424569fc78b1f4fd1f427648bbd8f291ebb933ea). The charge-pump capacitors (0.1 uF between CP1 and CP2,
+# 0.1 uF between VCP and VBB) are not to ground and are not expressible here. VBB1 and VBB2 are one supply net in the Typical
+# Application Diagram, so the bulk capacitor is stated once, on VBB1.
+[[models.supply_cap]]
+role = "vreg"
+side = "output"
+grade = "required"
+min_f = 2.2e-7
+basis = "Allegro 4988-DS Rev. 8 PDF p.10 Functional Description, VREG: \"The VREG pin must be decoupled with a 0.22 µF ceramic capacitor to ground.\""
+note = "VREG is the internal 7 V supply for the sink-side FET gates. The datasheet asks for Class 2 dielectric, +-15% maximum, or tolerance R, so the nominal value is the one to count."
+
+[[models.supply_cap]]
+role = "vdd"
+side = "input"
+grade = "recommended"
+min_f = 2.2e-7
+basis = "Allegro 4988-DS Rev. 8 PDF p.1 Typical Application Diagram: 0.22 µF from the VDD supply line to ground; no sentence states the VDD capacitor"
+note = "Logic supply decoupling, shown in the datasheet's typical application only."
+
+[[models.supply_cap]]
+role = "vbb1"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-4
+min_single_f = 1.0e-4
+basis = "Allegro 4988-DS Rev. 8 PDF p.1 Typical Application Diagram: one 100 µF capacitor from VBB1/VBB2 to ground; PDF p.12 Application Layout: \"The two input capacitors should be placed in parallel, and as close to the device supply pins as possible. The ceramic capacitor (CIN1) should be closer to the pins than the bulk capacitor (CIN2).\""
+note = "The 100 µF bulk capacitor absorbs the energy the motor returns on braking; the datasheet prints no value for the ceramic CIN1, so only the bulk one is stated. Both VBB pins sit on this one supply net."
+
 [models.ratings]
 max_voltage_v = 35.0           # Absolute Maximum Ratings, Load Supply Voltage VBB
 max_current_a = 2.0            # Absolute Maximum Ratings, Output Current IOUT +-2 A
@@ -221,6 +250,51 @@ must_not_float_roles = "nsleep,nreset"
 "27" = "nhome"
 "28" = "gnd"
 
+# nFAULT and nHOME are open-drain outputs. The datasheet draws a 10 k pull-up to V3P3OUT on each in the Typical Application
+# (PDF p.18) but no sentence says one is required, so no pin_bias row is stated.
+[models.pin_capability.open_drain]
+basis = "TI DRV8825 SLVSA73F PDF p.3-4 Pin Functions: nFAULT (pin 18) and nHOME (pin 27) are type OD (\"OD = open-drain output\"); PDF p.6 7.5 Electrical Characteristics: \"nHOME, nFAULT OUTPUTS (OPEN-DRAIN OUTPUTS)\""
+[models.pin_capability.open_drain.pads]
+"18" = "nFAULT"
+"27" = "nHOME"
+
+# Supply capacitance, TI DRV8825 SLVSA73F (https://www.ti.com/lit/ds/symlink/drv8825.pdf,
+# sha256 5b4dccc2497334e10574ffa5a55518c8d59b0ed35758f5e8f099b84bbfbb407b). The charge-pump capacitors (0.01 uF between CP1 and CP2,
+# 0.1 uF between VCP and VM) are not to ground and are not expressible here. VMA and VMB are one supply net, so the bulk
+# capacitor is stated once, on VMA.
+[[models.supply_cap]]
+role = "vma"
+side = "input"
+grade = "required"
+min_f = 1.0e-7
+basis = "TI DRV8825 SLVSA73F PDF p.21 10 Power Supply Recommendations: \"Two 0.1-µF ceramic capacitors rated for VMx must be placed as close as possible to the VMA and VMB pins respectively (one on each pin).\"; PDF p.3 Pin Functions VMA: \"bypassed with a 0.1-µF capacitor to GND\""
+note = "Local decoupling at the pin, rated for the VM voltage; the bulk capacitor is separate."
+
+[[models.supply_cap]]
+role = "vmb"
+side = "input"
+grade = "required"
+min_f = 1.0e-7
+basis = "TI DRV8825 SLVSA73F PDF p.21 10 Power Supply Recommendations: \"Two 0.1-µF ceramic capacitors rated for VMx must be placed as close as possible to the VMA and VMB pins respectively (one on each pin).\"; PDF p.3 Pin Functions VMB: \"bypassed with a 0.1-µF capacitor to GND\""
+note = "Local decoupling at the pin, rated for the VM voltage; the bulk capacitor is separate."
+
+[[models.supply_cap]]
+role = "vma"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-4
+min_single_f = 1.0e-4
+basis = "TI DRV8825 SLVSA73F PDF p.21 10 Power Supply Recommendations: \"additional bulk capacitance is required and must be sized accordingly to the application requirements\"; 10.1 Bulk Capacitance: \"The data sheet generally provides a recommended value but system level testing is required to determine the appropriate sized bulk capacitor\"; PDF p.18 9.2 Typical Application: 100 µF on the VM supply"
+note = "The datasheet requires bulk capacitance but prints no minimum; 100 µF is the value in its typical application and is a starting point, sized by motor current, supply and braking method. VMA and VMB are one supply net."
+
+[[models.supply_cap]]
+role = "v3p3out"
+side = "output"
+grade = "required"
+min_f = 4.7e-7
+basis = "TI DRV8825 SLVSA73F PDF p.3 Pin Functions V3P3OUT: \"Bypass to GND with a 0.47-μF 6.3-V ceramic capacitor.\"; PDF p.22 11.1 Layout Guidelines: \"Bypass V3P3 to ground with a ceramic capacitor rated 6.3 V.\""
+note = "The 3.3 V regulator output, which can also supply the VREF pins."
+
 [models.ratings]
 max_voltage_v = 47.0           # 7.1 Power supply voltage V(VMx)
 max_current_a = 2.5            # 7.1 Continuous motor drive output current
@@ -336,6 +410,33 @@ must_not_float_roles = "nsleep"
 "16" = "ain1"
 "17" = "gnd_ep"
 
+# nFAULT is an open-drain output. The datasheet shows no external pull-up resistor on it and states no requirement for one,
+# so no pin_bias row is stated.
+[models.pin_capability.open_drain]
+basis = "TI DRV8833 SLVSAR1E PDF p.4 Pin Functions: nFAULT is type OD (\"OD = Open-drain output\", PDF p.3 footnote); PDF p.6 6.5 Electrical Characteristics: \"nFAULT OUTPUT (OPEN-DRAIN OUTPUT)\""
+[models.pin_capability.open_drain.pads]
+"8" = "nFAULT"
+
+# Supply capacitance, TI DRV8833 SLVSAR1E (https://www.ti.com/lit/ds/symlink/drv8833.pdf,
+# sha256 3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4). The VCP capacitor (0.01 uF to VM) is not to ground
+# and is not expressible here.
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-5
+min_single_f = 1.0e-5
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VM: \"Connect to motor supply. A 10-µF (minimum) ceramic bypass capacitor to GND is recommended.\"; PDF p.15 10.1 Layout Guidelines: \"The VM pin should be bypassed to GND using low-ESR ceramic bypass capacitors with a recommended value of 10-μF rated for VM.\""
+note = "Ceramic bypass at the pin. 9.1 Bulk Capacitance (PDF p.14) says to size the local bulk capacitance by system test and prints no value."
+
+[[models.supply_cap]]
+role = "vint"
+side = "output"
+grade = "required"
+min_f = 2.2e-6
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VINT (internal supply bypass): \"Bypass to GND with 2.2-μF, 6.3-V capacitor.\"; PDF p.15 10.1 Layout Guidelines: \"Bypass VINT to ground with a 2.2-μF ceramic capacitor rated 6.3 V.\""
+note = "VINT is the internal supply of the part; the capacitor is rated 6.3 V."
+
 [models.ratings]
 max_voltage_v = 11.8           # 6.1 VM power supply voltage
 max_junction_temp_c = 150.0    # 6.1 operating junction temperature TJ
@@ -433,6 +534,33 @@ must_not_float_roles = "nsleep"
 "14" = "ain1"
 "17" = "gnd_ep"
 
+# nFAULT is an open-drain output. The datasheet shows no external pull-up resistor on it and states no requirement for one,
+# so no pin_bias row is stated.
+[models.pin_capability.open_drain]
+basis = "TI DRV8833 SLVSAR1E PDF p.4 Pin Functions: nFAULT is type OD (\"OD = Open-drain output\", PDF p.3 footnote); PDF p.6 6.5 Electrical Characteristics: \"nFAULT OUTPUT (OPEN-DRAIN OUTPUT)\""
+[models.pin_capability.open_drain.pads]
+"6" = "nFAULT"
+
+# Supply capacitance, TI DRV8833 SLVSAR1E (https://www.ti.com/lit/ds/symlink/drv8833.pdf,
+# sha256 3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4). The VCP capacitor (0.01 uF to VM) is not to ground
+# and is not expressible here.
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-5
+min_single_f = 1.0e-5
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VM: \"Connect to motor supply. A 10-µF (minimum) ceramic bypass capacitor to GND is recommended.\"; PDF p.15 10.1 Layout Guidelines: \"The VM pin should be bypassed to GND using low-ESR ceramic bypass capacitors with a recommended value of 10-μF rated for VM.\""
+note = "Ceramic bypass at the pin. 9.1 Bulk Capacitance (PDF p.14) says to size the local bulk capacitance by system test and prints no value."
+
+[[models.supply_cap]]
+role = "vint"
+side = "output"
+grade = "required"
+min_f = 2.2e-6
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VINT (internal supply bypass): \"Bypass to GND with 2.2-μF, 6.3-V capacitor.\"; PDF p.15 10.1 Layout Guidelines: \"Bypass VINT to ground with a 2.2-μF ceramic capacitor rated 6.3 V.\""
+note = "VINT is the internal supply of the part; the capacitor is rated 6.3 V."
+
 [models.ratings]
 max_voltage_v = 11.8           # 6.1 VM power supply voltage
 max_current_a = 1.5            # 6.3 IOUT, RTY package continuous RMS or DC output current per bridge (VM = 5 V); the HTSSOP and TSSOP carry no printed per-bridge figure, so this is the only sourced one
@@ -529,6 +657,33 @@ must_not_float_roles = "nsleep"
 "14" = "vint"
 "15" = "ain2"
 "16" = "ain1"
+
+# nFAULT is an open-drain output. The datasheet shows no external pull-up resistor on it and states no requirement for one,
+# so no pin_bias row is stated.
+[models.pin_capability.open_drain]
+basis = "TI DRV8833 SLVSAR1E PDF p.4 Pin Functions: nFAULT is type OD (\"OD = Open-drain output\", PDF p.3 footnote); PDF p.6 6.5 Electrical Characteristics: \"nFAULT OUTPUT (OPEN-DRAIN OUTPUT)\""
+[models.pin_capability.open_drain.pads]
+"8" = "nFAULT"
+
+# Supply capacitance, TI DRV8833 SLVSAR1E (https://www.ti.com/lit/ds/symlink/drv8833.pdf,
+# sha256 3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4). The VCP capacitor (0.01 uF to VM) is not to ground
+# and is not expressible here.
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-5
+min_single_f = 1.0e-5
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VM: \"Connect to motor supply. A 10-µF (minimum) ceramic bypass capacitor to GND is recommended.\"; PDF p.15 10.1 Layout Guidelines: \"The VM pin should be bypassed to GND using low-ESR ceramic bypass capacitors with a recommended value of 10-μF rated for VM.\""
+note = "Ceramic bypass at the pin. 9.1 Bulk Capacitance (PDF p.14) says to size the local bulk capacitance by system test and prints no value."
+
+[[models.supply_cap]]
+role = "vint"
+side = "output"
+grade = "required"
+min_f = 2.2e-6
+basis = "TI DRV8833 SLVSAR1E PDF p.3 Pin Functions VINT (internal supply bypass): \"Bypass to GND with 2.2-μF, 6.3-V capacitor.\"; PDF p.15 10.1 Layout Guidelines: \"Bypass VINT to ground with a 2.2-μF ceramic capacitor rated 6.3 V.\""
+note = "VINT is the internal supply of the part; the capacitor is rated 6.3 V."
 
 [models.ratings]
 max_voltage_v = 11.8           # 6.1 VM power supply voltage
@@ -643,6 +798,27 @@ vil = [[2.7, 0.81], [5.5, 1.65]]
 "22" = "ain2"
 "23" = "pwma"
 "24" = "vm1"
+
+# Supply capacitance, Toshiba TB6612FNG datasheet 2007-06-30 (https://toshiba.semicon-storage.com/info/TB6612FNG_datasheet_en_20141001.pdf,
+# sha256 928865fade9c7c18bd11ae5c4d3ac68a56ead028239669d5e5e9d6b087f716de). Only the Typical Application Diagram gives values; VM1, VM2
+# and VM3 are one supply net in it, so the VM capacitor is stated once, on VM1. The datasheet has no fault or status output.
+[[models.supply_cap]]
+role = "vcc"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-5
+min_single_f = 1.0e-5
+basis = "Toshiba TB6612FNG 2007-06-30 PDF p.7 Typical Application Diagram: C4 0.1 uF and C3 10 uF (polarised) in parallel from Vcc to ground; Note: \"Condensers for noise absorption (C1, C2, C3, and C4) should be connected as close as possible to the IC.\""
+note = "The 10 uF capacitor is the stated bulk value; the 0.1 uF in parallel with it is the high-frequency part and is not added to the minimum."
+
+[[models.supply_cap]]
+role = "vm1"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-5
+min_single_f = 1.0e-5
+basis = "Toshiba TB6612FNG 2007-06-30 PDF p.7 Typical Application Diagram: C2 0.1 uF and C1 10 uF (polarised) in parallel from the VM supply (4.5 V to 13.5 V) to ground; Note: \"Condensers for noise absorption (C1, C2, C3, and C4) should be connected as close as possible to the IC.\""
+note = "The 10 uF capacitor is the stated bulk value; the 0.1 uF in parallel with it is the high-frequency part and is not added to the minimum. VM1, VM2 and VM3 share one supply net."
 
 [models.ratings]
 max_voltage_v = 15.0           # Absolute Maximum Ratings, supply voltage VM

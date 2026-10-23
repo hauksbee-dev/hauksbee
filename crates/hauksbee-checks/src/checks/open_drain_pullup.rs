@@ -56,7 +56,7 @@ fn is_series_part(idx: &Index<'_>, c: &Component) -> bool {
 
 /// Whether `net` is held at a positive supply level.
 fn is_positive_rail(idx: &Index<'_>, net: i64) -> bool {
-    if idx.level(net).is_some_and(|v| v > 0.0) {
+    if idx.level(net).is_some_and(|v| v > 0.0) || idx.feeds_a_supply_pin(net) {
         return true;
     }
     idx.members(net).iter().any(|(c, p)| {
@@ -154,6 +154,11 @@ pub fn open_drain_pullup_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> Net
             };
             if model.is_open_drain_pad(&p.number) {
                 let role = model.pins.get(&p.number).cloned().unwrap_or_default();
+                // A pad the card also gives a `[[models.pin_bias]]` row is judged
+                // by `pin_bias` (with the datasheet's resistor range): one finding.
+                if model.pin_bias.iter().any(|b| b.role == role) {
+                    continue;
+                }
                 by_net.entry(net).or_default().push((c, p, role));
             }
         }
@@ -273,6 +278,22 @@ mod tests {
         assert_eq!(found[0].nets, ["ALERT_N"]);
     }
 
+    /// A rail whose name states no voltage (`V5`) is still the rail when a chip's
+    /// supply pin is on it.
+    #[test]
+    fn a_pull_up_to_a_rail_named_without_a_voltage_counts_when_a_chip_runs_from_it() {
+        let nets = [(GND, "GND"), (V33, "V5"), (ALERT, "ALERT_N")];
+        let b = board(
+            &nets,
+            vec![sensor(ALERT), receiver(ALERT), resistor("R1", ALERT, V33)],
+        );
+        let found = open_drain_pullup_lint(&b, &ModelLibrary::builtin()).findings;
+        assert!(found.is_empty(), "{found:#?}");
+        let b = board(&nets, vec![sensor(ALERT), receiver(ALERT)]);
+        let found = open_drain_pullup_lint(&b, &ModelLibrary::builtin()).findings;
+        assert_eq!(found.len(), 1, "{found:#?}");
+    }
+
     #[test]
     fn an_undescribed_module_on_the_net_is_not_judged() {
         let found = run(vec![sensor(ALERT), module(ALERT)]);
@@ -312,5 +333,74 @@ mod tests {
         header.lib_id = "Connector:Conn_01x01".into();
         let off_board = run(vec![sensor(ALERT), header]);
         assert!(off_board.is_empty(), "{off_board:#?}");
+    }
+
+    /// The interrupt, alert, ready and fault outputs the datasheets call
+    /// open-drain are marked on their cards: read by a receiver with no pull-up
+    /// each is flagged, and the same net pulled up to the rail is silent.
+    /// Each row is a part value and the pad of an open-drain output on its card.
+    #[test]
+    fn the_open_drain_outputs_the_datasheets_name_need_a_pull_up() {
+        const OUTPUTS: [(&str, &str); 15] = [
+            ("INA226AIDGSR", "3"),
+            ("TMP117AIDRVR", "3"),
+            ("ADS1115IDGSR", "2"),
+            ("MAX17048G+T10", "5"),
+            ("PCF8563T", "3"),
+            ("DS3231SN", "3"),
+            ("TSL25911FN", "2"),
+            ("VL53L0X", "7"),
+            ("PCF8574DWR", "13"),
+            ("DRV8833PW", "8"),
+            ("LM393", "1"),
+            ("MCP73833-AMI/UN", "3"),
+            ("MP2650", "9"),
+            ("MAX17760", "5"),
+            ("SN74LVC1G07DBVR", "4"),
+        ];
+        // A part of a `variant_of` family resolves only when every pad its card maps is
+        // on the footprint, so each part carries all of its card's pads: the open-drain
+        // one on the alert net and the rest on nets of their own.
+        let lib = ModelLibrary::builtin();
+        let out = |value: &str, pad: &str| {
+            // A few cards also name the package they describe.
+            let footprint = match value {
+                "MAX17048G+T10" => "Package_DFN_QFN:TDFN-8-1EP_3x3mm",
+                "PCF8574DWR" => "Package_SO:SOIC-16W_7.5x10.3mm_P1.27mm",
+                _ => "",
+            };
+            let mut bare = part("U1", value, &[]);
+            bare.footprint = footprint.into();
+            let fitted = hauksbee_extract::assembly::AssemblyState::of(&bare).fitted();
+            let card = fitted.and_then(|f| hauksbee_bind::binder::resolve(&lib, f).model);
+            let pads: Vec<String> = card.map_or_else(
+                || vec![pad.to_string()],
+                |m| m.pins.keys().cloned().collect(),
+            );
+            let wired: Vec<(&str, i64)> = pads
+                .iter()
+                .zip(100..)
+                .map(|(n, net)| (n.as_str(), if n == pad { ALERT } else { net }))
+                .collect();
+            let mut placed = part("U1", value, &wired);
+            placed.footprint = footprint.into();
+            placed
+        };
+        let mut failures = Vec::new();
+        for (value, pad) in OUTPUTS {
+            let flagged = run(vec![out(value, pad), receiver(ALERT)]);
+            if flagged.len() != 1 || flagged[0].check != LintCheck::MissingOpenDrainPullup {
+                failures.push(format!("{value} pad {pad} bare: {flagged:?}"));
+            }
+            let pulled = run(vec![
+                out(value, pad),
+                receiver(ALERT),
+                resistor("R1", ALERT, V33),
+            ]);
+            if !pulled.is_empty() {
+                failures.push(format!("{value} pad {pad} pulled up: {pulled:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }

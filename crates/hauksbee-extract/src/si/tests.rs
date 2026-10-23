@@ -282,6 +282,7 @@ fn crystal_unknown_cl_is_info_only() {
     let f = r.of_check(SiCheck::CrystalLoadCap).next().unwrap();
     assert_eq!(f.severity, SiSeverity::Info);
     assert!(f.message.contains("CL spec unknown"));
+    assert!(f.message.contains("load capacitance unknown"));
 }
 
 /// A CL the crystal's own value states is the spec: four times the right load
@@ -592,6 +593,44 @@ fn a_cl_in_the_part_number_or_a_load_property_is_the_spec() {
     // No such property: nothing to judge against.
     let none = crystal_findings(&xtal_board("12MHz", "27p", "27p"), &CrystalCards::new());
     assert!(fired(&none).is_empty(), "{none:?}");
+}
+
+/// A generic crystal with no part card takes its CL from a description or
+/// parameter field that writes it ("12pF") alongside the rest: heavy caps fire
+/// on it, the matching caps stay silent. With nothing stating a CL the check
+/// abstains with a plain "load capacitance unknown" note instead of a verdict.
+#[test]
+fn a_generic_crystal_takes_cl_from_its_description_and_abstains_when_unknown() {
+    for key in ["Description", "Params", "Comment"] {
+        let mut flawed = xtal_board("12MHz", "47p", "47p");
+        add_property(&mut flawed, "Y1", key, "Crystal 12MHz 12pF 20ppm");
+        let r = crystal_findings(&flawed, &CrystalCards::new());
+        assert_eq!(fired(&r).len(), 1, "{key}: {r:?}");
+        assert!(
+            r[0].message.contains("CL = 12.0 pF"),
+            "{key}: {}",
+            r[0].message
+        );
+        let mut ok = xtal_board("12MHz", "18p", "18p");
+        add_property(&mut ok, "Y1", key, "Crystal 12MHz 12pF 20ppm");
+        assert!(
+            fired(&crystal_findings(&ok, &CrystalCards::new())).is_empty(),
+            "{key}"
+        );
+    }
+    // A link or a footprint property that happens to contain a number is not read.
+    let mut link = xtal_board("12MHz", "47p", "47p");
+    add_property(&mut link, "Y1", "Datasheet", "https://x.example/12pF.pdf");
+    assert!(fired(&crystal_findings(&link, &CrystalCards::new())).is_empty());
+    // Nothing states the CL: abstain, and say why in plain words.
+    let r = crystal_findings(&xtal_board("12MHz", "47p", "47p"), &CrystalCards::new());
+    assert!(fired(&r).is_empty(), "{r:?}");
+    assert!(
+        r.iter()
+            .any(|f| f.severity == SiSeverity::Info
+                && f.message.contains("load capacitance unknown")),
+        "{r:?}"
+    );
 }
 
 /// A crystal's card states its CL and C0/C1; the check judges against the card

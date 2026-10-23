@@ -5237,6 +5237,14 @@ id = "pcf8574_dw"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, SOIC-16 wide 7.5 mm (DW)"
 
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"13" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -5568,6 +5576,14 @@ id = "pcf8574_n"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, PDIP-16 (N)"
 
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"13" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -5898,6 +5914,14 @@ missing = ["p_port_pin_drive", "quasi_bidirectional_pull_up", "int_pin_output", 
 id = "pcf8574_dgv"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, TVSOP-20 (DGV)"
+
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
 
 [models.source]
 tier = "curated-library"
@@ -6236,6 +6260,14 @@ missing = ["p_port_pin_drive", "quasi_bidirectional_pull_up", "int_pin_output", 
 id = "pcf8574_pw"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, TSSOP-20 (PW)"
+
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
 
 [models.source]
 tier = "curated-library"
@@ -6576,6 +6608,14 @@ id = "pcf8574_rgy"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, VQFN-20 3.5 x 4.5 mm (RGY)"
 
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -6915,6 +6955,14 @@ id = "pcf8574_rgt"
 kind = "digital"
 description = "Texas Instruments PCF8574 remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x20, VQFN-16 3 x 3 mm (RGT)"
 
+# Open-drain outputs: TI PCF8574 SCPS068K Rev. K (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574.pdf
+# sha256 745da5489509a9ed802977a30bf5bf03aab1aa06ae53c717c49cc98053cf8cfc
+[models.pin_capability.open_drain]
+basis = "TI PCF8574 SCPS068K Rev. K PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574 device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"14" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -7245,6 +7293,14 @@ missing = ["p_port_pin_drive", "quasi_bidirectional_pull_up", "int_pin_output", 
 id = "pcf8574a_dw"
 kind = "digital"
 description = "Texas Instruments PCF8574A remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x38, SOIC-16 wide 7.5 mm (DW)"
+
+# Open-drain outputs: TI PCF8574A SCPS069H (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574a.pdf
+# sha256 67a11a49db26f2e415196694707ac06598d81b764ed7ce6de138a465b59c04d5
+[models.pin_capability.open_drain]
+basis = "TI PCF8574A SCPS069H PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574A device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"13" = "INT"
 
 [models.source]
 tier = "curated-library"
@@ -7577,6 +7633,14 @@ id = "pcf8574a_n"
 kind = "digital"
 description = "Texas Instruments PCF8574A remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x38, PDIP-16 (N)"
 
+# Open-drain outputs: TI PCF8574A SCPS069H (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574a.pdf
+# sha256 67a11a49db26f2e415196694707ac06598d81b764ed7ce6de138a465b59c04d5
+[models.pin_capability.open_drain]
+basis = "TI PCF8574A SCPS069H PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574A device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"13" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -7907,6 +7971,14 @@ missing = ["p_port_pin_drive", "quasi_bidirectional_pull_up", "int_pin_output", 
 id = "pcf8574a_dgv"
 kind = "digital"
 description = "Texas Instruments PCF8574A remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x38, TVSOP-20 (DGV)"
+
+# Open-drain outputs: TI PCF8574A SCPS069H (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574a.pdf
+# sha256 67a11a49db26f2e415196694707ac06598d81b764ed7ce6de138a465b59c04d5
+[models.pin_capability.open_drain]
+basis = "TI PCF8574A SCPS069H PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574A device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
 
 [models.source]
 tier = "curated-library"
@@ -8247,6 +8319,14 @@ id = "pcf8574a_pw"
 kind = "digital"
 description = "Texas Instruments PCF8574A remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x38, TSSOP-20 (PW)"
 
+# Open-drain outputs: TI PCF8574A SCPS069H (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574a.pdf
+# sha256 67a11a49db26f2e415196694707ac06598d81b764ed7ce6de138a465b59c04d5
+[models.pin_capability.open_drain]
+basis = "TI PCF8574A SCPS069H PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574A device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
+
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -8585,6 +8665,14 @@ missing = ["p_port_pin_drive", "quasi_bidirectional_pull_up", "int_pin_output", 
 id = "pcf8574a_rgy"
 kind = "digital"
 description = "Texas Instruments PCF8574A remote 8-bit I/O expander for I2C, quasi-bidirectional P-port, I2C base address 0x38, VQFN-20 3.5 x 4.5 mm (RGY)"
+
+# Open-drain outputs: TI PCF8574A SCPS069H (September 2024)
+# https://www.ti.com/lit/ds/symlink/pcf8574a.pdf
+# sha256 67a11a49db26f2e415196694707ac06598d81b764ed7ce6de138a465b59c04d5
+[models.pin_capability.open_drain]
+basis = "TI PCF8574A SCPS069H PDF p.1 1 Features: \"Open-drain interrupt output\"; PDF p.3 Table 4-1 Pin Functions, INT (O): \"Interrupt output. Connect to VCC through a pullup resistor.\"; PDF p.12 7.1 Overview: \"The PCF8574A device provides an open-drain output ( INT) that can be connected to the interrupt input of a microcontroller.\""
+[models.pin_capability.open_drain.pads]
+"1" = "INT"
 
 [models.source]
 tier = "curated-library"

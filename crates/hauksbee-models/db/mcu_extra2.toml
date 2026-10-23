@@ -660,6 +660,35 @@ unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 
 # -----------------------------------------------------------------------------
 # WLCSP90: STM32F405OG, STM32F405OE (O = 90 pins, WLCSP only).
@@ -1341,6 +1370,35 @@ typ = 4.0
 unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 
 # -----------------------------------------------------------------------------
@@ -2042,6 +2100,35 @@ typ = 4.0
 unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 
 # -----------------------------------------------------------------------------
@@ -2795,6 +2882,35 @@ typ = 4.0
 unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 
 # -----------------------------------------------------------------------------
@@ -3581,6 +3697,35 @@ unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 
 # -----------------------------------------------------------------------------
 # UFBGA176: STM32F407IG, STM32F407IE with package letter H (I = 176 pins; H = UFBGA).
@@ -4365,6 +4510,35 @@ typ = 4.0
 unit = "pF"
 conditions = "internal sample and hold capacitor CADC"
 basis = "ST STM32F405xx/F407xx datasheet DS8626 Rev 12 (March 2026), Table 67 ADC characteristics p.135"
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PB10/PB11): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 
 # -----------------------------------------------------------------------------

@@ -3936,6 +3936,27 @@ commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 PA9 (TX) / PA10 (RX), or USART2 PA14 (TX) / PA15 (RX), 8E1"
 cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 41 PDF p.110-111 (pins), Table 226 (PID 0x448). The Get command list and version byte are derived, not printed per device."
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0091 Rev 10 (cached copy target/launch/wp1-datasheets/rm0091.pdf; ST document rm0091-stm32f0x1stm32f0x2stm32f0x8-advanced-armbased-32bit-mcus) sha256 62e6ccbdcbc1be14db6a08936759021261a53282955616d95a0dfe301c081ae0.
+
+[[models.pin_bias]]
+role = "pa10_usart1_rx"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 41 (STM32F071xx/072xx configuration in system memory boot mode) PDF p.110, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0091 Rev 10 PDF p.705 section 27.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pa15"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 41 (STM32F071xx/072xx configuration in system memory boot mode) PDF p.110, USART2_RX pin: \"PA15 pin: USART2 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0091 Rev 10 PDF p.705 section 27.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 # UNLISTED ON PURPOSE (F0): (a) "nBOOT1 = 0, BOOT0 = 1 -> Embedded SRAM" is reachable only after the user clears the nBOOT1
 # option bit; that is not the factory state, so no row. (b) The BOOT_SEL = 0 / nBOOT0 rows are marked "available on STM32F04x
 # and STM32F09x devices only" and do not exist on F07x. (c) The empty-check row (footnote 2) is F04x/F09x only.
@@ -4360,6 +4381,19 @@ commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x43, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 on PA9 (TX) / PA10 (RX), 8E1"
 cite = "AN3155 Rev 18 (framing, ACK 0x79, NACK 0x1F, command set Table 2); AN2606 Rev 70 Table 3 (USART V2.2), Table 45 PDF p.116 (USART1 pins), Table 226 (PID 0x410). The Get command list and version byte are derived from AN3155 Table 3/Table 2 rules, not printed per device."
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0008 Rev 20 (cached copy target/launch/wp1-datasheets/rm0008.pdf; ST URL https://www.st.com/resource/en/reference_manual/rm0008-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 097bc47ab8aa0c5d4a68f836dbab95c5b9acb2b0c8116a2959307743204b5097.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 45 (STM32F10xxx configuration in system memory boot mode) PDF p.116, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0008 Rev 20 PDF p.790 section 27.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 [[models]]
 id = "stm32f401c"
 kind = "mcu"
@@ -4725,6 +4759,27 @@ commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 PA9 (TX) / PA10 (RX), USART2 PA2/PA3 or USART3 PC10/PC11, 8E1"
 cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0440 Rev 9 (cached copy target/launch/wp1-datasheets/rm0440.pdf; ST document rm0440-stm32g4-series-advanced-armbased-32bit-mcus) sha256 7f8c15bc667c46614e2c5ad0341b9eaa20e8d417f21b819b9f2dde7dfe1ae564.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART3_RX pin: \"PC11 pin: USART3 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 # UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
 # (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
 # whatever the pin). (d) Dual-bank / BFB2 and "both banks empty" rows of AN2606 Pattern 14: not a pin function.
@@ -4942,6 +4997,19 @@ product_id = 0x0469
 commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 PA9 (TX) / PA10 (RX) or USART2 PA2 (TX) / PA3 (RX), 8E1"
 cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins; USART3 PC10/PC11 has no LQFP48 pad, DS12288 Table 12), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0440 Rev 9 (cached copy target/launch/wp1-datasheets/rm0440.pdf; ST document rm0440-stm32g4-series-advanced-armbased-32bit-mcus) sha256 7f8c15bc667c46614e2c5ad0341b9eaa20e8d417f21b819b9f2dde7dfe1ae564.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 # UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
 # (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
@@ -5205,6 +5273,35 @@ note = "BOOT0 low boots BOOT_ADD0 (main flash by default); high boots BOOT_ADD1"
 implements = ["cortex_m7_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick"]
 missing = ["adc_injection", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0410 Rev 5 (https://www.st.com/resource/en/reference_manual/rm0410-stm32f76xxx-and-stm32f77xxx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 104ed7394d65bf5cfdfec31e063cf412ba58985973fe5ed72c93fd9735dfdb64.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.244, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pb11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.244, USART3_RX pin (USART3 on PB11/PB10): \"PB11 pin: USART3 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[[models.pin_bias]]
+role = "pc11"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.245, USART3_RX pin (USART3 on PC11/PC10): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32L011/L021 K (LQFP32). Co-simulates on the stock Renode L071 platform
 # with SysTick unlinked from its RCC model (db/mcu/stm32l0.soc.toml). Pad map:
@@ -5421,6 +5518,19 @@ product_id = 0x0457
 commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART2 on PA9 (TX) / PA10 (RX), or PA2 (TX) / PA3 (RX), 8E1"
 cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 142 PDF p.342 (pins), Table 226 (PID 0x457 for L01x/L02x). The Get command list and version byte are derived, not printed per device."
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0377 Rev 10 (https://www.st.com/resource/en/reference_manual/rm0377-ultralowpower-stm32l0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) sha256 8e59c3e92e7e685f4a656432c0b0921dd4379f1a95dd4b7a445e69af3106efcc.
+
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 142 (STM32L01xxx/02xxx configuration in system memory boot mode) PDF p.342, USART2_RX pin (USART2 on PA9/PA10): \"PA10 pin: USART2 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0377 Rev 10 PDF p.662 section 24.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 # UNLISTED ON PURPOSE (L0): (a) SRAM row (nBOOT1 = 0 with BOOT0 high) needs nBOOT1 = 0, not factory. (b) nBOOT_SEL = 1 rows
 # (BOOT0 from the nBOOT0 option bit): grey = category 1 only and not the factory state. (c) The empty-check override is
@@ -5639,6 +5749,18 @@ flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; st
 bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
 cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-WROOM-32E/32UE Datasheet v2.1 (https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf) sha256 4c7a345d1c1bfec34c38665639e39a7f43b79a35a12f6adcc2c7c0f83850f8b8;
+#   ESP32 Series Datasheet v5.3 (https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf) sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf;
+#   ESP32 Technical Reference Manual v5.8 (https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf) sha256 4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0.
+[[models.pin_bias]]
+role = "p03_rxd"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\"; ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.12 Table 3 Pin Definitions: \"RXD0 34 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\"; ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 [[models]]
 id = "esp32"
 kind = "mcu"
@@ -5824,6 +5946,18 @@ flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; st
 bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
 cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32 Series Datasheet v5.3 (https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf) sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf;
+#   ESP32-WROOM-32E/32UE Datasheet v2.1 (https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf) sha256 4c7a345d1c1bfec34c38665639e39a7f43b79a35a12f6adcc2c7c0f83850f8b8;
+#   ESP32 Technical Reference Manual v5.8 (https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf) sha256 4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0.
+[[models.pin_bias]]
+role = "p03_rxd"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32 Series Datasheet v5.3 PDF p.15 Table 2-1 Pin Definitions (QFN48): \"U0RXD 40 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\"; ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\" (an ESP32 module; the card is the bare chip); ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 [[models]]
 id = "esp32_pico"
 kind = "mcu"
@@ -5985,6 +6119,19 @@ property = "strap_mode"
 flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
 bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
 cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-PICO Series Datasheet v1.4 (https://www.espressif.com/sites/default/files/documentation/esp32-pico-d4_datasheet_en.pdf) sha256 652834c31a0ac4930aec4ac23754d2737e8bdecb76410edf3c48be519a6c40af;
+#   ESP32 Series Datasheet v5.3 (https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf) sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf;
+#   ESP32-WROOM-32E/32UE Datasheet v2.1 (https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf) sha256 4c7a345d1c1bfec34c38665639e39a7f43b79a35a12f6adcc2c7c0f83850f8b8;
+#   ESP32 Technical Reference Manual v5.8 (https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf) sha256 4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0.
+[[models.pin_bias]]
+role = "p03_rxd"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-PICO Series Datasheet v1.4 PDF p.15 Table 2 Pin Description of ESP32-PICO-D4: \"U0RXD 40 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\" (the ESP32 chip inside the SiP); ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\" (an ESP32 module); ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 [[models]]
 id = "lilygo_t_micro32"
@@ -6691,6 +6838,17 @@ flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; 
 bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }   # TRM v1.4 p.181 lists bits 0, 2, 3 only; bit 1 = GPIO3 rests on an Espressif QEMU ROM run, unconfirmed by any Espressif document
 cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-C3-MINI-1 Datasheet v2.2 (https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf) sha256 de7361381348d82a1abd337f10170be7a420675987568f71fe3c5b100deed270;
+#   ESP32-C3 Technical Reference Manual v1.4 (https://www.espressif.com/sites/default/files/documentation/esp32-c3_technical_reference_manual_en.pdf) sha256 90ef825653e7a2657dc1bb294041aace9f9b69da87d775c2f1b5bd11eb317423.
+[[models.pin_bias]]
+role = "p020_rxd"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-C3-MINI-1 Datasheet v2.2 PDF p.14 (section 3.1 Chip Boot Mode Control): \"In Joint Download Boot mode, users can download binary files into flash using UART0 or USB interface.\"; PDF p.34 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\"; PDF p.11 Table 3 Pin Definitions: \"RXD0 30 I/O/T GPIO20, U0RXD\"; ESP32-C3 TRM v1.4 PDF p.555 (UART chapter, 26.4.4 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 [[models]]
 id = "esp32c3_wroom02"
 kind = "mcu"
@@ -7020,6 +7178,17 @@ flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; 
 bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }   # TRM v1.4 p.181 lists bits 0, 2, 3 only; bit 1 = GPIO3 rests on an Espressif QEMU ROM run, unconfirmed by any Espressif document
 cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-C3 Series Datasheet v2.4 (https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf) sha256 833fc000b4b3c3d39c496fcbd597fed5806956503ce7390b19cc8ae82f19f968;
+#   ESP32-C3 Technical Reference Manual v1.4 (https://www.espressif.com/sites/default/files/documentation/esp32-c3_technical_reference_manual_en.pdf) sha256 90ef825653e7a2657dc1bb294041aace9f9b69da87d775c2f1b5bd11eb317423.
+[[models.pin_bias]]
+role = "p020_rxd"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-C3 Series Datasheet v2.4 PDF p.31 (section 3.1 Chip Boot Mode Control): \"In Joint Download Boot mode, users can download binary files into flash using UART0 or USB interface.\"; PDF p.17 Table 2-1 Pin Overview (QFN32): pin 27 \"U0RXD\"; PDF p.20 pin-function table: \"27 GPIO20 U0RXD\"; ESP32-C3 TRM v1.4 PDF p.555 (UART chapter, 26.4.4 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 [[models]]
 id = "esp32c6_mini1"
 kind = "mcu"
@@ -7183,6 +7352,17 @@ note = "GPIO9 (BOOT) high = SPI boot (normal); low with GPIO8 high = download bo
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "pin_and_package_current_ratings"]
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-C6-MINI-1 Datasheet v1.5 (https://www.espressif.com/sites/default/files/documentation/esp32-c6-mini-1_mini-1u_datasheet_en.pdf) sha256 26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2;
+#   ESP32-C6 Technical Reference Manual v1.2 (https://www.espressif.com/sites/default/files/documentation/esp32-c6_technical_reference_manual_en.pdf) sha256 e08d5b61ebcfa2a78f9735e3f721817cb1dc2df9cf05096d2f0399eaba9f1734.
+[[models.pin_bias]]
+role = "gpio17_rxd0"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-C6 TRM v1.2 PDF p.375 (section 9.2.2 Boot Mode Control): \"In Download Boot mode, users can download code into flash using UART0 or USB interface.\"; ESP32-C6-MINI-1 Datasheet v1.5 PDF p.11 Table 3 Pin Definitions: \"RXD0 30 I/O/T U0RXD, GPIO17, FSPICS1\"; ESP32-C6 TRM v1.2 PDF p.737 (UART chapter, 27.4.4 UART Data Frame): \"The start bit is logical low, whereas stop bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -7357,6 +7537,17 @@ max_voltage_v = 3.6   # Table 6-1, VDD33 -0.3 to 3.6 V
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
 missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-S3-MINI-1 Datasheet v1.7 (https://www.espressif.com/sites/default/files/documentation/esp32-s3-mini-1_mini-1u_datasheet_en.pdf) sha256 4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04;
+#   ESP32-S3 Technical Reference Manual v1.8 (https://www.espressif.com/sites/default/files/documentation/esp32-s3_technical_reference_manual_en.pdf) sha256 4484bf8a69035ec42a731c58c64ada6fbd1f1618c5559409f134d9ea083f444f.
+[[models.pin_bias]]
+role = "gpio44_rxd0"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-S3-MINI-1 Datasheet v1.7 PDF p.15 (section 3.1 Chip Boot Mode Control): \"In Joint Download Boot mode, users can download binary files into flash using UART0 or USB interface.\"; PDF p.12 Table 3 Pin Definitions: \"RXD0 40 I/O/T U0RXD, GPIO44, CLK_OUT2\"; ESP32-S3 TRM v1.8 PDF p.930 (UART chapter, 26.4.4 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ESP32-S2-MINI-1 / -1U module (65 pads; -N4 / -N4R2 and end-of-life -H4 variants, datasheet v1.6 Tables 1-2 p.10).
@@ -7520,6 +7711,17 @@ note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
 [models.ratings]
 max_voltage_v = 3.6   # Table 9, VDD33 -0.3 to 3.6 V
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-S2-MINI-1 Datasheet v1.6 (https://www.espressif.com/sites/default/files/documentation/esp32-s2-mini-1_esp32-s2-mini-1u_datasheet_en.pdf) sha256 06999476c9d1dede2e6828384dc79aa1e7935059e0fc8349e51f0c962fcfa882;
+#   ESP32-S2 Technical Reference Manual v1.3 (https://www.espressif.com/sites/default/files/documentation/esp32-s2_technical_reference_manual_en.pdf) sha256 686f173e83212cdcdece789a72c8262c5ff164908108d31369d7326cc2159855.
+[[models.pin_bias]]
+role = "gpio44_rxd0"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-S2 TRM v1.3 PDF p.236 (section 7.2 Boot Mode): \"In download boot mode, users can download code to SRAM or flash using UART0, UART1, QPI or USB interface.\"; ESP32-S2-MINI-1 Datasheet v1.6 PDF p.11 Table 3 Pin Definitions: \"RXD0 40 I/O/T U0RXD, GPIO44, CLK_OUT2\"; ESP32-S2 TRM v1.3 PDF p.515 (UART chapter, 23.3.5 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; PDF p.516: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ESP32-C6-WROOM-1 / -1U module (29 pads).
@@ -7628,6 +7830,17 @@ note = "GPIO9 (BOOT) high = SPI boot (normal); low with GPIO8 high = download bo
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "pin_and_package_current_ratings"]
+
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   ESP32-C6-WROOM-1 Datasheet v1.4 (https://www.espressif.com/sites/default/files/documentation/esp32-c6-wroom-1_wroom-1u_datasheet_en.pdf) sha256 163020762fa6d499e0c611c5a13e78ad9d4720b421c6bc5e14e16fc748862b73;
+#   ESP32-C6 Technical Reference Manual v1.2 (https://www.espressif.com/sites/default/files/documentation/esp32-c6_technical_reference_manual_en.pdf) sha256 e08d5b61ebcfa2a78f9735e3f721817cb1dc2df9cf05096d2f0399eaba9f1734.
+[[models.pin_bias]]
+role = "gpio17_rxd0"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "ESP32-C6 TRM v1.2 PDF p.375 (section 9.2.2 Boot Mode Control): \"In Download Boot mode, users can download code into flash using UART0 or USB interface.\"; ESP32-C6-WROOM-1 Datasheet v1.4 PDF p.11 Table 3 Pin Definitions: \"RXD0 24 I/O/T U0RXD, GPIO17, FSPICS1\"; ESP32-C6 TRM v1.2 PDF p.737 (UART chapter, 27.4.4 UART Data Frame): \"The start bit is logical low, whereas stop bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
+note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 # ─────────────────────────────────────────────────────────────────────────────
 

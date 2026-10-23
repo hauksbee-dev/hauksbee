@@ -2273,6 +2273,12 @@ gnd_pin    = "3"
 "27" = "dsr_n"
 "28" = "dtr_n"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Silicon Labs CP2102 Rev. 1.0 (10/04), local copy CP2102.pdf (no stable URL; the card header cites Rev. 1.8, which could not be fetched), sha256 936902b91839c997f3425c94241f00aa0cf26cc1ccefd6c501d0fe4864d8ac32.
+[models.pin_capability.open_drain]
+basis = "Silicon Labs CP2102 Rev. 1.0 PDF p.6 Table 4 CP2102 Pin Definitions: RST: \"Device Reset. Open-drain output of internal POR or VDD monitor.\""
+[models.pin_capability.open_drain.pads]
+"9" = "RST"
+
 # VDD is an input only when the regulator is bypassed (REGIN tied to the 3 V
 # net); bus-powered it is the regulator's output with bypass capacitors only.
 # REGIN, the other supply pad, is still held to being wired.
@@ -9842,6 +9848,12 @@ i2c_max_hz = { max = 1000000.0, unit = "Hz", conditions = "I2C fast-mode plus; f
 "15" = "sda"
 "16" = "scl"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS122C04 SBAS751B (Oct 2017, rev. Oct 2018), https://www.ti.com/lit/ds/symlink/ads122c04.pdf, sha256 2380301f98deb11efb06810f265a79ea1c75ca1df488833cd74d32364d5030b3.
+[models.pin_capability.open_drain]
+basis = "TI ADS122C04 SBAS751B Rev. B PDF p.3 Pin Functions and p.36 section 8.5.1.3 Data Ready (DRDY): DRDY: \"Data ready, active low. Connect to DVDD using a pullup resistor.\"; section 8.5.1.3: \"DRDY is an open-drain output pin that indicates when a new conversion result is ready for retrieval.\""
+[models.pin_capability.open_drain.pads]
+"14" = "DRDY"
+
 [models.ratings]
 max_voltage_v = 7.0           # Section 6.1, AVDD to AVSS and DVDD to DGND 7 V
 max_pin_current_a = 0.01      # Section 6.1, continuous input current, any non-supply pin
@@ -10067,6 +10079,12 @@ i2c_max_hz = { max = 1000000.0, unit = "Hz", conditions = "I2C fast-mode plus; f
 # "17"; Eagle lands often call it "EP". Both keys, distinct roles.
 "17" = "avss_ep"
 "EP" = "avss_ep_eagle"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI ADS122C04 SBAS751B (Oct 2017, rev. Oct 2018), https://www.ti.com/lit/ds/symlink/ads122c04.pdf, sha256 2380301f98deb11efb06810f265a79ea1c75ca1df488833cd74d32364d5030b3.
+[models.pin_capability.open_drain]
+basis = "TI ADS122C04 SBAS751B Rev. B PDF p.3 Pin Functions and p.36 section 8.5.1.3 Data Ready (DRDY): DRDY: \"Data ready, active low. Connect to DVDD using a pullup resistor.\"; section 8.5.1.3: \"DRDY is an open-drain output pin that indicates when a new conversion result is ready for retrieval.\""
+[models.pin_capability.open_drain.pads]
+"12" = "DRDY"
 
 [models.ratings]
 max_voltage_v = 7.0           # Section 6.1, AVDD to AVSS and DVDD to DGND 7 V
@@ -11081,6 +11099,12 @@ warning = "source-bound supply model only: the typical 100BASE-TX-with-traffic s
 "31" = "rxp"
 "32" = "rbias"
 "33" = "gnd"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: Microchip LAN8710A/LAN8710Ai DS00002164B (2016), https://ww1.microchip.com/downloads/en/DeviceDoc/00002164B.pdf, sha256 0f4b8670bcfc7e6327e2053a22c892bea2f4e7722262a7e799a84dcdf17efa7d.
+[models.pin_capability.open_drain]
+basis = "Microchip LAN8710A/LAN8710Ai DS00002164B Rev. B PDF p.12 pin table (MDIO buffer type VIS/VOD8) and p.14 Table 2-9 Buffer Types: MDIO (SMI Data Input/Output) buffer type \"VIS/VOD8\"; VOD8: \"Variable voltage open-drain output with 8mA sink\" (nINT, pin 18, is not listed: its buffer type is VO8, 8mA sink and 8mA source, although the pin text says \"Place an external resistor pull-up to VDDIO.\")"
+[models.pin_capability.open_drain.pads]
+"16" = "MDIO"
 
 [models.ratings]
 max_voltage_v = 3.6   # Section 5.1 p.54 absolute maximum, VDDIO / VDD1A / VDD2A -0.5 V to +3.6 V
@@ -12920,6 +12944,12 @@ warning = "source-bound supply-draw model: the awake VDD supply current (17 mA t
 "23" = "dtr"
 "24" = "dcd"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Silicon Labs CP2104 Rev. 1.0 (10/10), https://www.silabs.com/documents/public/data-sheets/cp2104.pdf, sha256 ddc53152fc933b7e995b2f48b4219d75af4fed36fb1f6f73d89e3c5501229e48.
+[models.pin_capability.open_drain]
+basis = "Silicon Labs CP2104 Rev. 1.0 PDF p.7 Table 7 CP2104 Pin Definitions: RST: \"Device Reset. Open-drain output of internal POR or VDD monitor.\""
+[models.pin_capability.open_drain.pads]
+"9" = "RST"
+
 # VDD is the on-chip regulator's output in the bus-powered configuration, so a
 # board that feeds REGIN and decouples VDD has fed it.
 [[models.optional_supplies]]
@@ -14076,6 +14106,13 @@ max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
 "9" = "vdd"
 "10" = "nc" # n.c.
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: NXP PCF8563 Rev. 11.1 (19 January 2026), sha256 2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4.
+[models.pin_capability.open_drain]
+basis = "NXP PCF8563 Rev. 11.1 PDF p.8 Table 3 Pin description: INT: \"Interrupt output (open-drain; active LOW)\"; CLKOUT: \"Clock output, open-drain\""
+[models.pin_capability.open_drain.pads]
+"4" = "INT"
+"8" = "CLKOUT"
+
 [models.coverage]
 implements = []
 missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
@@ -14199,6 +14236,13 @@ max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
 "6" = "scl"
 "7" = "clkout" # Open-drain clock output
 "8" = "vdd"
+# Open-drain pad(s) for the open-drain pull-up check. Source: NXP PCF8563 Rev. 11.1 (19 January 2026), sha256 2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4.
+[models.pin_capability.open_drain]
+basis = "NXP PCF8563 Rev. 11.1 PDF p.8 Table 3 Pin description: INT: \"Interrupt output (open-drain; active LOW)\"; CLKOUT: \"Clock output, open-drain\""
+[models.pin_capability.open_drain.pads]
+"3" = "INT"
+"7" = "CLKOUT"
+
 [models.coverage]
 implements = []
 missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
@@ -14315,6 +14359,13 @@ max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
 "6" = "scl"
 "7" = "clkout" # Open-drain clock output
 "8" = "vdd"
+# Open-drain pad(s) for the open-drain pull-up check. Source: NXP PCF8563 Rev. 11.1 (19 January 2026), sha256 2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4.
+[models.pin_capability.open_drain]
+basis = "NXP PCF8563 Rev. 11.1 PDF p.8 Table 3 Pin description: INT: \"Interrupt output (open-drain; active LOW)\"; CLKOUT: \"Clock output, open-drain\""
+[models.pin_capability.open_drain.pads]
+"3" = "INT"
+"7" = "CLKOUT"
+
 [models.coverage]
 implements = []
 missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
@@ -15525,6 +15576,12 @@ max_pin_current_a = 0.02 # Source: Absolute Maximum Ratings, Continuous Sink Cur
 "8" = "sda" # SDA; open-drain I2C data input/output
 "EP" = "ep" # EP exposed pad; connect to GND
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim MAX17048/MAX17049 19-6171 Rev 7 (11/16), sha256 70dc8eef0e012276dcdc58b6dce64af08258304bcf865ceace64e856b8029330.
+[models.pin_capability.open_drain]
+basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7 PDF p.6 Pin/Bump Descriptions: ALRT: \"Open-Drain, Active-Low Alert Output.\""
+[models.pin_capability.open_drain.pads]
+"5" = "ALRT"
+
 [models.coverage]
 implements = ["package_identity", "pin_identity", "absolute_maximum_ratings"]
 missing = ["state_of_charge_estimation", "battery_dynamics", "i2c_register_protocol", "alert_behavior", "digital_timing"]
@@ -15872,6 +15929,12 @@ max_pin_current_a = 0.02 # Source: Absolute Maximum Ratings, Continuous Sink Cur
 "B2" = "scl" # SCL; I2C clock input
 "B3" = "qstrt" # QSTRT; quick-start input
 "B4" = "alrt_n" # ALRT; open-drain active-low alert output
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim MAX17048/MAX17049 19-6171 Rev 7 (11/16), sha256 70dc8eef0e012276dcdc58b6dce64af08258304bcf865ceace64e856b8029330.
+[models.pin_capability.open_drain]
+basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7 PDF p.6 Pin/Bump Descriptions: ALRT: \"Open-Drain, Active-Low Alert Output.\""
+[models.pin_capability.open_drain.pads]
+"B4" = "ALRT"
 
 [models.coverage]
 implements = ["package_identity", "pin_identity", "absolute_maximum_ratings"]

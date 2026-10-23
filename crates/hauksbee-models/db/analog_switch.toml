@@ -78,6 +78,11 @@ mpn_re = "(?i)^AP2553W6(-7)?$"
 ron = 0.070     # typical at VIN=5.0 V, TJ=25 C
 roff = 5.5e6    # 5.5 V / 1 uA worst-case shutdown leakage
 vth = 2.0       # EN VIH minimum
+# Enable polarity: DS35404 Rev. 12-3 PDF p.2 pin descriptions, AP2553/AP2553A column: "Enable input, logic
+# high turns on power switch." (https://www.diodes.com/datasheet/download/AP2553.pdf, sha256
+# c667dbfc5d65b69cbdb32333850b2c6830bebce54f045dbe4d4ffb5287a33ff9). The datasheet states no internal
+# pull and does not say what an open EN pin does, so there is no en_open here.
+en_on_level = "high"
 warning = "source-bound load-switch and programmed-limit model: active-high enable, DC on/off path, worst-case off leakage and fitted ILIM threshold are executable; 1.1 ms rise, output discharge, open-drain FAULT, reverse-current trip, 2 us short response and 140/160 C cycling are not yet dynamic"
 
 [models.pins]
@@ -87,6 +92,11 @@ warning = "source-bound load-switch and programmed-limit model: active-high enab
 "4" = "fault_n"  # open-drain FAULT
 "5" = "ilim"
 "6" = "in_out_a" # OUT
+
+[models.pin_capability.open_drain]
+basis = "DS35404 Rev. 12-3 PDF p.2 pin descriptions: FAULT \"Active-low open-drain output, asserted during over-current, over-temperature, or reverse-voltage conditions.\""
+[models.pin_capability.open_drain.pads]
+"4" = "FAULT"
 
 [models.current_program]
 pin = "ilim"
@@ -539,6 +549,12 @@ warning = """the bare part number names no enable-polarity ordering option, so t
 is modelled as the active-high variant; if the board fits an active-low part the \
 switch conducts on exactly the wrong half of the control range, presenting this \
 rail as live when the board has switched it off"""
+# Enable pin: Diodes AP22815 / AP22615 DS41022 Rev. 7-2 (https://www.diodes.com/datasheet/download/AP22815_615.pdf,
+# sha256 275b781c64ec6275cfb7ea48790bf73b5c0d91ce43959d83bd7043e029661ba9). The datasheet gives no internal pull.
+en_on_level = "high"
+en_open = "undefined"
+en_open_basis = "DS41022 Rev. 7-2 PDF p.13 Application Information, ON/OFF Input Operator: \"This pin should not be left floating.\""
+must_not_float_roles = "ctrl"
 [models.pins]
 # Pinout, TSOT25 (5-pin). Pin 5 is IN; the ISET pin does not exist on this part.
 "1" = "in_out_a" # OUT. NOT `com`: see the control-polarity note below.
@@ -546,6 +562,11 @@ rail as live when the board has switched it off"""
 "3" = "flg"      # open-drain fault flag
 "4" = "ctrl"     # EN, active high on this ordering option
 "5" = "in_out_b" # IN. NOT `s0`, for the same reason.
+
+[models.pin_capability.open_drain]
+basis = "DS41022 Rev. 7-2 PDF p.3 Pin Descriptions: FLG \"Overcurrent and Overtemperature Fault Report; Open-drain flag is active-low when triggered.\""
+[models.pin_capability.open_drain.pads]
+"3" = "FLG"
 [models.ratings]
 # The absolute-maximum table states only "load current: internal limited" and
 # gives no numeric pin-current destruction threshold, so do not invent one.
@@ -595,6 +616,12 @@ value_re = "(?i)^AP22615A[A-Z0-9_-]*$"
 ron  = 0.04      # same switch die as the AP22815 above
 roff = 5.0e7     # NOT A DATASHEET FIGURE; same conservative floor, see above
 vth  = 1.2       # EN VIH min, active high (the A suffix)
+# Enable pin: Diodes AP22815 / AP22615 DS41022 Rev. 7-2 (https://www.diodes.com/datasheet/download/AP22815_615.pdf,
+# sha256 275b781c64ec6275cfb7ea48790bf73b5c0d91ce43959d83bd7043e029661ba9). The datasheet gives no internal pull.
+en_on_level = "high"
+en_open = "undefined"
+en_open_basis = "DS41022 Rev. 7-2 PDF p.13 Application Information, ON/OFF Input Operator: \"This pin should not be left floating.\""
+must_not_float_roles = "ctrl"
 [models.pins]
 # Pinout, TSOT26 (6-pin): the ISET pin is what the extra pin buys.
 "1" = "in_out_a" # OUT. NOT `com`: see the control-polarity note below.
@@ -603,6 +630,11 @@ vth  = 1.2       # EN VIH min, active high (the A suffix)
 "4" = "ctrl"     # EN, active high (the A suffix)
 "5" = "iset"     # RLIM to GND sets the limit: ILIM(A) = 6800 / RLIM(Ohm)
 "6" = "in_out_b" # IN. NOT `s0`, for the same reason.
+
+[models.pin_capability.open_drain]
+basis = "DS41022 Rev. 7-2 PDF p.3 Pin Descriptions: FLG \"Overcurrent and Overtemperature Fault Report; Open-drain flag is active-low when triggered.\""
+[models.pin_capability.open_drain.pads]
+"3" = "FLG"
 [models.ratings]
 # As for AP22815, the absolute-maximum table gives no numeric load-current max.
 max_voltage_v = 6.0
@@ -983,6 +1015,13 @@ warning = """the part number carries no polarity letter, so this is modelled as 
 of the active-high options (B, C, CN); if the board fits an active-low L part the \
 switch conducts on exactly the wrong half of the control range, presenting this \
 rail as live when the board has switched it off"""
+# Enable pin, TI TPS22916 SLVSDO5F (https://www.ti.com/lit/ds/symlink/tps22916.pdf, sha256
+# a4d81b70556d5564aaee9baf455b7651375a94c629448f3f7e7ced2f5c41b33f). The datasheet prints the smart
+# pulldown resistance but no statement that an open ON pin is off, so en_open is not set. The
+# pulldown is connected while VON <= VIL (Table 8-3, PDF p.17) and disconnected at VON >= VIH.
+en_on_level = "high"
+en_pull_down_ohms = 7.5e5
+en_open_basis = "SLVSDO5F PDF p.1 Features, Smart ON pin pulldown: \"ON ≤ VIL (RPD): 750 kΩ (typ.)\"; PDF p.1 Description: \"a smart pulldown is used to keep the ON pin from floating until system sequencing is complete\"; PDF p.17 Table 8-3 Smart-ON Pulldown: VON ≤ VIL Connected, VON ≥ VIH Disconnected"
 
 [models.pins]
 # Section 5, YFP (DSBGA-4). Bump names, not numbers: the Eagle package on the
@@ -1653,3 +1692,312 @@ abs_max_basis = "onsemi/Fairchild FSUSB30 Rev. 1.1.8 p.3, Absolute Maximum Ratin
 [models.coverage]
 implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
 missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Load switches added with their enable, capacitor and flag facts (2026-10-23).
+# Every figure below is read from the vendor PDF named in the card's comments.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# TPS22918, TI SLVSD76C (February 2016, revised July 2017):
+# https://www.ti.com/lit/ds/symlink/tps22918.pdf
+# sha256 1b28eb58003d28b18bf919a15734056f296a499bebee2bd493a1e4358c4dfb1c
+# One orderable device (TPS22918DBVR / DBVT, SOT-23-6 "DBV"), active-high ON, so there is no
+# polarity option to exclude. `ron` is the 3.3 V typical row (Features p.1: "RON = 53 mΩ
+# (typical) at VIN = 3.3 V"); the 5 V row is 52 mΩ. `roff` is NOT A DATASHEET FIGURE: a
+# conservative floor from ISD,VIN 5 uA max at VIN = 5.5 V (Electrical Characteristics, PDF
+# p.5), 5.5 V / 5 uA = 1.1 MOhm. `vth` is the ON pin VIH minimum (Recommended Operating
+# Conditions, PDF p.4: VIH,ON 1 V min, VIL,ON 0.5 V max, VIN = 1 V to 5.5 V).
+[[models]]
+id = "tps22918"
+kind = "analog_switch"
+description = "TPS22918 load switch, 52 mOhm, configurable rise time and output discharge, SOT-23-6 (TI)"
+
+[models.match]
+value_re = "(?i)^TPS22918(DBV[RT]?(G4)?)?$"
+
+[models.params]
+ron  = 0.053     # RON typ at VIN = 3.3 V, IOUT = -200 mA, 25 C (59 mOhm max at 25 C)
+roff = 1.1e6     # NOT A DATASHEET FIGURE. Conservative floor from ISD,VIN 5 uA max at
+                 # VIN = 5.5 V (5.5 V / 5 uA).
+vth  = 1.0       # ON pin VIH min over the whole 1 to 5.5 V VIN range
+en_on_level = "high"
+en_open = "undefined"
+en_open_basis = "SLVSD76C PDF p.3 Pin Functions, ON: \"Active high switch control input. Do not leave floating.\"; PDF p.13 8.3.1 On and Off Control: \"This pin cannot be left floating and must be driven either high or low for proper functionality.\""
+must_not_float_roles = "ctrl"
+warning = "source-bound load-switch model: active-high enable, DC on/off path, on-resistance and worst-case off leakage are executable; the CT-programmed rise time and the QOD output discharge (pin 5, left floating = none) are not modelled"
+
+[models.pins]
+# 5 Pin Configuration and Functions, DBV 6-pin SOT-23, PDF p.3.
+"1" = "in_out_b"  # VIN
+"2" = "vss"       # GND
+"3" = "ctrl"      # ON, active high
+"4" = "ct"        # slew-rate capacitor; may be left floating
+"5" = "qod"       # quick output discharge: to VOUT (internal RPD), via REXT, or floating (off)
+"6" = "in_out_a"  # VOUT
+
+[models.ratings]
+# 6.1 Absolute Maximum Ratings, PDF p.4.
+max_current_a       = 2.0    # IMAX continuous, ambient 70 C
+max_surge_current_a = 2.5    # IPLS pulse < 300 us at 2% duty
+max_voltage_v       = 6.0    # VIN / VOUT / VON, -0.3 to 6 V
+max_junction_temp_c = 125.0
+theta_ja_c_per_w    = 183.2  # 6.4 Thermal Information, DBV (SOT-23), PDF p.4
+theta_jc_c_per_w    = 151.6  # RthetaJC(top)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_out_b"
+min_v = 1.0
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TPS22918 SLVSD76C Features p.1: \"Input Voltage Range: 1 V to 5.5 V\"; 6.3 Recommended Operating Conditions PDF p.4: VIN input voltage 0 to 5.5 V; 6.1 Absolute Maximum Ratings PDF p.4: VIN -0.3 to 6 V"
+
+[models.coverage]
+implements = ["enable_gating", "off_state_leakage", "on_resistance"]
+missing = ["output_discharge", "reverse_current_blocking", "turn_on_transient"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+# Input capacitor, TI TPS22918 SLVSD76C (sha256 1b28eb58003d28b18bf919a15734056f296a499bebee2bd493a1e4358c4dfb1c).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "required"
+min_f = 1.0e-6
+basis = "SLVSD76C PDF p.4 6.3 Recommended Operating Conditions: CIN Input Capacitor, MIN 1 uF, footnote (2) \"Refer to Application and Implementation section\"; PDF p.17 9.2.2.1: \"A 1 µF ceramic capacitor, CIN, placed close to the pins, is usually sufficient.\""
+note = "It limits the input drop caused by inrush into a discharged load capacitor or a short. For heavy loads the datasheet recommends an input capacitor about 10 times the output capacitor (p.17). The output capacitor is optional and has no stated minimum."
+
+# TPS22919, TI SLVSEN5B (October 2018, revised May 2019):
+# https://www.ti.com/lit/ds/symlink/tps22919.pdf
+# sha256 743c59b01fb0891d2d0f1faba779161cd2d2b6c18edf68e6d5b3279016240c84
+# One orderable device (TPS22919DCKR / DCKT, SC-70-6 "DCK"), active-high ON. `ron` is the
+# 3.6 V typical row (90 mOhm; Electrical Characteristics PDF p.5). `roff` is NOT A DATASHEET
+# FIGURE: a conservative floor from ISD,VIN 800 nA max over -40 to 125 C at VIN = 3.6 V (the
+# table's typical-value condition), 3.6 V / 800 nA = 4.5 MOhm. `vth` is VIH min (Recommended
+# Operating Conditions PDF p.4: VIH 1 V min, VIL 0.35 V max).
+# The datasheet also prints a 530 kOhm "Smart Pull Down" on ON (connected at VON <= VIL, PDF
+# p.5 and Table 1) but its pin table says "Do not leave floating", so the open-pin state is
+# left undefined and the pull is not stated as an `en_pull_*` param.
+[[models]]
+id = "tps22919"
+kind = "analog_switch"
+description = "TPS22919 load switch, 90 mOhm, self-protected, controlled rise time, SC-70-6 (TI)"
+
+[models.match]
+value_re = "(?i)^TPS22919(DCK[RT]?)?$"
+
+[models.params]
+ron  = 0.090     # RON typ at VIN = 3.6 V, IOUT = -200 mA, 25 C (150 mOhm max at 25 C)
+roff = 4.5e6     # NOT A DATASHEET FIGURE. Conservative floor from ISD,VIN 800 nA max,
+                 # -40 to 125 C, at VIN = 3.6 V.
+vth  = 1.0       # ON pin VIH min (VIL max 0.35 V)
+en_on_level = "high"
+en_open = "undefined"
+en_open_basis = "SLVSEN5B PDF p.3 Pin Functions, ON: \"Active high switch control input. Do not leave floating.\""
+must_not_float_roles = "ctrl"
+warning = "source-bound load-switch model: active-high enable, DC on/off path, on-resistance and worst-case off leakage are executable; the controlled rise time, the 3 A short-circuit limit, thermal shutdown and the QOD output discharge are not modelled"
+
+[models.pins]
+# 5 Pin Configuration and Functions, DCK 6-pin SC-70, Pin Functions table, PDF p.3.
+"1" = "in_out_b"  # IN
+"2" = "vss"       # GND
+"3" = "ctrl"      # ON, active high
+"4" = "nc"        # no connect, leave floating
+"5" = "qod"       # quick output discharge: to VOUT (internal 24 Ohm), via RQOD, or floating (off)
+"6" = "in_out_a"  # VOUT
+
+[models.ratings]
+# 6.1 Absolute Maximum Ratings, PDF p.4.
+max_current_a       = 1.5    # IMAX continuous
+max_surge_current_a = 2.5    # IPLS, 2 ms, 2% duty cycle
+max_voltage_v       = 6.0    # VIN / VOUT / VON / VQOD, -0.3 to 6 V
+theta_ja_c_per_w    = 210.7  # 6.4 Thermal Information, DCK (SC-70), PDF p.4
+theta_jc_c_per_w    = 142.0  # RthetaJC(top)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_out_b"
+min_v = 1.6
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TPS22919 SLVSEN5B 6.3 Recommended Operating Conditions PDF p.4: VIN input voltage range 1.6 V to 5.5 V; 6.1 Absolute Maximum Ratings PDF p.4: maximum input voltage range -0.3 to 6 V"
+
+[models.coverage]
+implements = ["enable_gating", "off_state_leakage", "on_resistance"]
+missing = ["output_discharge", "short_circuit_limit", "thermal_shutdown", "turn_on_transient"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+# Input capacitor, TI TPS22919 SLVSEN5B (sha256 743c59b01fb0891d2d0f1faba779161cd2d2b6c18edf68e6d5b3279016240c84).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-6
+basis = "SLVSEN5B PDF p.17 10 Power Supply Recommendations: \"In most situations, using an input capacitance (CIN) of 1 μF is sufficient to prevent the supply voltage from dipping when the switch is turned on.\""
+note = "A slow supply or a large load step can need more bulk capacitance on the input. The datasheet states no output capacitor minimum."
+
+# AP2281, Diodes Incorporated DS31359 Rev. 7-2 (November 2013):
+# https://www.diodes.com/assets/Datasheets/AP2281.pdf
+# sha256 bcdacbc38085b7587a32341094f10d2b7045c7e365cbe758e9561b793f7b0e44
+# Ordering Information (PDF p.7): AP2281-1 (1 ms rise, no active pull down) and AP2281-3
+# (100 us rise, active pull down), each in SOT26 ("W") or U-DFN2018-6 ("FM"). The Options
+# table (PDF p.2) lists every option as "Active High" enable, so none is excluded by
+# polarity. The two packages have different pin maps, so each has its own card. `ron` is the
+# 5 V typical row (80 mOhm; the 3.3 V row is 95 mOhm). `roff` is NOT A DATASHEET FIGURE:
+# a conservative floor from ISHDN 1 uA max (VEN = 0 V, OUT open; no VIN stated) taken at
+# the 6.0 V recommended maximum, 6.0 V / 1 uA = 6 MOhm. `vth` is the worst-case EN VIH
+# minimum, 1.7 V at VIN >= 5.25 V (1.4 V at 1.5 to 2.7 V, 1.6 V at 2.7 to 5.25 V), so the
+# model turns on only where the real part certainly does. The discharge FET of the -3
+# option is not modelled.
+[[models]]
+id = "ap2281_sot26"
+kind = "analog_switch"
+description = "AP2281 slew-rate-controlled load switch, 80 mOhm, SOT26 (Diodes)"
+
+[models.match]
+value_re = "(?i)^AP2281-?[13]WG?(-7)?$"
+
+[models.params]
+ron  = 0.080     # RDS(ON) typ at VIN = 5.0 V (100 mOhm max)
+roff = 6.0e6     # NOT A DATASHEET FIGURE. Conservative floor from ISHDN 1 uA max at 6.0 V.
+vth  = 1.7       # EN VIH min at VIN >= 5.25 V; see the note above
+en_on_level = "high"
+warning = "source-bound load-switch model: active-high enable, DC on/off path, on-resistance and worst-case off leakage are executable; the 1 ms (AP2281-1) or 100 us (AP2281-3) turn-on slew and the AP2281-3 output discharge are not modelled"
+
+[models.pins]
+# Pin Descriptions, SOT26 column, PDF p.2. Pins 4 and 6 are both IN and pins 2 and 5 both
+# GND; the second pad of each carries its own role name because the binder keys roles by
+# string and a duplicate would drop one of the two connections.
+"1" = "in_out_a"  # OUT
+"2" = "vss"       # GND
+"3" = "ctrl"      # EN, active high
+"4" = "in_out_b"  # IN
+"5" = "gnd"       # GND (second pad)
+"6" = "in_b2"     # IN (second pad)
+
+[models.ratings]
+# Absolute Maximum Ratings, PDF p.3; thermal figures from Electrical Characteristics, PDF p.3.
+max_current_a       = 2.0    # maximum continuous load current
+max_voltage_v       = 6.5    # VIN and VEN
+max_junction_temp_c = 125.0
+theta_ja_c_per_w    = 153.0  # SOT26, note 6
+theta_jc_c_per_w    = 29.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_out_b"
+min_v = 1.5
+max_v = 6.0
+abs_max_v = 6.5
+basis = "Diodes AP2281 DS31359 Rev. 7-2 PDF p.3 Recommended Operating Conditions: VIN input voltage 1.5 V to 6.0 V; Absolute Maximum Ratings: input voltage 6.5 V"
+
+[models.coverage]
+implements = ["enable_gating", "off_state_leakage", "on_resistance"]
+missing = ["output_discharge", "turn_on_transient"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+# Capacitors, Diodes AP2281 DS31359 Rev. 7-2 (sha256 bcdacbc38085b7587a32341094f10d2b7045c7e365cbe758e9561b793f7b0e44).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-6
+basis = "DS31359 Rev. 7-2 PDF p.6 Application Notes, Input Capacitor: \"A 1μF capacitor is recommended to connect between IN and GND pins to decouple input power supply glitch and noise.\"; PDF p.2 Pin Descriptions, IN: \"Bypass to ground through a 1µF capacitor.\""
+note = "The datasheet states no type or ESR requirement and wants the capacitor as close to the device as possible."
+
+[[models.supply_cap]]
+role = "in_out_a"
+side = "output"
+grade = "recommended"
+min_f = 1.0e-7
+basis = "DS31359 Rev. 7-2 PDF p.6 Application Notes, Output Capacitor: \"A 0.1μF capacitor is recommended to connect between OUT and GND pins to stabilize and accommodate load transient condition.\"; PDF p.2 Pin Descriptions, OUT: \"Bypass to ground through a 0.1uF capacitor.\""
+note = "The datasheet says the output capacitance may be increased without limit."
+
+[[models]]
+id = "ap2281_udfn2018"
+kind = "analog_switch"
+description = "AP2281 slew-rate-controlled load switch, 80 mOhm, U-DFN2018-6 (Diodes)"
+
+[models.match]
+value_re = "(?i)^AP2281-?[13]FMG?(-7)?$"
+
+[models.params]
+ron  = 0.080     # RDS(ON) typ at VIN = 5.0 V (100 mOhm max)
+roff = 6.0e6     # NOT A DATASHEET FIGURE. Conservative floor from ISHDN 1 uA max at 6.0 V.
+vth  = 1.7       # EN VIH min at VIN >= 5.25 V; see the note above the SOT26 card
+en_on_level = "high"
+warning = "source-bound load-switch model: active-high enable, DC on/off path, on-resistance and worst-case off leakage are executable; the 1 ms (AP2281-1) or 100 us (AP2281-3) turn-on slew and the AP2281-3 output discharge are not modelled"
+
+[models.pins]
+# Pin Descriptions, U-DFN2018-6 column, PDF p.2: IN 1 and 2, EN 3, GND 4, OUT 5 and 6, and
+# a thermal pad 7 ("Suggest connecting to ground plane"), which is left out of the map. The
+# second pad of IN and of OUT carries its own role name, as in the SOT26 card.
+"1" = "in_out_b"  # IN
+"2" = "in_b2"     # IN (second pad)
+"3" = "ctrl"      # EN, active high
+"4" = "vss"       # GND
+"5" = "in_out_a"  # OUT
+"6" = "out_a2"    # OUT (second pad)
+
+[models.ratings]
+max_current_a       = 2.0
+max_voltage_v       = 6.5
+max_junction_temp_c = 125.0
+theta_ja_c_per_w    = 78.0   # U-DFN2018-6, note 7
+theta_jc_c_per_w    = 19.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_out_b"
+min_v = 1.5
+max_v = 6.0
+abs_max_v = 6.5
+basis = "Diodes AP2281 DS31359 Rev. 7-2 PDF p.3 Recommended Operating Conditions: VIN input voltage 1.5 V to 6.0 V; Absolute Maximum Ratings: input voltage 6.5 V"
+
+[models.coverage]
+implements = ["enable_gating", "off_state_leakage", "on_resistance"]
+missing = ["output_discharge", "turn_on_transient"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-6
+basis = "DS31359 Rev. 7-2 PDF p.6 Application Notes, Input Capacitor: \"A 1μF capacitor is recommended to connect between IN and GND pins to decouple input power supply glitch and noise.\"; PDF p.2 Pin Descriptions, IN: \"Bypass to ground through a 1µF capacitor.\""
+note = "The datasheet states no type or ESR requirement and wants the capacitor as close to the device as possible."
+
+[[models.supply_cap]]
+role = "in_out_a"
+side = "output"
+grade = "recommended"
+min_f = 1.0e-7
+basis = "DS31359 Rev. 7-2 PDF p.6 Application Notes, Output Capacitor: \"A 0.1μF capacitor is recommended to connect between OUT and GND pins to stabilize and accommodate load transient condition.\"; PDF p.2 Pin Descriptions, OUT: \"Bypass to ground through a 0.1uF capacitor.\""
+note = "The datasheet says the output capacitance may be increased without limit."
