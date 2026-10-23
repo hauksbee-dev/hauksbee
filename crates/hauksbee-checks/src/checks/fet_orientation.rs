@@ -195,11 +195,7 @@ fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
 
 /// The first pin that drives the gate net, or one series gate resistor away:
 /// the part it belongs to and a "REF pin N" label for it.
-fn gate_driver<'a>(
-    idx: &Index<'a>,
-    q: &Component,
-    gate: i64,
-) -> Option<(&'a Component, String)> {
+fn gate_driver<'a>(idx: &Index<'a>, q: &Component, gate: i64) -> Option<(&'a Component, String)> {
     // A gate tied to a rail or ground is not switched by anything.
     if idx.level(gate).is_some() {
         return None;
@@ -223,18 +219,44 @@ fn gate_driver<'a>(
     })
 }
 
-/// True when the part driving the gate is a controller that also has a pin on
-/// each side of the channel: a power-path, ideal-diode, hot-swap or charger
-/// IC sensing the battery on one side and its own converter output on the
-/// other. Such a controller servos the FET to its documented topology (the
-/// body diode carrying the battery or the input to the output is usually the
-/// point), and the schematic alone cannot say which side is the load, so the
-/// check abstains. A microcontroller is excluded: it switches a rail, it does
-/// not own the power path.
+/// The nets a controller can sense a channel side on: the side's cluster plus
+/// every net one resistor of any value further out (a sense pin sits behind a
+/// filter resistor of 100 ohms or so, which the cluster's wire-like hop does
+/// not cross).
+fn sensed_nets(idx: &Index<'_>, net: i64, q: &Component, gate: i64) -> Vec<i64> {
+    let mut nets = cluster(idx, net, q);
+    let first = nets.clone();
+    for n in first.into_iter().filter(|n| !is_ground(idx.name(*n))) {
+        for (o, _) in idx.members(n) {
+            if same(o, q) || o.pins.len() != 2 || RefClass::of(&o.reference) != RefClass::Resistor {
+                continue;
+            }
+            for far in o.pins.iter().filter_map(|p| p.net).filter(|f| *f != 0) {
+                if far != gate && !nets.contains(&far) {
+                    nets.push(far);
+                }
+            }
+        }
+    }
+    nets.retain(|n| *n != gate);
+    nets
+}
+
+/// True when the part driving the gate is a controller that also has a sense
+/// or terminal pin on each side of the channel: a power-path, ideal-diode,
+/// hot-swap or charger IC watching the battery on one side and its own
+/// converter output on the other (the LTC4020's BAT and CSN/CSP around its
+/// PowerPath FET). Such a controller servos the FET to its documented
+/// topology (the body diode carrying the battery or the input to the output
+/// is usually the point), and the schematic alone cannot say which side is
+/// the load, so the check abstains. A microcontroller is excluded: it
+/// switches a rail, it does not own the power path. Supply pins do not count
+/// as sensing, and neither does the gate net itself (a pull-up there is bias).
 fn controller_spans_channel(
     idx: &Index<'_>,
     q: &Component,
     driver: &Component,
+    gate: i64,
     (s, d): (i64, i64),
 ) -> bool {
     if idx
@@ -245,11 +267,12 @@ fn controller_spans_channel(
     }
     let touches = |near: &[i64]| {
         driver.pins.iter().any(|p| {
-            p.net
-                .is_some_and(|n| n != 0 && near.contains(&n) && !is_ground(idx.name(n)))
+            !p.kind.to_ascii_lowercase().contains("power")
+                && p.net
+                    .is_some_and(|n| n != 0 && near.contains(&n) && !is_ground(idx.name(n)))
         })
     };
-    touches(&cluster(idx, s, q)) && touches(&cluster(idx, d, q))
+    touches(&sensed_nets(idx, s, q, gate)) && touches(&sensed_nets(idx, d, q, gate))
 }
 
 /// A two-pin resistor, capacitor or diode: biases a node, never drives one.
@@ -383,7 +406,7 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         };
         let channel = if pmos { "P" } else { "N" };
         if let Some((driver_part, driver)) = gate_driver(&idx, q, g) {
-            if controller_spans_channel(&idx, q, driver_part, (s, d)) {
+            if controller_spans_channel(&idx, q, driver_part, g, (s, d)) {
                 continue;
             }
             // Driven switch: the supply must not sit on the diode's anode.
@@ -586,14 +609,17 @@ mod tests {
         // The LTC4020 shape: the PowerPath P-FET's drain is the battery, its
         // source the converter output, and the controller drives the gate and
         // senses both. The body diode carrying the battery to the output is the
-        // vendor topology, so nothing is reported.
+        // vendor topology, so nothing is reported. The output sense pin sits
+        // behind a 100 ohm filter resistor, as the datasheet draws it.
+        const SNS: i64 = 13;
         let board = |ctl: Component| {
+            let filter = part("R9", "100", "Device:R", &[("1", SW), ("2", SNS)]);
             lint(
-                vec![header(V5), pfet(SW, V5, GATE), ctl, load(SW)],
-                &[],
+                vec![header(V5), pfet(SW, V5, GATE), ctl, load(SW), filter],
+                &[(SNS, "SNS")],
             )
         };
-        let found = board(controller(Some(V5), Some(SW)));
+        let found = board(controller(Some(V5), Some(SNS)));
         assert!(found.is_empty(), "{found:#?}");
         // The same gate driver with no pin on the load side is a plain switch.
         let found = board(controller(Some(V5), None));
