@@ -184,6 +184,8 @@ mod package_fit_binding;
 mod packaged_asset_sync;
 #[path = "parts_fallback_ratings.rs"]
 mod parts_fallback_ratings;
+#[path = "pin_function_reasoning.rs"]
+mod pin_function_reasoning;
 #[path = "pin_role_rules.rs"]
 mod pin_role_rules;
 #[path = "power_invariants.rs"]

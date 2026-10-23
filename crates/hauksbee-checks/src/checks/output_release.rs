@@ -98,7 +98,14 @@ fn released(
             }
             let model = models.get(c.reference.as_str());
             let stated = model.is_some_and(|m| m.tri_state_enable(&p.number).is_some());
-            if is_output(p) || stated {
+            // A pad the card binds to UART transmit drives its line for good.
+            let transmit = model.is_some_and(|m| {
+                m.kind == hauksbee_models::ComponentKind::Mcu
+                    && super::pin_mux::uart_pad(m, &p.number, true) == super::pin_mux::UartPad::Tx
+            });
+            if transmit {
+                drives.push(Drive::Always);
+            } else if is_output(p) || stated {
                 drives.push(drive_of(c, p, model));
             }
         }
