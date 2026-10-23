@@ -210,6 +210,28 @@ impl ExecutionEvidence {
         )
     }
 
+    /// Why a run with no sign of firmware execution says so.
+    fn not_executed_blocker(
+        probe: &ExecutionProbe,
+        reached_entry: Observed,
+        uart_bytes: u64,
+    ) -> String {
+        match reached_entry {
+            Observed::No => format!(
+                "the core never reached {} and produced no UART or GPIO activity",
+                probe.entry_symbol.as_deref().unwrap_or("its entry symbol")
+            ),
+            _ if uart_bytes > 0 => format!(
+                "no evidence the firmware executed: no {} seen and no GPIO toggles; \
+                 the {uart_bytes} UART bytes may be the boot ROM's own log",
+                probe.entry_symbol.as_deref().unwrap_or("entry symbol")
+            ),
+            _ => "no evidence the firmware executed: no entry symbol seen, no UART \
+                  bytes and no GPIO toggles"
+                .to_string(),
+        }
+    }
+
     /// [`Self::new`], naming the function a stalled core sits in from the
     /// firmware ELF's symbols.
     #[must_use]
@@ -244,20 +266,11 @@ impl ExecutionEvidence {
         if let Some(stall) = &stall {
             blockers.push(stall.detail.clone());
         } else if !executed {
-            blockers.push(match reached_entry {
-                Observed::No => format!(
-                    "the core never reached {} and produced no UART or GPIO activity",
-                    probe.entry_symbol.as_deref().unwrap_or("its entry symbol")
-                ),
-                _ if uart_bytes > 0 => format!(
-                    "no evidence the firmware executed: no {} seen and no GPIO toggles; \
-                     the {uart_bytes} UART bytes may be the boot ROM's own log",
-                    probe.entry_symbol.as_deref().unwrap_or("entry symbol")
-                ),
-                _ => "no evidence the firmware executed: no entry symbol seen, no UART \
-                      bytes and no GPIO toggles"
-                    .to_string(),
-            });
+            blockers.push(Self::not_executed_blocker(
+                &probe,
+                reached_entry,
+                uart_bytes,
+            ));
         }
         if !probe.faults.is_empty() {
             blockers.push(format!("the core faulted: {}", probe.faults.join("; ")));

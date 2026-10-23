@@ -44,7 +44,9 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
         | LintCheck::PowerDomainBusLockup
-        | LintCheck::PinMuxCapability => Some(Basis::Card),
+        | LintCheck::PinMuxCapability
+        // The card's open-drain and internal pull-up pad tables decide it.
+        | LintCheck::MissingOpenDrainPullup => Some(Basis::Card),
         // Read from the schematic, the layout or the netlist alone.
         LintCheck::MissingI2cPullup
         | LintCheck::MissingSdPullup
