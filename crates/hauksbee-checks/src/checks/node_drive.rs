@@ -23,11 +23,15 @@
 //!   at test pads or connector pins, the circuit is powered from whatever is
 //!   wired to those pads, so there is no on-board level to miss: the node is
 //!   stated as a note naming the pads instead of a warning.
-//! - **Floating gate or select** ([`LintCheck::FloatingGate`]): a MOSFET gate
-//!   or analog-switch select whose node holds nothing but MCU pins, connector
-//!   pins and other gates: no pull resistor, supply or other driver. While
-//!   the MCU is in reset, or the cable is unplugged, the node is undefined and
-//!   the switch may conduct, or sit half-on and draw shoot-through current.
+//! - **Floating gate, select or enable** ([`LintCheck::FloatingGate`]): a
+//!   MOSFET gate, analog-switch select or regulator/driver enable (active high
+//!   or low) whose node holds nothing but MCU pins, connector pins and other
+//!   such inputs: no pull resistor, supply or other driver. While the MCU is in
+//!   reset, or the cable is unplugged, the node is undefined and the switch may
+//!   conduct, or sit half-on and draw shoot-through current, and a regulator or
+//!   driver may be on or off. An enable whose card states what an open pin does
+//!   (`en_open`) or an internal pull (`en_pull_*`) has a defined level and is
+//!   not reported.
 //!
 //! Only fitted parts count. Test points and DNP parts are not connections.
 
@@ -108,7 +112,7 @@ impl<'a> Index<'a> {
 
     /// The level a net is held at by name: ground, a voltage-named rail, or a
     /// supply whose voltage is unnamed (assumed positive).
-    fn level(&self, net: i64) -> Option<f64> {
+    pub(super) fn level(&self, net: i64) -> Option<f64> {
         let name = self.name(net);
         if is_ground(name) {
             return Some(0.0);
@@ -136,7 +140,7 @@ impl<'a> Index<'a> {
 
 /// A microcontroller signal pin: a port or GPIO role, or an analog-capable
 /// header pin (`a0`, `ain1`) that doubles as a digital output.
-fn is_gpio_role(role: &str) -> bool {
+pub(super) fn is_gpio_role(role: &str) -> bool {
     gpio_of_role(role, false).is_some()
         || gpio_of_role(role, true).is_some()
         || role
@@ -623,26 +627,68 @@ fn cap_group_finding(nodes: &[CapNode]) -> LintFinding {
     }
 }
 
-/// MOSFET gates and analog-switch selects held only by MCU or connector pins,
-/// one finding per node: the gates a node feeds share one cause and one fix.
+/// What a floating-input node feeds.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Sink {
+    Gate,
+    Select,
+    /// The enable or shutdown input of a regulator or driver whose card states
+    /// neither what an open pin does nor an internal pull.
+    Enable,
+}
+
+/// An enable, shutdown or on/off input, active high or low, by card role.
+fn is_enable_role(role: &str) -> bool {
+    matches!(
+        role,
+        "en" | "en_n" | "enable" | "enable_n" | "shdn" | "shdn_n" | "on_off"
+    ) || role
+        .strip_prefix("en")
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+/// Whether the card says what an open enable pin does: an `en_open` state or
+/// an internal `en_pull_*`. Either makes the reset level defined.
+fn enable_state_stated(model: &ModelEntry) -> bool {
+    model
+        .params
+        .0
+        .keys()
+        .any(|k| k == "en_open" || k.starts_with("en_pull_") || k == "keeper_r_ohms")
+}
+
+/// What kind of input the pad `role` of a `model` part is, when it is one a
+/// floating node leaves undefined.
+fn sink_of(model: &ModelEntry, role: &str) -> Option<Sink> {
+    match model.kind {
+        ComponentKind::Nmos | ComponentKind::Pmos => {
+            (role == "gate" || is_gate_n(role)).then_some(Sink::Gate)
+        }
+        ComponentKind::AnalogSwitch => role.starts_with("ctrl").then_some(Sink::Select),
+        ComponentKind::Vreg | ComponentKind::Digital => {
+            (is_enable_role(role) && !enable_state_stated(model)).then_some(Sink::Enable)
+        }
+        _ => None,
+    }
+}
+
+/// What a node feeds, keyed by (net, input kind): the driver pins, the
+/// input-bearing parts, and whether a part is not a regulator.
+type NodeInputs = (BTreeSet<String>, BTreeSet<String>, bool);
+
+/// MOSFET gates, analog-switch selects and enable inputs held only by MCU or
+/// connector pins, one finding per node: the inputs a node feeds share one
+/// cause and one fix.
 fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
-    // (net, is a MOSFET gate) -> (driver pins, gate-bearing parts)
-    let mut nodes: BTreeMap<(i64, bool), (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+    let mut nodes: BTreeMap<(i64, Sink), NodeInputs> = BTreeMap::new();
     for c in &idx.board.components {
         let Some(model) = idx.model(c) else { continue };
-        let is_gate = match model.kind {
-            ComponentKind::Nmos | ComponentKind::Pmos => true,
-            ComponentKind::AnalogSwitch => false,
-            _ => continue,
-        };
         for p in &c.pins {
             let Some(role) = idx.role(c, p) else { continue };
-            let wanted = if is_gate {
-                role == "gate" || is_gate_n(role)
-            } else {
-                role.starts_with("ctrl")
+            let Some(sink) = sink_of(model, role) else {
+                continue;
             };
-            let Some(net) = p.net.filter(|&n| n != 0).filter(|_| wanted) else {
+            let Some(net) = p.net.filter(|&n| n != 0) else {
                 continue;
             };
             if idx.level(net).is_some() || is_unconnected_net(idx.name(net)) {
@@ -658,45 +704,65 @@ fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
                     .model(o)
                     .zip(idx.role(o, q))
                     .is_some_and(|(m, r)| m.kind == ComponentKind::Mcu && is_gpio_role(r));
+                let other_input = sink == Sink::Enable
+                    && idx
+                        .model(o)
+                        .zip(idx.role(o, q))
+                        .is_some_and(|(m, r)| sink_of(m, r) == Some(Sink::Enable));
                 if mcu || is_connector_like(o) {
                     drivers.insert(format!("{} pin {}", o.reference, q.number));
+                } else if other_input {
+                    // Another enable on the node floats with it.
                 } else if classify_load(idx, o, q) != Load::HighZ {
                     defined = true;
                 }
             }
             if !defined && !drivers.is_empty() {
-                let entry = nodes.entry((net, is_gate)).or_default();
+                let entry = nodes.entry((net, sink)).or_default();
                 entry.0.extend(drivers);
                 entry.1.insert(c.reference.clone());
+                entry.2 |= model.kind != ComponentKind::Vreg;
             }
         }
     }
     nodes
         .into_iter()
-        .map(|((net, is_gate), (drivers, parts))| {
-            let (what, severity) = if is_gate {
-                ("MOSFET gate", Severity::Low)
-            } else {
-                ("analog-switch select", Severity::Medium)
+        .map(|((net, sink), (drivers, parts, not_regulator))| {
+            let (what, severity) = match sink {
+                Sink::Gate => ("MOSFET gate", Severity::Low),
+                Sink::Select => ("analog-switch select", Severity::Medium),
+                Sink::Enable if not_regulator => ("enable input", Severity::Low),
+                Sink::Enable => ("regulator enable input", Severity::Medium),
             };
             let name = idx.name(net);
             let plural = if parts.len() == 1 { "" } else { "s" };
+            let (effect, fix) = match sink {
+                Sink::Gate => (
+                    "the transistor may conduct or sit half-on",
+                    "Add a pull resistor (about 100 kilohms) to the level that is safe at power-up.",
+                ),
+                Sink::Select => (
+                    "the switch may connect either throw, or draw shoot-through current half-on",
+                    "Add a pull resistor (about 100 kilohms) to the level that is safe at power-up.",
+                ),
+                Sink::Enable => (
+                    "the part may be on, off or chattering through the reset, and whatever it feeds \
+                     powers up in an undefined state (the card states neither what an open pin does \
+                     nor an internal pull; if the datasheet gives the pin one, record it on the card)",
+                    "Add a pull resistor (about 100 kilohms) to the off level for a load that must \
+                     stay off until the firmware runs.",
+                ),
+            };
             LintFinding {
                 check: LintCheck::FloatingGate,
                 severity,
                 message: format!(
                     "net '{name}' drives {} {what}{plural} ({}) and is held only by {} with no pull-up or \
                      pull-down resistor. While the MCU is in reset or booting (or the cable is unplugged) \
-                     the pin is high-impedance, so the node floats and {}. Add a pull resistor (about 100 \
-                     kilohms) to the level that is safe at power-up.",
+                     the pin is high-impedance, so the node floats and {effect}. {fix}",
                     parts.len(),
                     list_text(&parts.iter().map(String::as_str).collect::<Vec<_>>()),
                     list_text(&drivers.iter().map(String::as_str).collect::<Vec<_>>()),
-                    if is_gate {
-                        "the transistor may conduct or sit half-on"
-                    } else {
-                        "the switch may connect either throw, or draw shoot-through current half-on"
-                    },
                 ),
                 refs: parts.into_iter().collect(),
                 nets: vec![name.to_string()],
@@ -972,6 +1038,102 @@ mod tests {
         assert_eq!(hits.len(), 1, "{found:#?}");
         assert_eq!(hits[0].refs, ["U1"]);
         assert_eq!(hits[0].severity, Severity::Medium);
+    }
+
+    /// A regulator by `value` with its enable pad on `en` (pad 3) and its
+    /// input and ground on the rails.
+    fn ldo(value: &str, en: i64) -> Component {
+        part(
+            "U3",
+            value,
+            "Regulator:LDO",
+            &[("1", V5), ("2", GND), ("3", en), ("5", 22)],
+        )
+    }
+
+    #[test]
+    fn an_enable_driven_only_by_an_mcu_pin_floats_in_reset() {
+        let found = run(
+            vec![ldo("RT9080-33", 10), mcu(10)],
+            &[(10, "LDO_EN"), (22, "OUT")],
+        );
+        let hits = of(&found, LintCheck::FloatingGate);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].refs, ["U3"]);
+        assert_eq!(hits[0].severity, Severity::Medium);
+        assert!(
+            hits[0].message.contains("regulator enable input"),
+            "{}",
+            hits[0].message
+        );
+        // An active-low on/off pin is held to the same rule.
+        let low = part("U3", "LM2596S-5.0", "Regulator:LM2596", &[("5", 10)]);
+        let found = run(vec![low, mcu(10)], &[(10, "BUCK_OFF")]);
+        assert_eq!(of(&found, LintCheck::FloatingGate).len(), 1, "{found:#?}");
+    }
+
+    #[test]
+    fn a_pulled_or_stated_enable_is_clean() {
+        let extra = [(10, "LDO_EN"), (22, "OUT")];
+        let pulled = run(
+            vec![ldo("RT9080-33", 10), mcu(10), resistor("R1", 10, GND)],
+            &extra,
+        );
+        assert!(
+            of(&pulled, LintCheck::FloatingGate).is_empty(),
+            "{pulled:#?}"
+        );
+        // Cards that state what an open pin does, or an internal pull, say
+        // what the reset level is.
+        for value in ["MIC5205-3.3", "AP2112K-3.3"] {
+            let found = run(vec![ldo(value, 10), mcu(10)], &extra);
+            assert!(
+                of(&found, LintCheck::FloatingGate).is_empty(),
+                "{value}: {found:#?}"
+            );
+        }
+        // Tied to a rail, or left to a net nothing drives, is not this check.
+        let rail = run(vec![ldo("RT9080-33", V5), mcu(10)], &extra);
+        assert!(of(&rail, LintCheck::FloatingGate).is_empty(), "{rail:#?}");
+        let undriven = run(vec![ldo("RT9080-33", 10)], &extra);
+        assert!(
+            of(&undriven, LintCheck::FloatingGate).is_empty(),
+            "{undriven:#?}"
+        );
+    }
+
+    #[test]
+    fn a_driver_enable_follows_the_cards_stated_pull() {
+        // A MAX3237E states its input keeper: a floating EN or SHDN reads low.
+        let xcvr = part(
+            "U4",
+            "MAX3237ECAI",
+            "Interface:MAX3237E",
+            &[("2", GND), ("13", 10), ("14", 10), ("26", V5)],
+        );
+        let found = run(vec![xcvr, mcu(10)], &[(10, "XCVR_EN")]);
+        assert!(of(&found, LintCheck::FloatingGate).is_empty(), "{found:#?}");
+        // A DRV8353S states its 100 kOhm ENABLE pull-down (SLVSDY6A p.12): an
+        // open ENABLE reads low and the part sleeps, a defined state.
+        let drv = part(
+            "U4",
+            "DRV8353SRTAR",
+            "Driver_FET:DRV8353S",
+            &[("31", 10), ("39", GND), ("3", V5)],
+        );
+        let found = run(vec![drv, mcu(10)], &[(10, "DRV_EN")]);
+        assert!(of(&found, LintCheck::FloatingGate).is_empty(), "{found:#?}");
+        // A driver whose card states no pull is a Low note.
+        let haptic = part(
+            "U4",
+            "DRV2603RUNT",
+            "Driver_Haptic:DRV2603RUNT",
+            &[("1", 10), ("5", GND), ("7", V5)],
+        );
+        let found = run(vec![haptic, mcu(10)], &[(10, "HAPTIC_EN")]);
+        let hits = of(&found, LintCheck::FloatingGate);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Low);
     }
 
     #[test]

@@ -499,9 +499,10 @@ fn two_power_outputs_tied_directly_fires_high() {
 }
 
 lint_tests! {
-    /// A series resistor between the two outputs resolves the contention: clean.
-    /// (This is the dominant benign shape: a wired-OR through series R.)
-    series_resistor_between_outputs_is_clean: OutputContention == 0;
+    /// A series resistor between two push-pull outputs does not resolve the
+    /// fight, it only limits the current: the two ends are different nets, so the
+    /// through-resistor check names it and prices the current from the resistance.
+    series_resistor_between_outputs_still_fights: OutputContention == 1 @ Medium;
     r"
     (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
     (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
@@ -512,6 +513,85 @@ lint_tests! {
       (node (ref R1) (pin 1) (pintype passive)))
     (net (code 2) (name "DRIVE_B")
       (node (ref U2) (pin 1) (pintype output))
+      (node (ref R1) (pin 2) (pintype passive)))"#;
+
+    /// Two UART transmit pins (typed bidirectional, as MCU pads are) wired to each
+    /// other through a 330 ohm resistor: the TX-to-TX mistake.
+    uart_tx_to_tx_through_a_resistor_fires: OutputContention == 1 @ Medium, "TX to TX through R";
+    r"
+    (comp (ref U1) (value MCU_A) (footprint Package:QFN))
+    (comp (ref U2) (value MCU_B) (footprint Package:QFN))
+    (comp (ref R1) (value 330) (footprint Resistor_SMD:R_0402))",
+    r#"
+    (net (code 1) (name "A_TX")
+      (node (ref U1) (pin 1) (pinfunction UART1_TX) (pintype bidirectional))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "B_TX")
+      (node (ref U2) (pin 1) (pinfunction UART1_TX) (pintype bidirectional))
+      (node (ref R1) (pin 2) (pintype passive)))"#;
+
+    /// The same series resistor between a transmitter and a receiver is a
+    /// correctly wired UART.
+    uart_tx_to_rx_through_a_resistor_is_clean: OutputContention == 0;
+    r"
+    (comp (ref U1) (value MCU_A) (footprint Package:QFN))
+    (comp (ref U2) (value MCU_B) (footprint Package:QFN))
+    (comp (ref R1) (value 330) (footprint Resistor_SMD:R_0402))",
+    r#"
+    (net (code 1) (name "A_TX")
+      (node (ref U1) (pin 1) (pinfunction UART1_TX) (pintype bidirectional))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "B_RX")
+      (node (ref U2) (pin 1) (pinfunction UART1_RX) (pintype bidirectional))
+      (node (ref R1) (pin 2) (pintype passive)))"#;
+
+    /// A resistive summing node: two outputs each through a resistor into a node
+    /// that holds an input, not an output on its far side.
+    summing_node_through_resistors_is_clean: OutputContention == 0;
+    r"
+    (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
+    (comp (ref U3) (value AMP) (footprint Package:SOT23))
+    (comp (ref R1) (value 10k) (footprint Resistor_SMD:R_0402))
+    (comp (ref R2) (value 10k) (footprint Resistor_SMD:R_0402))",
+    r#"
+    (net (code 1) (name "A")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "B")
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref R2) (pin 1) (pintype passive)))
+    (net (code 3) (name "SUM")
+      (node (ref R1) (pin 2) (pintype passive))
+      (node (ref R2) (pin 2) (pintype passive))
+      (node (ref U3) (pin 1) (pintype input)))"#;
+
+    /// A resistance too large to be a wiring fault, and a tri-state pin on one end,
+    /// leave the pair alone.
+    large_series_resistance_between_outputs_is_clean: OutputContention == 0;
+    r"
+    (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
+    (comp (ref R1) (value 100k) (footprint Resistor_SMD:R_0402))",
+    r#"
+    (net (code 1) (name "DRIVE_A")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "DRIVE_B")
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref R1) (pin 2) (pintype passive)))"#;
+
+    tristate_pin_behind_a_series_resistor_is_clean: OutputContention == 0;
+    r"
+    (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
+    (comp (ref R1) (value 100) (footprint Resistor_SMD:R_0402))",
+    r#"
+    (net (code 1) (name "DRIVE_A")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "DRIVE_B")
+      (node (ref U2) (pin 1) (pintype tri_state))
       (node (ref R1) (pin 2) (pintype passive)))"#;
 
     /// An `input` member on the net reframes it as a driven input the symbol author
@@ -560,6 +640,37 @@ lint_tests! {
       (node (ref U1) (pin 1) (pintype output))
       (node (ref U2) (pin 1) (pintype output))
       (node (ref J1) (pin 1) (pintype passive)))"#;
+}
+
+/// The through-resistor finding prices the fight: the driving parts' named
+/// supply over the series resistance.
+#[test]
+fn uart_tx_to_tx_through_a_resistor_states_the_current_from_the_resistance() {
+    let comps = r"
+    (comp (ref U1) (value MCU_A) (footprint Package:QFN))
+    (comp (ref U2) (value MCU_B) (footprint Package:QFN))
+    (comp (ref R1) (value 330) (footprint Resistor_SMD:R_0402))";
+    let nets = r#"
+    (net (code 1) (name "A_TX")
+      (node (ref U1) (pin 1) (pinfunction UART1_TX) (pintype bidirectional))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "B_TX")
+      (node (ref U2) (pin 1) (pinfunction UART1_TX) (pintype bidirectional))
+      (node (ref R1) (pin 2) (pintype passive)))
+    (net (code 3) (name "+3V3")
+      (node (ref U1) (pin 2) (pintype power_in))
+      (node (ref U2) (pin 2) (pintype power_in)))"#;
+    let r = lint(comps, nets);
+    let f = r
+        .of_check(LintCheck::OutputContention)
+        .next()
+        .expect("fires");
+    assert!(
+        f.message.contains("3.3 V / 330 ohm = 10 mA"),
+        "{}",
+        f.message
+    );
+    assert_eq!(f.refs, vec!["U1", "U2"]);
 }
 
 /// R35: the output-contention finding's `refs` were collected straight from a

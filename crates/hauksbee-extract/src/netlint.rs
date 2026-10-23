@@ -337,6 +337,12 @@ pub enum LintCheck {
     /// device clamping a bus the powered devices still use. Produced by the
     /// engine-layer `power_states` check.
     PowerDomainBusLockup,
+    /// An open-drain or open-collector output (alert, interrupt, fault,
+    /// power-good, data-out) on a net with no resistor path to a power rail and
+    /// no receiving MCU pin the card says has an internal pull-up: the line
+    /// can only be pulled low, so it floats when the part lets go. Produced by
+    /// the engine-layer `open_drain_pullup` check.
+    MissingOpenDrainPullup,
     /// A point-to-point signal net wired against its pins' directions: it
     /// joins only outputs (or only bidirectional or open-drain pins) with
     /// nothing to receive, or only inputs with nothing to drive them. Fires
@@ -486,7 +492,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -529,6 +535,7 @@ impl LintCheck {
         Self::AudioBusWiring,
         Self::PowerDomainBackfeed,
         Self::PowerDomainBusLockup,
+        Self::MissingOpenDrainPullup,
         Self::SignalDirection,
         Self::DebugHeaderPinout,
         Self::SwitchShort,
@@ -581,6 +588,7 @@ impl LintCheck {
             Self::AudioBusWiring => "audio_bus_wiring",
             Self::PowerDomainBackfeed => "power_domain_backfeed",
             Self::PowerDomainBusLockup => "power_domain_bus_lockup",
+            Self::MissingOpenDrainPullup => "missing_open_drain_pullup",
             Self::SignalDirection => "signal_direction",
             Self::DebugHeaderPinout => "debug_header_pinout",
             Self::SwitchShort => "switch_short",
@@ -641,6 +649,7 @@ impl ExtractedBoard {
         check_sd_pullups(self, &mut report);
         check_floating_control_pins(self, &mut report);
         check_output_contention(self, &mut report);
+        check_series_contention(self, &mut report);
         check_pin_functions(self, &mut report);
         check_design_file_qc(self, &mut report);
         topology::check_ground_islands(self, &mut report);
@@ -2606,6 +2615,199 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
     }
 }
 
+/// Series resistance above which two outputs facing each other are left alone:
+/// the tie is too weak to read as a wiring fault.
+const SERIES_CONTENTION_MAX_OHMS: f64 = 10_000.0;
+
+/// Two push-pull outputs facing each other through a resistor (or a chain of
+/// resistors whose joints hold nothing else), e.g. a UART TX wired to the other
+/// side's TX through a 330 ohm series resistor. The two ends are different
+/// nets, so [`check_output_contention`] never sees them together, yet when the
+/// outputs disagree the resistor alone limits the current between them.
+///
+/// Silent where the shape is legitimate: a summing node or an R-2R ladder (the
+/// resistors' far ends are not both driven by an output, and a ladder joint holds
+/// more than two resistor pins), a pin typed tri-state, open-drain or
+/// bidirectional on either end, a connector on either end (an off-board input
+/// may be there), and resistances above [`SERIES_CONTENTION_MAX_OHMS`].
+fn check_series_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
+    let present = |c: &Component| AssemblyState::of(c).is_present();
+    let plain_r = |c: &Component| {
+        present(c) && c.pins.len() == 2 && is_resistor(c) && parse_ohms(&c.value).is_some()
+    };
+    let signal = |id: i64| {
+        id != 0
+            && board
+                .net(id)
+                .is_some_and(|n| !is_unconnected_net(&n.name) && !is_ground(&n.name))
+    };
+    // A joint of a series chain: exactly two pins, both plain resistors.
+    let interior = |id: i64| {
+        let m: Vec<_> = members(board, id)
+            .into_iter()
+            .filter(|(c, _)| present(c))
+            .collect();
+        m.len() == 2 && m.iter().all(|(c, _)| plain_r(c)) && m[0].0.reference != m[1].0.reference
+    };
+    let mut visited: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for r in board.components.iter().filter(|c| plain_r(c)) {
+        if visited.contains(&r.reference) {
+            continue;
+        }
+        let mut chain = vec![r.reference.clone()];
+        let mut ohms = parse_ohms(&r.value).unwrap_or(0.0);
+        let mut ends = Vec::new();
+        for start in r.pins.iter().filter_map(|p| p.net) {
+            let (mut net, mut cur) = (start, r);
+            for _ in 0..8 {
+                if !interior(net) {
+                    break;
+                }
+                let Some((o, _)) = members(board, net)
+                    .into_iter()
+                    .find(|(c, _)| c.reference != cur.reference && present(c))
+                else {
+                    break;
+                };
+                chain.push(o.reference.clone());
+                ohms += parse_ohms(&o.value).unwrap_or(0.0);
+                let Some(far) = o.pins.iter().filter_map(|p| p.net).find(|n| *n != net) else {
+                    break;
+                };
+                (net, cur) = (far, o);
+            }
+            ends.push(net);
+        }
+        visited.extend(chain.iter().cloned());
+        let [a, b] = ends[..] else { continue };
+        if a == b || !signal(a) || !signal(b) || ohms > SERIES_CONTENTION_MAX_OHMS {
+            continue;
+        }
+        let name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
+        if is_wired_or_name(&name(a)) || is_wired_or_name(&name(b)) {
+            continue;
+        }
+        let (Some(da), Some(db)) = (
+            series_side(board, a, &chain, &present),
+            series_side(board, b, &chain, &present),
+        ) else {
+            continue;
+        };
+        report.findings.extend(series_contention_finding(
+            board,
+            &chain,
+            ohms,
+            (a, b),
+            (da.as_slice(), db.as_slice()),
+        ));
+    }
+}
+
+/// A driving pin and the part it belongs to.
+type Driver<'a> = (&'a Component, &'a Pin);
+
+/// A pin that drives its net push-pull: a typed output, or a dedicated UART
+/// transmit pad (an MCU pad is usually typed `bidirectional`).
+fn drives_pushpull(c: &Component, p: &Pin) -> bool {
+    is_pushpull_output(&p.kind) || (uart_role(p).is_some_and(|r| r.0) && !is_bus_transceiver(c))
+}
+
+/// The push-pull drivers on net `id` outside the series `chain`, or `None` when
+/// there are none or the net holds a connector or a pin that can release or
+/// share the line (which resolves the fight).
+fn series_side<'a>(
+    board: &'a ExtractedBoard,
+    id: i64,
+    chain: &[String],
+    present: &dyn Fn(&Component) -> bool,
+) -> Option<Vec<Driver<'a>>> {
+    let mem: Vec<_> = members(board, id)
+        .into_iter()
+        .filter(|(c, _)| present(c) && !chain.contains(&c.reference))
+        .collect();
+    let resolved = mem.iter().any(|(c, p)| {
+        is_connector_like(c)
+            || (!drives_pushpull(c, p)
+                && matches!(
+                    p.kind.trim().to_ascii_lowercase().as_str(),
+                    "tri_state" | "open_collector" | "open_emitter" | "bidirectional"
+                ))
+    });
+    let found: Vec<_> = mem
+        .into_iter()
+        .filter(|(c, p)| drives_pushpull(c, p))
+        .collect();
+    (!resolved && !found.is_empty()).then_some(found)
+}
+
+/// The finding for the drivers `da` and `db` of nets `a` and `b` joined by the
+/// series `chain` of `ohms`; `None` when one part drives both ends.
+fn series_contention_finding(
+    board: &ExtractedBoard,
+    chain: &[String],
+    ohms: f64,
+    (a, b): (i64, i64),
+    (da, db): (&[Driver<'_>], &[Driver<'_>]),
+) -> Option<LintFinding> {
+    let name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
+    let refs_a: std::collections::BTreeSet<&str> =
+        da.iter().map(|(c, _)| c.reference.as_str()).collect();
+    let refs_b: std::collections::BTreeSet<&str> =
+        db.iter().map(|(c, _)| c.reference.as_str()).collect();
+    if refs_a == refs_b && refs_a.len() == 1 {
+        return None;
+    }
+    // The swing each side can drive, from the highest named rail its
+    // driving parts are powered from.
+    let swing = da.iter().chain(db).filter_map(|(c, _)| {
+        c.pins
+            .iter()
+            .filter(|p| p.kind.eq_ignore_ascii_case("power_in"))
+            .filter_map(|p| p.net.and_then(|id| board.net(id)))
+            .filter_map(|n| hauksbee_models::netclass::rail_voltage(&n.name))
+            .max_by(f64::total_cmp)
+    });
+    let volts = swing.max_by(f64::total_cmp);
+    let drv_desc: Vec<String> = da
+        .iter()
+        .chain(db)
+        .map(|(c, p)| format!("{}.{} ({})", c.reference, p.number, p.function))
+        .collect();
+    let chain_text = if chain.len() == 1 {
+        format!("series resistor {}", chain[0])
+    } else {
+        format!("series resistors {}", chain.join(" + "))
+    };
+    let current = volts.map_or_else(
+        || "its current is the supply voltage divided by that resistance".to_string(),
+        |v| {
+            format!(
+                "up to {v:.1} V / {ohms:.0} ohm = {}",
+                hauksbee_ir::units::format_amps(v / ohms.max(1.0))
+            )
+        },
+    );
+    let mut refs: Vec<String> = refs_a
+        .iter()
+        .chain(&refs_b)
+        .map(|s| (*s).to_string())
+        .collect();
+    refs.sort();
+    refs.dedup();
+    Some(LintFinding {
+            check: LintCheck::OutputContention,
+            severity: Severity::Medium,
+            message: format!(
+                "'{}' and '{}' are joined only by {chain_text} ({ohms:.0} ohm) and each side is driven by a push-pull output: {}. Two outputs facing each other through a resistor still fight: when they drive opposite levels the resistor alone limits the current between them, {current}. If this is a UART, TX must go to the other side's RX; otherwise drive the line from one side only",
+                name(a),
+                name(b),
+                hauksbee_ir::vocabulary::names_summary(&drv_desc)
+            ),
+            refs,
+            nets: vec![name(a), name(b)],
+        })
+}
+
 /// UART direction of one pin-function token: `Some(true)` for transmit
 /// (`TX`, `TXD`, `TXD0`, `U0TXD`, `UART1_TX`, `USART2_TX`), `Some(false)` for
 /// receive, `None` otherwise. A bus prefix other than a UART one (`EMAC_TXD0`,
@@ -2769,9 +2971,18 @@ fn check_pin_functions(board: &ExtractedBoard, report: &mut NetLintReport) {
     }
 }
 
-/// The net of `c`'s first pin whose function is one of `names`.
+/// The net of `c`'s first pin whose function is one of `names`. A pin with no
+/// function (an Eagle board, whose package pads are named `G`/`D`/`S`) is read
+/// by its pad name.
 fn named(c: &Component, names: [&str; 2]) -> Option<i64> {
-    let hit = |p: &&Pin| names.iter().any(|n| p.function.eq_ignore_ascii_case(n));
+    let hit = |p: &&Pin| {
+        let name = if p.function.is_empty() {
+            &p.number
+        } else {
+            &p.function
+        };
+        names.iter().any(|n| name.eq_ignore_ascii_case(n))
+    };
     c.pins.iter().find(hit)?.net
 }
 

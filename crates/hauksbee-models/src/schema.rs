@@ -290,6 +290,22 @@ pub struct PinCapability {
     /// `[models.pin_capability.adc]`: the pads wired to an ADC input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adc: Option<AdcPins>,
+    /// `[models.pin_capability.tri_state]`: output pads the part releases to
+    /// high impedance while an enable input is inactive (an SPI data-out pad
+    /// under its chip select). Unlike the ADC table this one is a partial
+    /// statement: a pad listed has the property, an unlisted pad says nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tri_state: Option<TriStatePins>,
+    /// `[models.pin_capability.open_drain]`: output pads that only pull low
+    /// (open-drain or open-collector) and so need a pull-up on their net.
+    /// A partial statement, as for `tri_state`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_drain: Option<OpenDrainPins>,
+    /// `[models.pin_capability.pull_up]`: pads with a software-enabled internal
+    /// pull-up resistor. A partial statement, as for `tri_state`; an MCU card
+    /// only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_up: Option<PullUpPins>,
     /// `[[models.pin_capability.xtal_int_caps]]`: the crystal oscillators whose
     /// load capacitors are inside the chip, one entry per oscillator.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -325,6 +341,9 @@ impl PinCapability {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.adc.is_none()
+            && self.tri_state.is_none()
+            && self.open_drain.is_none()
+            && self.pull_up.is_none()
             && self.spi_sck.is_none()
             && self.spi_mosi.is_none()
             && self.spi_miso.is_none()
@@ -406,6 +425,44 @@ pub struct XtalIntCap {
     pub basis: String,
 }
 
+/// The pads a part releases to high impedance (see [`PinCapability::tri_state`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TriStatePins {
+    /// The datasheet table, figure or sentence that says the pad is released,
+    /// with its page.
+    pub basis: String,
+    /// Output pad number to the `[models.pins]` role of the input that releases
+    /// it (`cs` for an SPI data-out pad, an output-enable role for a buffer).
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+}
+
+/// The open-drain output pads of a part (see [`PinCapability::open_drain`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenDrainPins {
+    /// The datasheet table or sentence that says the pad is open-drain, with
+    /// its page.
+    pub basis: String,
+    /// Output pad number to the datasheet's name for the signal (`ALERT`,
+    /// `PGOOD`, `INT`).
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+}
+
+/// The pads of an MCU with an internal pull-up (see [`PinCapability::pull_up`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PullUpPins {
+    /// The datasheet table and page the pad list is read from.
+    pub basis: String,
+    /// Pad number to the register or setting that enables the pull-up
+    /// (`PUEn`, `GPIOx_PUPDR`, `PULLUP_EN`).
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+}
+
 /// The ADC-capable pads of an MCU package (see [`PinCapability::adc`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -426,6 +483,36 @@ impl ModelEntry {
     #[must_use]
     pub const fn adc_declared(&self) -> bool {
         self.pin_capability.adc.is_some()
+    }
+
+    /// The `[models.pins]` role of the input that releases the output on `pad`
+    /// to high impedance, where the card says it does.
+    #[must_use]
+    pub fn tri_state_enable(&self, pad: &str) -> Option<&str> {
+        self.pin_capability
+            .tri_state
+            .as_ref()?
+            .pads
+            .get(pad)
+            .map(String::as_str)
+    }
+
+    /// Whether the card says the output on `pad` is open-drain.
+    #[must_use]
+    pub fn is_open_drain_pad(&self, pad: &str) -> bool {
+        self.pin_capability
+            .open_drain
+            .as_ref()
+            .is_some_and(|t| t.pads.contains_key(pad))
+    }
+
+    /// Whether the card says `pad` has a software-enabled internal pull-up.
+    #[must_use]
+    pub fn has_internal_pull_up(&self, pad: &str) -> bool {
+        self.pin_capability
+            .pull_up
+            .as_ref()
+            .is_some_and(|t| t.pads.contains_key(pad))
     }
 
     /// The on-die crystal load capacitors of the oscillator `pad` belongs to,

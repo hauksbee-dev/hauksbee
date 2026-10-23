@@ -109,8 +109,15 @@
 //! - [`node_drive`]: three node-level DC faults read from pin roles: a BJT
 //!   base driven straight from a rail, switch or output with its emitter on a
 //!   rail; a node held only by capacitor plates and high-impedance inputs;
-//!   and a MOSFET gate or analog-switch select held only by MCU or connector
-//!   pins with no pull.
+//!   and a MOSFET gate, analog-switch select or regulator/driver enable held
+//!   only by MCU or connector pins with no pull.
+//! - [`fet_orientation`]: a power FET wired so its body diode defeats it: a
+//!   gate-driven high-side switch that cannot turn off, or a reverse-polarity
+//!   FET with drain and source inverted.
+//! - [`output_release`]: drops an output-contention finding when every driver
+//!   on the net is a card-stated tri-state pad released by its own chip select.
+//! - [`open_drain_pullup`]: a card-stated open-drain output on a net with no
+//!   pull-up resistor and no receiving MCU pin with a stated internal pull-up.
 //! - [`dc_stress`]: every card rating (junction, channel and driver-pin
 //!   current, resistor wattage, junction temperature) judged at the board's
 //!   solved DC operating point by the co-simulation's own stress monitor.
@@ -140,6 +147,7 @@ pub mod dc_stress;
 pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
+pub mod fet_orientation;
 pub mod floating_inputs;
 pub mod indicators;
 pub mod led_current;
@@ -147,7 +155,9 @@ pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
 pub mod node_drive;
+pub mod open_drain_pullup;
 pub mod open_paths;
+pub mod output_release;
 pub mod pin_mux;
 pub mod power_pins;
 pub mod power_states;
@@ -446,6 +456,39 @@ fn add_unsolved_led_findings(
     }
 }
 
+/// The open-drain pull-up and FET-orientation checks, appended to `report`. The
+/// I2C and SD checks name their own buses by net, so a net they reported is not
+/// reported again for an open-drain output; a backwards power FET the extract
+/// layer's direct-neighbour rule already named is not named twice.
+fn extend_with_wiring_direction(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) {
+    for finding in open_drain_pullup::open_drain_pullup_lint(board, lib).findings {
+        let covered = report.findings.iter().any(|r| {
+            matches!(
+                r.check,
+                LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
+            ) && r.nets.iter().any(|n| finding.nets.contains(n))
+        });
+        if !covered {
+            report.findings.push(finding);
+        }
+    }
+    for finding in fet_orientation::fet_orientation_lint(board, lib).findings {
+        let seen = report.findings.iter().any(|r| {
+            r.check == finding.check
+                && r.refs == finding.refs
+                && r.message.contains("body diode")
+                && r.message.contains("always-on FET") == finding.message.contains("always-on FET")
+        });
+        if !seen {
+            report.findings.push(finding);
+        }
+    }
+}
+
 /// The pull-up and digital-audio checks, appended to `report`. A pull-up is
 /// judged against the receivers on its line and the rails the rail model says
 /// come up. `back_power` already reports a pull-up that is above its
@@ -623,6 +666,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(node_drive::node_drive_lint(board, lib).findings);
+    extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
     report
         .findings
@@ -661,6 +705,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     // Last, so every check's finding is seen: what rests only on a drafted
     // card's doubtful field is a note to check the card, not a board fault.
     card_trust::cap_doubted_cards(&mut report, board, lib);
+    // A card that states an output goes high-impedance when deselected (a
+    // shared SPI MISO line) takes the pin-type contention finding away.
+    output_release::drop_released_contention(&mut report, board, lib);
     report
 }
 

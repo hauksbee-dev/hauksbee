@@ -2822,6 +2822,24 @@ unlocked_by = "a validated executable model for eeprom_25xx_spi"
 "7" = "hold_n"
 "8" = "vcc"
 
+[models.pin_capability.tri_state]
+basis = "Microchip 25LC512 DS22065C (2010) Section 3.1 Chip Select (CS), p.19: when the device is deselected, SO goes to the high-impedance state; SO is pad 2 (Table 3-1 Pin Function Table, p.19). Same sentence in Microchip 25AAXXXX/25LCXXXX family DS22040A Section 3.1, p.22"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22065C.pdf"
+title = "Microchip 25LC512 512 Kbit SPI Bus Serial EEPROM, DS22065C, 2010"
+locator = "Section 3.0 Pin Descriptions, Table 3-1 and Section 3.1 Chip Select p.19"
+sha256 = "1efe909df17dd23b792774c69340a31c96841c46d46c645318c122ab2be32934"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22040A.pdf"
+title = "Microchip 25AAXXXX/25LCXXXX 1K-1024K SPI Bus Serial EEPROM family (25AA010A/25LC010A to 25AA1024/25LC1024), DS22040A, 2007 (Preliminary)"
+locator = "Section 3.0 Pin Descriptions, Table 3-1 and Section 3.1 Chip Select p.22"
+sha256 = "aedd32bd46a08755a3309418022455c411ee4759b611bf60727bcdb7f41dad08"
+
 [models.ratings]
 # DS22065 Section 1.0 Absolute Maximum Ratings: VCC 6.5 V, and 5 mA output
 # current on SO. The per-pin figure is the SO drive, which is the only pin on the
@@ -3150,6 +3168,11 @@ float_tolerated_basis = "/WP only acts when the status-register protect bits are
 "7" = "hold_n"
 "8" = "vcc"
 
+[models.pin_capability.tri_state]
+basis = "Winbond W25Q128JV Revision F (27 March 2018) Section 4.1 Chip Select (/CS), p.9: when /CS is high the device is deselected and the Serial Data Output (DO, or IO0, IO1, IO2, IO3) pins are at high impedance; DO is pad 2 (Section 3 pin description)"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"
+
 [models.ratings]
 max_voltage_v = 4.6
 
@@ -3255,6 +3278,11 @@ max_sclk_hz = { max = 133000000.0, unit = "Hz", conditions = "FR, all instructio
 "6" = "sck"
 "7" = "hold_n"   # /HOLD or /RESET (IO3)
 "8" = "vcc"
+
+[models.pin_capability.tri_state]
+basis = "Winbond W25Q32JV Revision G (27 March 2018) Section 4.1 Chip Select (/CS), p.9: when /CS is high the device is deselected and the Serial Data Output (DO, or IO0, IO1, IO2, IO3) pins are at high impedance; DO is pad 2 (Section 3 pin description)"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"
 
 [models.ratings]
 max_voltage_v = 4.6   # 9.1 supply voltage, -0.6 to 4.6 V
@@ -3363,6 +3391,11 @@ float_tolerated_basis = "/WP only acts when the status-register protect bits are
 "7" = "hold_n"   # /HOLD (IO3)
 "8" = "vcc"
 
+[models.pin_capability.tri_state]
+basis = "Winbond W25Q80DV/DL Revision H (2 October 2015) Section 4.1 Chip Select (/CS), p.9: when /CS is high the device is deselected and the Serial Data Output (DO, or IO0, IO1, IO2, IO3) pins are at high impedance; DO is pad 2 (Section 3 pin description)"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"
+
 [models.ratings]
 max_voltage_v = 4.2   # 9.1 supply voltage -0.6 to VCC+0.6 V, at the 3.6 V operating maximum of 9.2
 
@@ -3394,7 +3427,7 @@ missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "s
 # GigaDevice GD25Q16 16-Mbit SPI NOR, 8-pin SOP/VSOP/DIP/USON/WSON (executable
 # standard-SPI subset).
 #
-# Source: GigaDevice GD25Q16C datasheet, revision 1.9 (2016-04-19). Section 2 pin
+# Source: GigaDevice GD25Q16C datasheet, revision 3.2 (2021-05-10). Section 2 pin
 # description (one map for the 8-lead SOP/DIP and WSON/USON), Section 3 memory
 # organization (2 MB, 256-byte pages, 4 KB sectors), 7.22 Read Identification
 # (9Fh returns C8h 40h 15h), 8.1, 8.3 and 8.5 (T = -40 to 85 C, VCC = 2.7 to
@@ -3411,7 +3444,7 @@ tier = "curated-library"
 validation = "datasheet-curves"
 [[models.source.references]]
 url = "https://cdn.components.ru/media/PDF/8048136.pdf"
-title = "GigaDevice GD25Q16C 3.3V Uniform Sector Dual and Quad Serial Flash datasheet, revision 1.9, 2016-04-19"
+title = "GigaDevice GD25Q16C 3.3V Uniform Sector Dual and Quad Serial Flash datasheet, revision 3.2, 2021-05-10"
 locator = "Section 2 pin description; Section 3 memory organization; 7.22; 8.1 Table 6; 8.3; 8.5 DC characteristics (-40 to 85 C)"
 sha256 = "de373b35fad70775b52699ec67a99d1bd292b1865a08ea688c7832e0b4018205"
 [[models.source.uncertainty]]
@@ -3464,6 +3497,11 @@ float_tolerated_basis = "/WP only acts when the status-register protect bits are
 "6" = "sck"
 "7" = "hold_n"   # HOLD# (IO3)
 "8" = "vcc"
+
+[models.pin_capability.tri_state]
+basis = "GigaDevice GD25Q16C revision 3.2 (2021-05-10) Section 8.6 AC Characteristics, tSHQZ Output Disable Time (CS# high to SO output disabled, 6 ns max), p.47; SO (IO1) is pad 2 (Pin Description, p.5)"
+[models.pin_capability.tri_state.pads]
+"2" = "cs"
 
 [models.ratings]
 max_voltage_v = 4.2   # 8.3 VCC, -0.6 to 4.2 V
@@ -4340,6 +4378,11 @@ i2c_max_hz = { max = 3400000.0, unit = "Hz", conditions = "I2C High Speed mode; 
 "7" = "gnd2"
 "8" = "vdd"     # analog + digital supply, 1.71 to 3.6 V
 
+[models.pin_capability.tri_state]
+basis = "Bosch Sensortec BME280 BST-BME280-DS001-24 rev 1.24 (February 2024) Section 6.3 SPI interface, Figure 11 SPI protocol 4-wire (p.34): SDO is labelled tri-state as CSB rises after the last data bit; SDO is pad 5 and CSB pad 2 (Table 35 Pin description)"
+[models.pin_capability.tri_state.pads]
+"5" = "csb"
+
 [models.ratings]
 # Table 5: -0.3 to +4.25 V on either supply pin, and -0.3 V to VDDIO + 0.3 V on
 # any interface pin. 4.25 V is the ceiling.
@@ -4526,6 +4569,19 @@ gnd_pin    = "2"
                   # claim applies to it either: an open-drain pin has no high-side
                   # drive, and the board's pull-up decides its high level. Same
                   # reasoning as the SR2 entry in db/power_ics.toml.
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TPL5010 SNAS651A (January 2015, revised September 2018): Pin Functions table (p.4) lists pin 6 RSTn as Reset Output (open drain output)"
+[models.pin_capability.open_drain.pads]
+"6" = "RSTn"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tpl5010.pdf"
+title = "Texas Instruments TPL5010 Nano-Power System Timer With Watchdog Function, SNAS651A, January 2015, revised September 2018"
+locator = "Pin Functions table p.4"
+sha256 = "a62ae27e1c3dd0cef4549fe4e7d10c637359804a09c74791e4814f6aa26a0f39"
 
 [models.ratings]
 # Section 7.1 Absolute Maximum Ratings.
@@ -4889,6 +4945,19 @@ gnd_pin    = "9"
 # use, exactly as the EFM32PG22 entry's pad 41 is. A board that numbers it
 # differently will not match this row.
 "25" = "gnd2"
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TCA9535 SCPS201F (August 2009, revised September 2026): Features (p.1) open-drain active-low interrupt output, Table 4-1 Pin Functions (p.4) and the interrupt description (p.18) stating INT has an open-drain structure that requires a pull-up resistor to VCC"
+[models.pin_capability.open_drain.pads]
+"22" = "INT"
+
+[models.source]
+tier = "curated-library"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tca9535.pdf"
+title = "Texas Instruments TCA9535 Low-Voltage 16-Bit I2C and SMBus Low-Power I/O Expander with Interrupt Output and Configuration Registers, SCPS201F, August 2009, revised September 2026"
+locator = "Features p.1; Table 4-1 Pin Functions p.4; interrupt output description p.18"
+sha256 = "cdaa29e68dbf21d55819621aae81544ce85c898a48dbd202b3067d18c87b0ab8"
 
 [models.ratings]
 # Absolute Maximum Ratings.
@@ -8438,6 +8507,11 @@ gnd_pin    = "6"           # GND
 "5" = "nc"       # no connect
 "6" = "gnd"
 
+[models.pin_capability.open_drain]
+basis = "Avago Technologies APDS-9306/APDS-9306-065 AV02-4755EN (October 21, 2016): APDS-9306-065 I/O Pins Configuration table (p.2) lists INT as Interrupt - Open Drain"
+[models.pin_capability.open_drain.pads]
+"4" = "INT"
+
 [models.ratings]
 # Absolute Maximum Ratings: VDD 3.8 V max; SCL, SDA, INT -0.5 to 3.8 V.
 max_voltage_v = 3.8
@@ -8542,6 +8616,11 @@ gnd_pin    = "6"           # GND
 "6" = "gnd"
 "7" = "scl"      # I2C serial clock
 "8" = "vdd"      # supply, 2.4 to 3.6 V
+
+[models.pin_capability.open_drain]
+basis = "Avago Technologies APDS-9960 AV02-4191EN (November 13, 2015): I/O Pins Configuration (p.3) lists INT as Interrupt - open drain (active low)"
+[models.pin_capability.open_drain.pads]
+"2" = "INT"
 
 [models.ratings]
 # Absolute Maximum Ratings: VDD 3.8 V; VIN -0.5 to 3.8 V; VOUT -0.3 to 3.8 V.
@@ -8657,6 +8736,11 @@ gnd_pin    = "1"           # GND
 "6" = "vddio"    # digital interface supply, 1.2 to 3.6 V
 "7" = "gnd2"
 "8" = "vdd"      # analog supply, 1.71 to 3.6 V
+
+[models.pin_capability.tri_state]
+basis = "Bosch Sensortec BMP280 BST-BMP280-DS001-26 rev 1.26 (October 2021) Section 5.3 SPI interface, Figure 9 SPI protocol 4-wire (p.30): SDO is labelled tri-state as CSB rises after the last data bit; SDO is pad 5 and CSB pad 2 (Table 29 Pin description)"
+[models.pin_capability.tri_state.pads]
+"5" = "csb"
 
 [models.ratings]
 # Table 3: VDD and VDDIO -0.3 to 4.25 V; interface pins -0.3 V to VDDIO + 0.3 V.
@@ -8776,6 +8860,11 @@ gnd_pin    = "5"           # GND
 "14" = "vdd"     # supply, 1.71 to 3.6 V
 "15" = "adc2"    # auxiliary ADC input 2
 "16" = "adc1"    # auxiliary ADC input 1
+
+[models.pin_capability.tri_state]
+basis = "STMicroelectronics LIS3DH Doc ID 17530 Rev 1 (May 2010) Section 2.4.1, Table 6 SPI slave timing values tdis(SO) SDO output disable time 50 ns max, measured from the CS rising edge in Figure 3 SPI slave timing diagram (p.12); SDO is pad 7 and CS pad 8 (Table 2 Pin description)"
+[models.pin_capability.tri_state.pads]
+"7" = "cs"
 
 [models.ratings]
 # Table 8: Vdd and Vdd_IO -0.3 to 4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V.
@@ -8997,6 +9086,11 @@ gnd_pin    = "3"           # GND
 "11" = "sda"     # I2C SDA / SPI SDI / 3-wire SDO
 "12" = "rsvd2"   # reserved: connect to GND
 
+[models.pin_capability.tri_state]
+basis = "STMicroelectronics LIS3MDL DocID024204 Rev 4 (May 2015) Table 6 SPI slave timing values tdis(SO) SDO output disable time 50 ns max, measured from the CS rising edge in Figure 3 SPI slave timing diagram (p.10); SDO is pad 9 and CS pad 10 (Table 2 Pin description)"
+[models.pin_capability.tri_state.pads]
+"9" = "cs"
+
 [models.ratings]
 # Table 8: Vdd and Vdd_IO -0.3 to 4.8 V; control pins -0.3 V to Vdd_IO + 0.3 V;
 # "Supply voltage on any pin should never exceed 4.8 V."
@@ -9107,6 +9201,11 @@ gnd_pin    = "6"           # GND
 "13" = "scl"     # I2C SCL / SPI SPC
 "14" = "sda"     # I2C SDA / SPI SDI
 
+[models.pin_capability.tri_state]
+basis = "STMicroelectronics LSM6DS3 DocID026899 Rev 4 (April 2015) Section 4.4.1, Table 6 SPI slave timing values tdis(SO) SDO output disable time 50 ns max, measured from the CS rising edge in Figure 2 SPI slave timing diagram (p.23); SDO is pad 1 and CS pad 12 (Table 2 Pin description)"
+[models.pin_capability.tri_state.pads]
+"1" = "cs"
+
 [models.ratings]
 # Table 8: Vdd -0.3 to 4.8 V; control pins to Vdd_IO + 0.3 V; "Supply voltage on
 # any pin should never exceed 4.8 V."
@@ -9208,6 +9307,11 @@ gnd_pin    = "12"          # GND
 "14" = "nc"      # leave unconnected
 "15" = "res5"    # reserved, connect to GND
 "16" = "vdd"     # supply, 1.71 to 3.6 V
+
+[models.pin_capability.tri_state]
+basis = "STMicroelectronics LSM6DS33 DocID027423 Rev 4 (October 2015) Section 4.4.1, Table 6 SPI slave timing values tdis(SO) SDO output disable time 50 ns max, measured from the CS rising edge in Figure 2 SPI slave timing diagram (p.19); SDO is pad 4 and CS pad 5 (Table 2 Pin description)"
+[models.pin_capability.tri_state.pads]
+"4" = "cs"
 
 [models.ratings]
 # Table 8: Vdd -0.3 to 4.8 V; control pins to Vdd_IO + 0.3 V; "Supply Voltage on
@@ -9327,6 +9431,11 @@ gnd_pin    = "7"           # GND
 "8"  = "vbus"    # bus voltage input, -0.3 to 40 V
 "9"  = "in_n"    # IN-, load side of the external shunt
 "10" = "in_p"    # IN+, supply side of the external shunt
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments INA233 SBOS790A (April 2017, revised March 2025): Table 4-1 Pin Functions (p.3) lists ALERT as a PMBus-compatible multifunctional alert, open-drain output, and Section 6.3 (p.13) refers to the open-drain ALERT pin"
+[models.pin_capability.open_drain.pads]
+"3" = "ALERT"
 
 [models.ratings]
 # Section 5.1: VS 6 V; SDA, SCL, A0, A1 6 V. See the note above on IN+/IN-/VBUS.
@@ -9511,6 +9620,11 @@ i2c_max_hz = { max = 2940000.0, unit = "Hz", conditions = "I2C high-speed mode; 
 "8"  = "vbus"    # bus voltage input, 0 to 85 V
 "9"  = "in_n"    # IN-, load side of the external shunt (high-side use)
 "10" = "in_p"    # IN+, supply side of the external shunt (high-side use)
+
+[models.pin_capability.open_drain]
+basis = "Texas Instruments INA228 SLYS021A (January 2021, revised May 2022): Table 5-1 Pin Functions (p.3) lists ALERT as an open-drain alert output, and the ALERT pin description (Section 7.3.7, the sentence is on p.17) says the open-drain output must be pulled up by a resistor"
+[models.pin_capability.open_drain.pads]
+"3" = "ALERT"
 
 [models.ratings]
 # Section 6.1: VS 6 V; SDA, SCL 6 V. See the note above on IN+/IN-/VBUS.
@@ -13363,6 +13477,11 @@ warning = "source-bound supply-draw model: the non-switching VIN quiescent curre
 "7" = "en"
 "8" = "mode"
 
+[models.pin_capability.open_drain]
+basis = "Texas Instruments TPS629203 SLVSGE2 (March 2022): Table 6-1 Pin Functions (p.3) lists PG as Open-drain power-good output, and the power-good description (p.14) says it is an open-drain output that requires a pullup resistor"
+[models.pin_capability.open_drain.pads]
+"2" = "PG"
+
 [models.ratings]
 max_voltage_v = 18.0
 max_current_a = 0.3
@@ -13510,6 +13629,9 @@ vm_current_a = 0.0085
 vdrain_current_a = 0.0019
 vm_on_v = 9.0
 vdrain_on_v = 7.0
+en_pull_down_ohms = 100000.0
+en_open = "off"
+en_open_basis = "TI DRV835x SLVSDY6A (August 2018, revised June 2019) 7.5 Electrical Characteristics (p.12), LOGIC-LEVEL INPUTS (ENABLE, INHx, INLx, nSCS, SCLK, SDI): RPD pulldown resistance, to GND, 100 kOhm typ; 8.3.3 Pin Diagrams, Figure 37 (p.39) shows the 100 kOhm pulldown on the ENABLE input. ENABLE low puts the device in sleep, so an open ENABLE reads low and the part sleeps"
 warning = "source-bound supply-draw model: the awake VM current (8.5 mA typ, 13 mA max at VM = VDRAIN = 48 V, ENABLE high, inputs low) and VDRAIN current (1.9 mA typ) with the 9 V to 75 V VM and 7 V to 100 V VDRAIN ranges are executable; the gate drivers, charge pump, DVDD and VGLS regulators, shunt amplifiers, SPI registers, ENABLE sleep mode (20 uA) and fault logic are not represented, so the half-bridge gates carry no drive"
 
 [models.pins]
@@ -13555,6 +13677,16 @@ warning = "source-bound supply-draw model: the awake VM current (8.5 mA typ, 13 
 "40" = "vgls"
 "41" = "gnd_ep"
 "EP" = "gnd_ep2"
+
+[models.pin_capability.tri_state]
+basis = "TI DRV835x SLVSDY6A (August 2018, revised June 2019) Section 8.5.1.1 SPI (p.54): when the nSCS pin is pulled high the SDO pin is set Hi-Z; Section 7.6 SPI Timing Requirements tDIS_nSCS nSCS high to SDO high impedance 10 ns max (p.18); SDO is pad 27 and nSCS pad 30 (Pin Functions 40-Pin DRV8353 Devices, p.7)"
+[models.pin_capability.tri_state.pads]
+"27" = "ncs"
+[models.pin_capability.open_drain]
+basis = "TI DRV835x SLVSDY6A (August 2018, revised June 2019) Pin Functions 40-Pin DRV8353 Devices (p.7): nFAULT and SDO are type OD (open-drain), nFAULT is pulled low during a fault and SDO requires an external pullup resistor; Section 7.5 OPEN DRAIN OUTPUTS (nFAULT, SDO) (p.12)"
+[models.pin_capability.open_drain.pads]
+"26" = "nFAULT"
+"27" = "SDO"
 
 # DVDD is the part's own 5 V regulator OUTPUT, decoupled by one 1 uF capacitor
 # and nothing else; the board never feeds it (VM and VDRAIN are the supplies,

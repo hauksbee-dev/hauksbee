@@ -3927,7 +3927,8 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::PullupIneffective
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
-        | LintCheck::PowerDomainBusLockup => supply_fix_hint(check),
+        | LintCheck::PowerDomainBusLockup
+        | LintCheck::MissingOpenDrainPullup => supply_fix_hint(check),
         LintCheck::SignalDirection
         | LintCheck::DebugHeaderPinout
         | LintCheck::SwitchShort
@@ -3998,6 +3999,9 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::PowerDomainBusLockup => {
             "Put the I2C pull-ups on a rail that stays on while any chip on the bus does, and power every chip on the bus together, or isolate the switched chip with a bus switch or buffer."
+        }
+        LintCheck::MissingOpenDrainPullup => {
+            "Add a pull-up resistor (10k is typical) from the line to the rail the receiver reads, or enable an internal pull-up on the receiving pin if its datasheet gives one."
         }
         LintCheck::AudioBusWiring => {
             "Wire each audio pin to the net carrying its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), keep exactly one clock master, and connect MCLK where the codec needs it."
