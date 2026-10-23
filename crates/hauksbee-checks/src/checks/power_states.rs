@@ -184,7 +184,7 @@ fn looks_like_battery_holder(comp: &Component) -> bool {
         || (text.contains("battery") && (text.contains("holder") || text.contains("clip")))
 }
 
-fn is_fuse(comp: &Component) -> bool {
+pub(super) fn is_fuse(comp: &Component) -> bool {
     let text = format!("{} {}", comp.lib_id, comp.value).to_ascii_lowercase();
     text.contains("fuse")
         || comp
@@ -193,7 +193,7 @@ fn is_fuse(comp: &Component) -> bool {
             .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-fn is_net_tie(comp: &Component) -> bool {
+pub(super) fn is_net_tie(comp: &Component) -> bool {
     let text = format!("{} {}", comp.lib_id, comp.footprint).to_ascii_lowercase();
     text.contains("nettie")
         || text.contains("net_tie")
@@ -203,7 +203,7 @@ fn is_net_tie(comp: &Component) -> bool {
             .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-fn ohms(comp: &Component) -> Option<f64> {
+pub(super) fn ohms(comp: &Component) -> Option<f64> {
     hauksbee_models::value::parse_value(&comp.value)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si)

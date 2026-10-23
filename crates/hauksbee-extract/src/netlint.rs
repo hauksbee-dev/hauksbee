@@ -110,6 +110,9 @@ impl LintFinding {
             LintCheck::OperatingEnvelope
             | LintCheck::DeviceDecode
             | LintCheck::DcOverstress
+            | LintCheck::RequiredPinBias
+            | LintCheck::SupplyCapacitance
+            | LintCheck::HoldUpDroop
             | LintCheck::PullupIneffective => {
                 self.severity == Severity::Low && self.message.contains(ABSTENTION_MARKER)
             }
@@ -337,6 +340,21 @@ pub enum LintCheck {
     /// device clamping a bus the powered devices still use. Produced by the
     /// engine-layer `power_states` check.
     PowerDomainBusLockup,
+    /// A non-strap pin whose card says it needs a pull-up, a pull-down or a
+    /// defined idle level (an open-drain flag, a bootloader UART RX that must
+    /// idle high) with that bias missing, of the opposite direction, or outside
+    /// the datasheet's resistance range. Produced by the engine-layer
+    /// `pin_bias` check.
+    RequiredPinBias,
+    /// A supply input or output with less capacitance to ground than its
+    /// card's datasheet requires (a motor driver's bulk capacitor, a regulator
+    /// or load switch's input and output capacitors). Produced by the
+    /// engine-layer `supply_cap` check.
+    SupplyCapacitance,
+    /// A regulator fed from a rectified low-frequency source whose bulk
+    /// capacitor lets the input sag, between charging peaks, below the least
+    /// input the regulator needs. Produced by the engine-layer `holdup` check.
+    HoldUpDroop,
     /// An open-drain or open-collector output (alert, interrupt, fault,
     /// power-good, data-out) on a net with no resistor path to a power rail and
     /// no receiving MCU pin the card says has an internal pull-up: the line
@@ -492,7 +510,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 51] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -535,6 +553,9 @@ impl LintCheck {
         Self::AudioBusWiring,
         Self::PowerDomainBackfeed,
         Self::PowerDomainBusLockup,
+        Self::RequiredPinBias,
+        Self::SupplyCapacitance,
+        Self::HoldUpDroop,
         Self::MissingOpenDrainPullup,
         Self::SignalDirection,
         Self::DebugHeaderPinout,
@@ -588,6 +609,9 @@ impl LintCheck {
             Self::AudioBusWiring => "audio_bus_wiring",
             Self::PowerDomainBackfeed => "power_domain_backfeed",
             Self::PowerDomainBusLockup => "power_domain_bus_lockup",
+            Self::RequiredPinBias => "required_pin_bias",
+            Self::SupplyCapacitance => "supply_capacitance",
+            Self::HoldUpDroop => "hold_up_droop",
             Self::MissingOpenDrainPullup => "missing_open_drain_pullup",
             Self::SignalDirection => "signal_direction",
             Self::DebugHeaderPinout => "debug_header_pinout",

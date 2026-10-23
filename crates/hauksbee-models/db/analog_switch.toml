@@ -124,6 +124,31 @@ status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
 
+# Capacitance and flag bias, Diodes AP2552/AP2553 DS35404 Rev. 12-3 (https://www.diodes.com/datasheet/download/AP2553.pdf, sha256 c667dbfc5d65b69cbdb32333850b2c6830bebce54f045dbe4d4ffb5287a33ff9).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "required"
+min_f = 1.0e-7
+basis = "DS35404 Rev. 12-3 p.2 pin descriptions, IN: \"connect a 0.1uF or greater ceramic capacitor from IN to GND as close to IC as possible\"; p.4 Recommended Operating Conditions: Input De-Coupling Capacitance, IN to GND, min 0.1 uF"
+note = "It limits the input voltage drop during line transients. The datasheet recommends a 10 uF minimum electrolytic on the input when the output load is heavy (p.11)."
+
+[[models.supply_cap]]
+role = "in_out_a"
+side = "output"
+grade = "recommended"
+min_f = 1.0e-7
+basis = "DS35404 Rev. 12-3 p.11 Power Supply Considerations: \"bypassing the device output with a 0.1uF to 4.7uF ceramic capacitor improves the immunity of the device to short-circuit transients\""
+note = "It also stops the output going negative at turn-off through parasitic inductance. USB loads also need 120 uF on the output (p.2 note 4)."
+
+[[models.pin_bias]]
+role = "fault_n"
+level = "high"
+needs = "pull"
+open_ok = true
+basis = "DS35404 Rev. 12-3 p.2 pin descriptions: FAULT \"Active-low open-drain output, asserted during over-current, over-temperature, or reverse-voltage conditions\"; p.4 Recommended Operating Conditions: continuous FAULT sink current 0 to 10 mA"
+note = "An open-drain output can only pull the pin low, so a pin that something reads needs a pull-up to read high when there is no fault; an unused flag may be left open."
+
 [[models]]
 id = "sn74lvc1g3157"
 kind = "analog_switch"
@@ -531,6 +556,32 @@ theta_jc_c_per_w = 32.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Capacitance and flag bias, Diodes AP22815 / AP22615 DS41022 Rev. 7-2 (https://www.diodes.com/datasheet/download/AP22815_615.pdf, sha256 275b781c64ec6275cfb7ea48790bf73b5c0d91ce43959d83bd7043e029661ba9).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "required"
+min_f = 1.0e-6
+min_single_f = 1.0e-6
+basis = "DS41022 Rev. 7-2 p.12 Application Information, Input and Output Capacitors: \"It is required to place a 1uF X7R or X5R ceramic bypass capacitor between IN and GND - close to the device\""
+note = "Without it an output short can ring the input past the maximum rating and destroy the control circuitry. The datasheet recommends 10 uF or 47 uF here when the output transient load is heavy (p.12), and 10 uF rather than 1 uF in its typical-application note 4 (p.2)."
+
+[[models.supply_cap]]
+role = "in_out_a"
+side = "output"
+grade = "required"
+min_f = 1.0e-7
+basis = "DS41022 Rev. 7-2 p.12 Input and Output Capacitors: bypass the output with a 0.1uF ceramic capacitor, which improves immunity to short-circuit transients; p.13 Board Layout Instruction: input and output capacitors 1uF and 0.1uF+100uF \"must be implemented\""
+note = "It keeps an output short from driving the output negative and ringing the input. For hot-plug loads the datasheet also wants a minimum of 100 uF low-ESR electrolytic or tantalum (or 22 uF MLCC) on the output (p.12), which this check does not require."
+
+[[models.pin_bias]]
+role = "flg"
+level = "high"
+needs = "pull"
+open_ok = true
+basis = "DS41022 Rev. 7-2 p.3 pin table: FLG \"Open-drain flag is active-low when triggered\"; p.12 FLG Response: \"the FLG open-drain output goes active-low\""
+note = "An open-drain output can only pull the pin low, so a pin that something reads needs a pull-up to read high when there is no fault; an unused flag may be left open."
+
 [[models]]
 id = "ap22615a"
 kind = "analog_switch"
@@ -617,6 +668,33 @@ k_volts = 6800.0
 # I2C lines pulled up by the board), and it publishes no VOH/VOL, VIH/VIL or
 # quiescent supply current at all because it drives nothing. `vth` below is the
 # EN pin's threshold, not a data-path threshold.
+
+# Capacitance and flag bias, Diodes AP22815 / AP22615 DS41022 Rev. 7-2 (https://www.diodes.com/datasheet/download/AP22815_615.pdf, sha256 275b781c64ec6275cfb7ea48790bf73b5c0d91ce43959d83bd7043e029661ba9).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "required"
+min_f = 1.0e-6
+min_single_f = 1.0e-6
+basis = "DS41022 Rev. 7-2 p.12 Application Information, Input and Output Capacitors: \"It is required to place a 1uF X7R or X5R ceramic bypass capacitor between IN and GND - close to the device\""
+note = "Without it an output short can ring the input past the maximum rating and destroy the control circuitry. The datasheet recommends 10 uF or 47 uF here when the output transient load is heavy (p.12), and 10 uF rather than 1 uF in its typical-application note 4 (p.2)."
+
+[[models.supply_cap]]
+role = "in_out_a"
+side = "output"
+grade = "required"
+min_f = 1.0e-7
+basis = "DS41022 Rev. 7-2 p.12 Input and Output Capacitors: bypass the output with a 0.1uF ceramic capacitor, which improves immunity to short-circuit transients; p.13 Board Layout Instruction: input and output capacitors 1uF and 0.1uF+100uF \"must be implemented\""
+note = "It keeps an output short from driving the output negative and ringing the input. For hot-plug loads the datasheet also wants a minimum of 100 uF low-ESR electrolytic or tantalum (or 22 uF MLCC) on the output (p.12), which this check does not require."
+
+[[models.pin_bias]]
+role = "flg"
+level = "high"
+needs = "pull"
+open_ok = true
+basis = "DS41022 Rev. 7-2 p.3 pin table: FLG \"Open-drain flag is active-low when triggered\"; p.12 FLG Response: \"the FLG open-drain output goes active-low\""
+note = "An open-drain output can only pull the pin low, so a pin that something reads needs a pull-up to read high when there is no fault; an unused flag may be left open."
+
 [[models]]
 id = "pca9306"
 kind = "analog_switch"
@@ -958,6 +1036,17 @@ max_voltage_v       = 6.0    # VIN / VOUT / VON, -0.3 to 6 V
 # DELIBERATELY NOT MODELLED: the output discharge resistor on the -1/-3/-5 parts
 # (absent on this one), the soft-start ramp, the reverse-leakage blocking, and the
 # body-diode path.
+
+# Input capacitance, TI TPS22916 SLVSDO5F (https://www.ti.com/lit/ds/symlink/tps22916.pdf,
+# sha256 a4d81b70556d5564aaee9baf455b7651375a94c629448f3f7e7ced2f5c41b33f).
+[[models.supply_cap]]
+role = "in_out_b"
+side = "input"
+grade = "recommended"
+min_f = 1.0e-6
+basis = "TPS22916 SLVSDO5F section 10 Power Supply Recommendations (PDF p.19): \"In most situations, using an input capacitance (CIN) of 1 uF is sufficient to prevent the supply voltage from dipping when the switch is turned on\""
+note = "A slow supply or a large load step can need more bulk capacitance on the input. The datasheet states no output capacitor minimum."
+
 [[models]]
 id = "mic94090"
 kind = "analog_switch"
@@ -1206,6 +1295,25 @@ basis = "DERIVED 1/(0.0031 W/°C): SLVS235A page 5 Dissipation Rating Table, DBV
 
 # FSUSB30 (Fairchild/onsemi Rev. 1.1.8), drafted by the extraction pipeline (codex gpt-6-luna), reviewed against the PDF:
 # MSOP/MicroPak/UMLP pin maps, ron 6.5 typ, VCC 3.0-4.3 V, abs max 5.5 V checked. Hand edits: orderable_re no longer ends in $ (the SparkFun value is FSUSB30MUX_MSOP10); vth is the VIL/VIH midpoint, not the one-sided VIH min.
+
+# Input bypass, TI TPS2104/TPS2105 SLVS235A (https://www.ti.com/lit/ds/symlink/tps2104.pdf,
+# sha256 c4b824bed3429c177712ed589459534a732c00de5f0f7c78dd07e2233b6419f7).
+[[models.supply_cap]]
+role = "s0"
+side = "input"
+grade = "required"
+min_f = 2.2e-7
+basis = "TPS2104/TPS2105 SLVS235A Terminal Functions (PDF p.4): IN1 \"Main input voltage, NMOS drain (250 mOhm), require 0.22 uF bypass\""
+note = "IN1 is the main input; an unused input is left open, not grounded."
+
+[[models.supply_cap]]
+role = "s1"
+side = "input"
+grade = "required"
+min_f = 2.2e-7
+basis = "TPS2104/TPS2105 SLVS235A Terminal Functions (PDF p.4): IN2 \"Auxilliary input voltage, PMOS drain (1.3 Ohm), require 0.22 uF bypass\""
+note = "IN2 is the auxiliary input; an unused input is left open, not grounded."
+
 [[models]]
 id = "fsusb30_micropak"
 kind = "analog_switch"

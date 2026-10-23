@@ -1976,6 +1976,28 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "An I2C bus needs its pull-up resistors powered, and every chip on it must let go of the lines when it is off. If the pull-ups hang on a rail the board can switch off while other chips keep using the bus, the lines float. If a chip on the bus loses its supply while the pull-ups stay up, its input protection diodes clamp the lines to about 0.6 V, which every other chip reads as a permanent low: the bus is dead until the chip is powered again.".to_string(),
                 "Put the pull-ups on a rail that stays on as long as any chip on the bus does, and keep every chip on the bus powered together, or isolate the switched chip with a bus switch (or an I2C buffer) that opens when its rail is off. If the datasheet says the chip's lines are high-impedance with its supply off, record it in its card.".to_string(),
             ),
+            LintCheck::RequiredPinBias | LintCheck::SupplyCapacitance | LintCheck::HoldUpDroop
+                if f.is_abstention() =>
+            (
+                format!("A datasheet requirement on {parts} (net \"{net}\") was not judged. {}", f.message),
+                "The check compares what the part's card says its datasheet requires with what the design files show on the net, and here it could not read one side, so it says it could not tell rather than guess. The board is not known to be wrong.".to_string(),
+                "Supply what the detail names as missing (a capacitor or resistor value, a rail voltage, the AC input level), then re-check; until then verify the requirement against the datasheet by hand.".to_string(),
+            ),
+            LintCheck::RequiredPinBias => (
+                format!("A pin on {parts} (net \"{net}\") is missing the bias its datasheet requires. {}", f.message),
+                "Some pins need a resistor to hold them at a known level: an open-drain output only pulls low, so without a pull-up it never reads high; a bootloader receive line that floats reads noise as start bits. A pull in the wrong direction is worse than none, since it holds the pin at the level the datasheet says to avoid. The requirement is in the part's model card with the datasheet table it was read from.".to_string(),
+                "Add the pull resistor the finding names (or correct the direction or value of the existing one), then re-check.".to_string(),
+            ),
+            LintCheck::SupplyCapacitance => (
+                format!("A supply pin of {parts} (net \"{net}\") has less capacitance than its datasheet requires. {}", f.message),
+                "A motor driver, regulator or load switch is specified with a minimum input or output capacitance: the input capacitor supplies the switching edges and inrush the source cannot, and a regulator or switch output capacitor closes its control loop. With too little the supply droops or rings, the part resets or trips its protection, or the output oscillates. The datasheet value is in the part's model card with the table it was read from; the count here is the capacitance drawn on the net, before voltage derating.".to_string(),
+                "Add the capacitance the finding names between the net and ground, as close to the pin as the layout allows, then re-check.".to_string(),
+            ),
+            LintCheck::HoldUpDroop => (
+                format!("A regulator fed from a rectified supply (net \"{net}\") loses its input between charging peaks. {}", f.message),
+                "A rectifier only recharges the bulk capacitor near the peak of each mains half-cycle, and between peaks the load alone discharges it. The lowest voltage before the next peak (the valley) is the peak less the droop I / (2 f C), and a regulator needs its input above its output plus its dropout at all times. Below that the output loses regulation at the supply's ripple frequency: the rail dips, the load resets, and the board works on the bench at light load and fails under full load.".to_string(),
+                "Raise the bulk capacitance, lower the load on the rail, or raise the transformer voltage so the valley stays above the regulator's minimum input, then re-check.".to_string(),
+            ),
             LintCheck::MissingOpenDrainPullup => (
                 format!("An open-drain output ({parts}) on \"{net}\" has no pull-up. {}", f.message),
                 "An open-drain (or open-collector) output can only pull its line low; it never drives it high. A resistor to a power rail is what brings the line back up when the chip lets go. Without one the line floats, so a fault, alert, interrupt or power-good flag is never seen as released, or reads as random levels, and whatever listens to it misbehaves.".to_string(),

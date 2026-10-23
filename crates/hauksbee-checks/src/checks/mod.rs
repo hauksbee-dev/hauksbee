@@ -57,6 +57,14 @@
 //!   gated rail or that an unpowered device clamps (bus lock-up).
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
+//! - [`pin_bias`]: a pin whose card requires a pull-up, a pull-down or a defined
+//!   idle level (`[[models.pin_bias]]`, non-strap pins) that the board biases the
+//!   wrong way, leaves open, or pulls with a resistor outside the datasheet range.
+//! - [`supply_cap`]: a supply input or regulator/load-switch output whose card
+//!   states a minimum capacitance (`[[models.supply_cap]]`) that the capacitors
+//!   on the net, summed, do not reach.
+//! - [`holdup`]: a regulator fed from a rectifier whose bulk capacitor lets the
+//!   ripple valley fall below the regulator's minimum input voltage.
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
 //!   pin is off (`en_open = "off"`, or an internal pull toward off) with that
 //!   pin left with nothing that can raise it: its rail never comes on. It also
@@ -149,6 +157,7 @@ pub mod device_decode;
 pub mod envelope;
 pub mod fet_orientation;
 pub mod floating_inputs;
+pub mod holdup;
 pub mod indicators;
 pub mod led_current;
 pub mod logic_levels;
@@ -158,6 +167,7 @@ pub mod node_drive;
 pub mod open_drain_pullup;
 pub mod open_paths;
 pub mod output_release;
+pub mod pin_bias;
 pub mod pin_mux;
 pub mod power_pins;
 pub mod power_states;
@@ -172,6 +182,7 @@ pub mod ripple;
 pub mod siblings;
 pub mod signal_direction;
 pub mod straps;
+pub mod supply_cap;
 pub mod switch_short;
 pub mod symbol_card_pins;
 #[cfg(test)]
@@ -609,6 +620,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         datasheet_field::datasheet_field_lint(board).findings,
         bus_loading::bus_loading_lint(board, lib).findings,
         regulator_cout::regulator_cout_lint(board, lib).findings,
+        pin_bias::pin_bias_lint(board, lib).findings,
+        supply_cap::supply_cap_lint(board, lib).findings,
+        holdup::holdup_lint(board, lib).findings,
         power_pins::power_pin_lint(board, lib).findings,
     ] {
         report.findings.extend(findings);
