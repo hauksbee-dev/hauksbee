@@ -68,6 +68,7 @@ mod spec_and_assertions;
 mod spec_models_dir_and_waveforms;
 mod spice_models_cli;
 mod static_verdict_agreement;
+#[cfg(any(feature = "avr", feature = "renode"))]
 mod suggest_asserts;
 mod tarski_outcome_search;
 mod tarski_staged_replay;

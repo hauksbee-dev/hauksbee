@@ -14,7 +14,9 @@ use hauksbee_ci::run;
 #[cfg(feature = "avr")]
 use hauksbee_ci::Spec;
 
-use crate::support::{blinky_board, repo, run_config};
+#[cfg(feature = "avr")]
+use crate::support::blinky_board;
+use crate::support::{repo, run_config};
 
 /// A scratch directory holding a copy of `board`, so the spec lands there.
 fn scratch(board: &Path, tag: &str) -> (PathBuf, PathBuf) {
