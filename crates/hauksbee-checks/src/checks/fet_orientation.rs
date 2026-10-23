@@ -496,6 +496,37 @@ mod tests {
     }
 
     #[test]
+    fn a_pulled_up_pfet_gate_released_by_an_nfet_with_drain_on_the_supply_is_flagged() {
+        // The mito LED-rail switch: a 10k from the P-FET's gate to the supply,
+        // an N-FET pulling the gate down, the P-FET's drain on the supply and
+        // its source on the load. With the N-FET off the gate sits at the
+        // supply but the body diode still feeds the load.
+        const EN: i64 = 12;
+        let mut driver = nfet(GND, GATE, EN);
+        driver.reference = "Q2".into();
+        let pull_up = part("R1", "10k", "Device:R", &[("1", V5), ("2", GATE)]);
+        let found = lint(
+            vec![
+                header(V5),
+                pfet(SW, V5, GATE),
+                driver,
+                pull_up,
+                mcu(EN),
+                load(SW),
+            ],
+            &[(EN, "EN")],
+        );
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].refs, ["Q1"]);
+        assert!(
+            found[0].message.contains("switched by Q2 pin 3")
+                && found[0].message.contains("cannot turn it off"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
     fn a_correctly_oriented_or_undriven_or_tied_fet_is_silent() {
         // Source on the supply, drain on the load: the diode points back at the supply.
         let ok = lint(
