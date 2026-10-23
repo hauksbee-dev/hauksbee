@@ -4,7 +4,10 @@
 //! the firmware runs; with it high the part enters its system-memory
 //! bootloader, the user firmware does not run, the pad the firmware would have
 //! toggled stays quiet, and the ROM answers the USART handshake (AN3155).
-//! These run without Renode: the bootloader path never starts the emulator.
+//! These run without Renode: reporting a boot decision never needs the emulator.
+//! Only a chunk that really runs the chip does (a bootloader or SRAM boot runs
+//! none, a chip held in reset runs none until reset releases, and a chip with no
+//! defined boot mode is reported before its first chunk).
 
 use hauksbee_cosim::execution::ExecutionEvidence;
 use hauksbee_engine::HauksbeeEngine;
