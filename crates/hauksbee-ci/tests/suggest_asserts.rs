@@ -10,7 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use hauksbee_ci::init::{init_observing, Observe, SUGGESTED_HEADER};
-use hauksbee_ci::{run, Spec};
+use hauksbee_ci::run;
+#[cfg(feature = "avr")]
+use hauksbee_ci::Spec;
 
 use crate::support::{blinky_board, repo, run_config};
 
@@ -44,6 +46,7 @@ fn verdict(spec: &Path) -> hauksbee_ci::CiResult {
 }
 
 /// Scaffold + observe the AVR demo (a ~5 Hz blink on D13, a UART banner).
+#[cfg(feature = "avr")]
 fn suggest_blinky(tag: &str, duration_ms: Option<f64>) -> (PathBuf, hauksbee_ci::init::Suggested) {
     let (dir, board) = scratch(&blinky_board(), tag);
     let fw = repo("testdata/firmware/demo/demo.hex");
