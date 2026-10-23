@@ -45,6 +45,26 @@ fn same(a: &Component, b: &Component) -> bool {
     a.reference == b.reference
 }
 
+/// A battery or cell by what the part is, not by what its net is called: a
+/// `BT`/`BAT` designator, a `Device:Battery*` symbol or a battery-holder
+/// footprint. A cell on a net KiCad named `Net-(BT1-+)` is as much a source as
+/// one on `+BATT`.
+fn is_battery_part(c: &Component) -> bool {
+    let r = c.reference.to_ascii_uppercase();
+    let lib = c.lib_id.to_ascii_lowercase();
+    let fp = c.footprint.to_ascii_lowercase();
+    r.starts_with("BT")
+        || r.starts_with("BAT")
+        || lib.starts_with("device:battery")
+        || fp.contains("batteryholder")
+        || fp.contains("battery_holder")
+}
+
+/// A part the board's supply comes in through: a connector or a battery.
+fn is_supply_source(c: &Component) -> bool {
+    is_connector_like(c) || is_battery_part(c)
+}
+
 /// A two-pin part that is a wire at DC for this question: a fuse, a ferrite
 /// bead, an inductor or a resistor of a few ohms or less.
 fn is_series_element(c: &Component) -> bool {
@@ -110,12 +130,7 @@ fn source_tier(idx: &Index<'_>, nets: &[i64], q: &Component) -> u8 {
             let reg_out = idx.model(o).zip(idx.role(o, p)).is_some_and(|(m, r)| {
                 m.kind == ComponentKind::Vreg && matches!(r, "out" | "vout" | "sw")
             });
-            let r = o.reference.to_ascii_uppercase();
-            if reg_out
-                || p.kind.eq_ignore_ascii_case("power_out")
-                || r.starts_with("BT")
-                || r.starts_with("BAT")
-            {
+            if reg_out || p.kind.eq_ignore_ascii_case("power_out") || is_battery_part(o) {
                 tier = tier.max(2);
             } else if is_connector_like(o) {
                 tier = tier.max(1);
@@ -288,7 +303,8 @@ fn is_bias_part(c: &Component) -> bool {
 /// only bias parts (or a ground), ending on ground or the FET's own channel
 /// nets: nothing drives the gate, so the FET sits permanently on.
 fn gate_is_passive(idx: &Index<'_>, q: &Component, gate: i64, ends: [i64; 2]) -> bool {
-    let stop = |n: i64| ends.contains(&n) || is_ground(idx.name(n));
+    let returns = supply_returns(idx, q, (ends[0], ends[1]));
+    let stop = |n: i64| ends.contains(&n) || is_ground(idx.name(n)) || returns.contains(&n);
     let mut frontier = vec![gate];
     let mut seen = vec![gate];
     for depth in 0..2 {
@@ -319,13 +335,52 @@ fn gate_is_passive(idx: &Index<'_>, q: &Component, gate: i64, ends: [i64; 2]) ->
     frontier.is_empty()
 }
 
-/// Whether a connector sits on the cluster of `net`.
+/// Whether a connector or a battery sits on the cluster of `net`: the board's
+/// supply comes in there, whatever the net is called (`Net-(J1-Pin_1)` from a
+/// battery connector has no name to read a rail from).
 fn reaches_connector(idx: &Index<'_>, net: i64, q: &Component) -> bool {
     cluster(idx, net, q).into_iter().any(|n| {
         idx.members(n)
             .iter()
-            .any(|(o, _)| !same(o, q) && is_connector_like(o))
+            .any(|(o, _)| !same(o, q) && is_supply_source(o))
     })
+}
+
+/// The return net of a two-terminal supply (a battery, or a two-net connector)
+/// on the clusters of the FET's two channel nets. A board that names no ground
+/// (a bare battery and a load) has this net where `GND` would be. A ground
+/// net is skipped (every header on the board sits on it, and a FET whose
+/// channel is on ground is a low-side switch, not the supply's protection),
+/// and so is a connector with more than two nets: its other pins are signals.
+fn supply_returns(idx: &Index<'_>, q: &Component, (s, d): (i64, i64)) -> Vec<i64> {
+    let mut out = Vec::new();
+    for net in cluster(idx, s, q).into_iter().chain(cluster(idx, d, q)) {
+        if is_ground(idx.name(net)) {
+            continue;
+        }
+        for (o, _) in idx.members(net) {
+            if same(o, q) || !is_supply_source(o) {
+                continue;
+            }
+            let mut nets: Vec<i64> = o
+                .pins
+                .iter()
+                .filter_map(|p| p.net)
+                .filter(|n| *n != 0)
+                .collect();
+            nets.sort_unstable();
+            nets.dedup();
+            if nets.len() != 2 {
+                continue;
+            }
+            for far in nets.into_iter().filter(|n| *n != net) {
+                if !out.contains(&far) {
+                    out.push(far);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A switching-converter power stage: an inductor sits on a channel net, so
@@ -776,6 +831,95 @@ mod tests {
         low.push(part("R9", "0.01", "Device:R", &[("1", GND), ("2", V5)]));
         let found = lint(low, extra);
         assert!(found.is_empty(), "sense return: {found:#?}");
+    }
+
+    const NA: i64 = 40;
+    const NB: i64 = 41;
+    const NLOAD: i64 = 42;
+    const NGATE: i64 = 43;
+    const UNNAMED: &[(i64, &str)] = &[
+        (NA, "Net-(J1-Pin_1)"),
+        (NB, "Net-(J1-Pin_2)"),
+        (NLOAD, "Net-(Q1-D)"),
+        (NGATE, "Net-(Q1-G)"),
+    ];
+
+    /// A battery board with no named net at all: the supply part `src` on
+    /// `Net-(J1-Pin_1)` / `Net-(J1-Pin_2)`, a P-FET from it to the load, its
+    /// gate pulled to the supply's return through 100k.
+    fn unnamed_battery_board(src: Component, s: i64, d: i64) -> Vec<LintFinding> {
+        let parts = vec![
+            src,
+            pfet(s, d, NGATE),
+            part("R1", "100k", "Device:R", &[("1", NGATE), ("2", NB)]),
+            part("R2", "1k", "Device:R", &[("1", NLOAD), ("2", NB)]),
+        ];
+        let b = board("t", UNNAMED, parts);
+        fet_orientation_lint(&b, &ModelLibrary::builtin()).findings
+    }
+
+    #[test]
+    fn a_reversed_protection_fet_on_an_unnamed_battery_net_is_flagged_and_the_right_one_is_not() {
+        let connector = || {
+            part(
+                "J1",
+                "Conn_01x02",
+                "Connector:Conn_01x02",
+                &[("1", NA), ("2", NB)],
+            )
+        };
+        let cell = || {
+            part(
+                "BT1",
+                "Battery_Cell",
+                "Device:Battery_Cell",
+                &[("1", NA), ("2", NB)],
+            )
+        };
+        for (what, src) in [("connector", connector()), ("battery part", cell())] {
+            let bad = unnamed_battery_board(src.clone(), NA, NLOAD);
+            assert_eq!(bad.len(), 1, "{what}: {bad:#?}");
+            assert!(
+                bad[0].message.contains("always-on FET")
+                    && bad[0].message.contains("Net-(J1-Pin_1)"),
+                "{what}: {}",
+                bad[0].message
+            );
+            let good = unnamed_battery_board(src, NLOAD, NA);
+            assert!(good.is_empty(), "{what}: {good:#?}");
+        }
+    }
+
+    #[test]
+    fn a_ground_referenced_signal_switch_is_not_read_through_a_signal_header() {
+        // A BSS138 boot-select switch: source on ground, drain to a signal,
+        // gate through 1k to the reset net, which a 4-pin debug header also
+        // carries. The header's other pins are signals, not a supply return.
+        const RESET: i64 = 50;
+        const BOOT: i64 = 51;
+        const SPARE: i64 = 52;
+        let nets: &[(i64, &str)] = &[
+            (GND, "GND"),
+            (GATE, "Net-(Q8-G)"),
+            (SW, "Net-(Q8-D)"),
+            (RESET, "/MCU/~RESET"),
+            (BOOT, "/MCU/BOOT0"),
+            (SPARE, "/MCU/SWDIO"),
+        ];
+        let parts = vec![
+            nfet(GND, SW, GATE),
+            part("R1", "1k", "Device:R", &[("1", RESET), ("2", GATE)]),
+            part("R2", "1k", "Device:R", &[("1", SW), ("2", BOOT)]),
+            part(
+                "J2",
+                "Conn_01x04",
+                "Connector:Conn_01x04",
+                &[("1", RESET), ("2", SPARE), ("3", GND), ("4", GND)],
+            ),
+        ];
+        let b = board("t", nets, parts);
+        let found = fet_orientation_lint(&b, &ModelLibrary::builtin()).findings;
+        assert!(found.is_empty(), "signal switch: {found:#?}");
     }
 
     #[test]

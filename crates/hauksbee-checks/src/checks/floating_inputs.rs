@@ -267,6 +267,9 @@ pub(super) enum WeakKind {
     Gpio,
     /// An NPN collector or N-channel drain: pulls low only while on.
     Sink,
+    /// A two-pad jumper (`JP`, `SJ`) the user can leave open: nothing while
+    /// it is open.
+    Jumper,
 }
 
 /// One part that holds a net's level only some of the time.
@@ -298,6 +301,9 @@ pub(super) struct Classifier<'a> {
     pub senses: &'a BTreeSet<(&'a str, &'a str)>,
     /// Count an MCU pad as a weak holder (high impedance at reset).
     pub strict: bool,
+    /// Count a two-pad jumper the user can leave open as a weak holder (the
+    /// strap lint reads the open position). Off, a jumper is a series link.
+    pub open_jumpers: bool,
 }
 
 /// A net that ties a level: ground, or anything that may be a supply.
@@ -364,7 +370,13 @@ impl Classifier<'_> {
             }
             let at = format!("{} pin {}", o.reference, q.number);
             let class = RefClass::of(&o.reference);
-            if is_jumper(o) || is_plain_resistor(o) {
+            if self.open_jumpers && is_openable_jumper(o) {
+                // The user can leave it open, which leaves nothing on the far side.
+                weak.push(Weak {
+                    kind: WeakKind::Jumper,
+                    label: at,
+                });
+            } else if is_jumper(o) || is_plain_resistor(o) {
                 // A series element: the far side holds the level, or is a signal net.
                 for far in o
                     .pins
@@ -550,6 +562,7 @@ fn when_open(weak: &[Weak]) -> String {
             WeakKind::Connector => "nothing is plugged in",
             WeakKind::Gpio => "the MCU is in reset and the pad is high-impedance",
             WeakKind::Sink => "the transistor is off",
+            WeakKind::Jumper => "the jumper is open",
         })
         .collect();
     kinds.into_iter().collect::<Vec<_>>().join(" or while ")
@@ -692,6 +705,7 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         models: &models,
         senses: &senses,
         strict: false,
+        open_jumpers: false,
     };
 
     // The do-not-populate active parts (an IC, a transistor, a module or a
@@ -803,6 +817,15 @@ fn is_jumper(c: &Component) -> bool {
         hauksbee_models::refdes::prefix(&c.reference).as_str(),
         "JP" | "SJ"
     )
+}
+
+/// A two-pad jumper the user can leave open: a pin-header jumper or a solder
+/// jumper whose footprint is not pre-bridged. A pre-bridged solder jumper is
+/// closed as it ships, and a three-pad one always joins two of its pads.
+fn is_openable_jumper(c: &Component) -> bool {
+    is_jumper(c)
+        && c.distinct_pad_count() == 2
+        && !c.footprint.to_ascii_lowercase().contains("bridged")
 }
 
 /// A part that may drive a net though its designator does not say IC: three
