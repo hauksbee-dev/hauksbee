@@ -492,6 +492,98 @@ fn nonfinite_measurement_reason(a: &Assertion, out: &RunOutcome) -> Option<Strin
     ))
 }
 
+/// The lead of every INVALID reason that says a kind is valid in the spec but
+/// the run recorded nothing it could be judged from. The report's refusal
+/// footer and the app both recognise it by this prefix.
+pub(crate) const NEEDS_BENCH_DATA: &str = "needs bench data:";
+
+/// The execution rows `reaches` reads: those of the MCU it names (all when it
+/// names none) whose entry symbol is the one asked for.
+fn entry_rows<'a>(
+    a: &'a Assertion,
+    out: &'a RunOutcome,
+) -> impl Iterator<Item = &'a hauksbee_engine::execution::ExecutionEvidence> {
+    let symbol = a.symbol.as_deref();
+    out.execution.iter().filter(move |e| {
+        a.mcu.as_deref().is_none_or(|m| m == e.mcu_ref) && e.entry_symbol.as_deref() == symbol
+    })
+}
+
+/// Why a bench kind cannot be judged on this run, or `None` when it can.
+///
+/// Today a run records one fact of this kind: whether each core reached its
+/// entry symbol (`main`). So `reaches symbol = "<entry>"` with no deadline is
+/// judged from it, and every other bench assertion is valid but UNJUDGED (an
+/// INVALID with this reason, never a pass) until the run records the bench
+/// view it reads. This is the one seam to widen when it does.
+fn bench_gate(a: &Assertion, out: &RunOutcome) -> Option<String> {
+    use hauksbee_engine::execution::Observed;
+    let (what, now) = match a.kind.as_str() {
+        "bus" => (
+            "the bus log (each I2C/SPI transaction with its ACK and bytes)",
+            "",
+        ),
+        "resets" => ("the MCU's reset count and causes", ""),
+        "uart_baud" => ("the baud rate decoded from the UART's bit timing", ""),
+        "reaches" if a.not_parked_in.is_some() => {
+            ("the park site (the function the core ends the run in)", "")
+        }
+        "reaches" if a.deadline_ms.is_some() => (
+            "the time each symbol was first reached",
+            " Without a deadline, `reaches` can already judge the entry symbol.",
+        ),
+        "reaches" => {
+            let mut rows = entry_rows(a, out).peekable();
+            if rows.peek().is_none() {
+                (
+                    "a record of which symbols the core reached; only the entry symbol is \
+                     known today",
+                    "",
+                )
+            } else if rows.any(|e| e.reached_entry == Observed::Unknown) {
+                (
+                    "a backend that reports whether the core reached its entry symbol \
+                     (this one cannot tell)",
+                    "",
+                )
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "{NEEDS_BENCH_DATA} this {} assertion judges {what}, which this run did not record. \
+         The assertion is valid and will be judged once runs record the bench view; until \
+         then it is not a pass.{now}",
+        a.kind
+    ))
+}
+
+/// `reaches symbol = "<entry>"`: did every core with that entry symbol reach it?
+fn check_reaches(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+    use hauksbee_engine::execution::Observed;
+    let symbol = a.symbol.clone().unwrap_or_default();
+    let rows: Vec<_> = entry_rows(a, out).collect();
+    let missed: Vec<&str> = rows
+        .iter()
+        .filter(|e| e.reached_entry != Observed::Yes)
+        .map(|e| e.mcu_ref.as_str())
+        .collect();
+    if missed.is_empty() {
+        return (true, format!("{symbol}: reached by {}", rows.len()), None);
+    }
+    (
+        false,
+        format!("{symbol}: not reached by {}", missed.join(", ")),
+        Some(format!(
+            "the core never got to {symbol}: it stopped earlier (a clock or supply that never \
+             came up, a hang waiting on hardware, or a fault); read the execution evidence \
+             line for where"
+        )),
+    )
+}
+
 /// Why this member cannot be judged AT ALL, if it cannot: its evaluation window
 /// overlapped a chunk the solver failed on, so the samples are held-stale; a figure
 /// it rests on is not physical; or an unsupported regulator's setpoint reaches
@@ -525,6 +617,10 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
             format_celsius_to(tj.round(), 3),
             format_celsius_to(TJ_IMPOSSIBLE_C, 3),
         ));
+    }
+    // A bench kind with nothing recorded to judge it from is unjudged, not failed.
+    if let Some(reason) = bench_gate(a, out) {
+        return Some(reason);
     }
     // Content the firmware had not produced by the end of a host-paced run is not
     // evidence against it: the same firmware may need longer in simulated time on
@@ -1355,6 +1451,17 @@ fn check_kind(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
         "phase_margin" => check_phase_margin(a, out),
         "ac_gain" => check_ac_gain(a, out),
         "logic_level" | "fires" => crate::search::check(a, out),
+        "reaches" => check_reaches(a, out),
+        // Unreachable while `bench_gate` refuses them first; a kind that gets here
+        // without a bench record must not read as judged.
+        "bus" | "resets" | "uart_baud" => (
+            false,
+            format!(
+                "{NEEDS_BENCH_DATA} the {} assertion has no bench record to read",
+                a.kind
+            ),
+            None,
+        ),
         other => (false, format!("unknown assertion kind '{other}'"), None),
     }
 }

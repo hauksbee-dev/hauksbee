@@ -29,10 +29,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 pub use hauksbee_frontdoor_api::frontdoor::{
-    DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob, DatasheetReady,
-    DatasheetSaver, DeckSimulator, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
-    DesignLiveLauncher, DesignUpload, ExtractSettingsHooks, LiveLaunch, ModelDrafter, NamedUpload,
-    ToolHooks,
+    CosimJobRunner, CosimProgress, DatasheetChecker, DatasheetExtractor, DatasheetHooks,
+    DatasheetJob, DatasheetReady, DatasheetSaver, DeckSimulator, DepInstaller, DepsStatus,
+    DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, DesignUpload, ExtractSettingsHooks,
+    LiveLaunch, ModelDrafter, NamedUpload, ToolHooks,
 };
 
 /// A JSON (or plain-text) body with its content-type header: the shape every
@@ -343,6 +343,183 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
         )
         .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
         .with_state(Arc::new(hooks))
+}
+
+/// How many finished co-sim jobs the server keeps for the page to collect.
+const KEPT_COSIM_JOBS: usize = 8;
+
+/// Where a co-sim job is, as the page polls it.
+enum CosimJobState {
+    Running { progress_s: f64, total_s: f64 },
+    Done(serde_json::Value),
+    Failed(String),
+}
+
+struct CosimJobs {
+    runner: CosimJobRunner,
+    jobs: std::sync::Mutex<Vec<(String, Arc<std::sync::Mutex<CosimJobState>>)>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+/// The emulator co-sim job routes.
+///
+/// `POST /api/cosim-run` starts the run for a design upload (the same multipart
+/// body the analysis takes) and answers `{"job_id"}`; `GET
+/// /api/cosim-run/{job_id}` answers `{"state":"running","progress_s","total_s"}`,
+/// then `{"state":"done","section"}` or `{"state":"failed","error"}`. One job
+/// runs at a time: an emulator boot is heavy, and a second start while one is
+/// running is refused with its reason.
+pub fn cosim_job_routes(runner: CosimJobRunner) -> Router {
+    with_upload_guard(
+        Router::new()
+            .route("/api/cosim-run", post(cosim_job_start_handler))
+            .route("/api/cosim-run/{job_id}", get(cosim_job_status_handler)),
+        CosimJobs {
+            runner,
+            jobs: std::sync::Mutex::new(Vec::new()),
+            next: std::sync::atomic::AtomicU64::new(1),
+        },
+    )
+}
+
+/// A status carrying `{"error": msg}`, the shape the job routes refuse with.
+fn job_error(status: StatusCode, msg: &str) -> JsonResponse {
+    json_body(status, &serde_json::json!({ "error": msg }))
+}
+
+async fn cosim_job_start_handler(
+    State(state): State<Arc<CosimJobs>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let parts = match guarded_upload(&headers, &mut multipart).await {
+        Ok(parts) => parts,
+        Err(response) => return response.into_response(),
+    };
+    let upload = match parts.into_design_upload() {
+        Ok(upload) => upload,
+        Err(message) => return job_error(StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    let cell = Arc::new(std::sync::Mutex::new(CosimJobState::Running {
+        progress_s: 0.0,
+        total_s: 0.0,
+    }));
+    let id = {
+        let mut jobs = state
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let busy = jobs.iter().any(|(_, c)| {
+            matches!(
+                *c.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+                CosimJobState::Running { .. }
+            )
+        });
+        if busy {
+            return job_error(
+                StatusCode::CONFLICT,
+                "another emulator co-sim is still running; wait for it to finish",
+            )
+            .into_response();
+        }
+        let n = state
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("cosim-{n}");
+        jobs.push((id.clone(), cell.clone()));
+        // Old finished jobs go first; the running one is never evicted.
+        while jobs.len() > KEPT_COSIM_JOBS {
+            jobs.remove(0);
+        }
+        drop(jobs);
+        id
+    };
+    let runner = state.runner.clone();
+    let progress_cell = cell.clone();
+    let progress: CosimProgress = Arc::new(move |progress_s, total_s| {
+        let mut guard = progress_cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*guard, CosimJobState::Running { .. }) {
+            *guard = CosimJobState::Running {
+                progress_s,
+                total_s,
+            };
+        }
+    });
+    let spawned = std::thread::Builder::new()
+        .name(format!("hauksbee-{id}"))
+        .spawn({
+            let cell = cell.clone();
+            move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    runner(upload, progress)
+                }));
+                let next = match outcome {
+                    Ok(Ok(json)) => match serde_json::from_str(&json) {
+                        Ok(section) => CosimJobState::Done(section),
+                        Err(error) => CosimJobState::Failed(format!(
+                            "the co-sim finished but its result could not be read: {error}"
+                        )),
+                    },
+                    Ok(Err(message)) => CosimJobState::Failed(message),
+                    Err(_) => CosimJobState::Failed(
+                        "the co-sim task panicked; see the server log".to_string(),
+                    ),
+                };
+                *cell
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+            }
+        });
+    if let Err(error) = spawned {
+        *cell
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            CosimJobState::Failed(format!("could not start the co-sim task: {error}"));
+    }
+    json_ok(serde_json::json!({ "job_id": id }).to_string()).into_response()
+}
+
+async fn cosim_job_status_handler(
+    State(state): State<Arc<CosimJobs>>,
+    headers: HeaderMap,
+    UrlPath(job_id): UrlPath<String>,
+) -> JsonResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let cell = state
+        .jobs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(id, _)| *id == job_id)
+        .map(|(_, cell)| cell.clone());
+    let Some(cell) = cell else {
+        return job_error(
+            StatusCode::NOT_FOUND,
+            "no such co-sim job (the server may have restarted)",
+        );
+    };
+    let body = match &*cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
+        CosimJobState::Running {
+            progress_s,
+            total_s,
+        } => serde_json::json!({
+            "state": "running", "progress_s": progress_s, "total_s": total_s
+        }),
+        CosimJobState::Done(section) => {
+            serde_json::json!({ "state": "done", "section": section })
+        }
+        CosimJobState::Failed(error) => {
+            serde_json::json!({ "state": "failed", "error": error })
+        }
+    };
+    json_body(StatusCode::OK, &body)
 }
 
 /// A `400` carrying `{"error": msg}`, the shape the settings routes answer a

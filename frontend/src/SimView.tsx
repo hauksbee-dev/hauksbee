@@ -6,6 +6,7 @@ import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
+import { ScopeAssert } from './components/checks/ScopeAssert'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
 import { InputSourcesPanel } from './components/InputSourcesPanel'
 import { ProbeScopePanel } from './components/ProbeScopePanel'
@@ -13,6 +14,7 @@ import { FaultPanel } from './components/FaultPanel'
 import { PowerPanel } from './components/PowerPanel'
 import { Dock, readDockTab, type DockTab } from './components/sim/Dock'
 import { seedFrom } from './components/sim/session-seed'
+import { digitalNets } from './lib/bench-view'
 import {
   provenanceFor, scopeCsv, serialTxt, faultsJson, downloadText, downloadCanvas, provenanceLines,
   type SerialLine,
@@ -122,6 +124,10 @@ export default function SimView({
     [seed],
   )
   const probeReasons = useMemo(() => Object.fromEntries(seed.probes.map(p => [p.net, p.why])), [seed])
+  // What the analysis run saw on the bench: the nets MCU pins drive (drawn as
+  // lanes on the scope), and the bus decode and events laid over the same time.
+  const bench = report?.cosim?.ran ? report.cosim.bench ?? null : null
+  const benchDigitalNets = useMemo(() => digitalNets(bench), [bench])
   // What each rail runs: the launch map, then every change this page sent.
   const [supplyEdits, setSupplyEdits] = useState<Record<string, PowerSupplyWire>>({})
   const [supplyGen, setSupplyGen] = useState(0)
@@ -681,12 +687,16 @@ export default function SimView({
                   retained={frames}
                   probes={probes}
                   probeReasons={probeReasons}
+                  digitalNets={benchDigitalNets}
+                  bus={bench?.bus_log}
+                  events={bench?.events}
                   faults={faultLog}
                   onAddProbe={addProbe}
                   onRemoveProbe={removeProbe}
                   exportRef={scopeRef}
                   height={narrow ? 96 : 150}
                 />
+                <ScopeAssert scope={scopeRef} probes={probes} />
               </div>
             )}
 

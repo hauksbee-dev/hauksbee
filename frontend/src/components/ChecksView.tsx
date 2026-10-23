@@ -604,6 +604,8 @@ export function ChecksView({
           // The document is the one source, so appending it is all it takes:
           // the builder re-reads the rows from the text.
           ops.push(appendOp(r.toml))
+          // A blink rate cannot be timed in a run shorter than its periods.
+          if (r.run_ms && Number(r.run_ms) > Number(duration)) duration = r.run_ms
         } else if (r.type === 'select') {
           // The last pick for a ref wins: an existing override is edited in place.
           const row: OverrideRow = { ref: r.ref, select: r.select, reason: 'picked in the app' }

@@ -3,11 +3,11 @@
 //!
 //! Two findings, mirroring `adc_dropped` exactly:
 //!
-//!   1. **A watchdog that cannot bite** (`Mcu::watchdog_limitation`). On
-//!      `renode:nrf52840` the watchdog arms, reads back as running with a
-//!      correct 32768 Hz reload, and never fires; on the ESP32 family the
+//!   1. **A watchdog that cannot bite** (`Mcu::watchdog_limitation`). On the
+//!      RP2040 the watchdog is unmeasured; on the ESP32 family the
 //!      timer-group watchdogs are disabled at launch on purpose, because a
-//!      paused guest would trip them. Either way firmware that HANGS runs
+//!      paused guest would trip them. (The nRF52840 and STM32F103 watchdogs
+//!      bite under Renode and carry no limitation.) Either way firmware that HANGS runs
 //!      forever here, so every assertion about behaviour after a hang is
 //!      fiction and a green run vouches for nothing on the recovery path.
 //!
@@ -191,16 +191,23 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
     assert!(v["cosim"]["timing_limitations"].is_null());
 }
 
-/// Two live-backend findings against the same `renode:stm32_bluepill_demo`
-/// (an F103), each proven byte-for-byte identical across all four surfaces
-/// (JSON note, `CosimJson` field, the default text summary, and `--plain`);
-/// two surfaces wording the same gap differently is the failure this
-/// mirroring exists to avoid.
+/// A live-backend limitation against `renode:stm32_bluepill_demo` (an F103),
+/// proven byte-for-byte identical across all four surfaces (JSON note,
+/// `CosimJson` field, the default text summary, and `--plain`); two surfaces
+/// wording the same gap differently is the failure this mirroring exists to
+/// avoid.
 ///
-/// 1. **A watchdog that cannot bite** (`watchdog_limitations`): the board's
-///    watchdog arms and never fires under Renode.
-/// 2. **A known timing bias** (`timing_limitations`): the F103's `TIMx` blocks
-///    run at the post-PLL 72 MHz against the 8 MHz reset-default core.
+/// **A known timing bias** (`timing_limitations`): the F103 no longer has one
+/// (its clock tree is followed from the RCC registers), so the surface is driven
+/// by the shipped F103 descriptor with a timing sentence injected through
+/// `HAUKSBEE_MCU_DIR`, which exercises the same plumbing a part that does
+/// declare one (F7, F072, G4, L0) uses.
+///
+/// The F103's independent watchdog used to be the other case here ("arms and
+/// never fires"); it bites now (`renode_watchdog.rs`), so the same run must carry
+/// NO watchdog limitation. A part that still cannot bite, such as the RP2040 or
+/// the ESP32 family, reaches the same surfaces through the shared formatter,
+/// which `scheduler.rs` covers in-crate.
 ///
 /// Skips without Renode or the STM32 firmware, like every other `renode_*` test.
 #[cfg(feature = "renode")]
@@ -214,6 +221,22 @@ fn known_backend_limitations_reach_all_four_surfaces() {
     let fw = repo("testdata/firmware/stm32_blinky/blinky.elf");
     hauksbee_testkit::skip_if!(!fw.exists(), "blinky.elf not built");
 
+    // The shipped F103 descriptor plus a declared timing limitation, as an
+    // override directory (`HAUKSBEE_MCU_DIR` beats the built-ins).
+    let override_dir =
+        std::env::temp_dir().join(format!("hauksbee-timing-surface-{}", std::process::id()));
+    std::fs::create_dir_all(&override_dir).expect("mkdir");
+    let stock = std::fs::read_to_string(repo("crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml"))
+        .expect("read the F103 descriptor");
+    let with_timing = stock.replacen(
+        "\n[soc]\n",
+        "\n[soc]\ntiming_limitation = \"The STM32F103 TIMx test limitation: injected so the \
+         timing surface is exercised.\"\n",
+        1,
+    );
+    assert_ne!(with_timing, stock, "the injection must land");
+    std::fs::write(override_dir.join("stm32f103.soc.toml"), with_timing).expect("write override");
+
     let args = |extra: &[&str]| {
         let mut a = vec![
             "run",
@@ -225,22 +248,30 @@ fn known_backend_limitations_reach_all_four_surfaces() {
             "0.05",
         ];
         a.extend_from_slice(extra);
-        Command::new(bin()).args(&a).output().expect("binary runs")
+        Command::new(bin())
+            .env("HAUKSBEE_MCU_DIR", &override_dir)
+            .args(&a)
+            .output()
+            .expect("binary runs")
     };
 
     // (field, "no limitation found" message, substring the sentence must carry)
-    let cases = [
-        (
-            "watchdog_limitations",
-            "this backend's watchdog cannot bite, so it must state the limitation",
-            "watchdog",
-        ),
-        (
-            "timing_limitations",
-            "the F103 declares a TIMx timing limitation, so it must be stated",
-            "TIMx",
-        ),
-    ];
+    let cases = [(
+        "timing_limitations",
+        "the (injected) F103 timing limitation must be stated",
+        "TIMx",
+    )];
+
+    let out = args(&["--json"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("--json object");
+    assert!(
+        v["cosim"]["watchdog_limitations"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "the F103 watchdog bites, so no limitation may be claimed: {}",
+        v["cosim"]["watchdog_limitations"]
+    );
 
     for (field, missing_msg, needle) in cases {
         let out = args(&["--json"]);
@@ -276,4 +307,5 @@ fn known_backend_limitations_reach_all_four_surfaces() {
         let plain = String::from_utf8_lossy(&args(&["--plain"]).stdout).to_string();
         assert!(plain.contains(&line), "{field}: {plain}");
     }
+    let _ = std::fs::remove_dir_all(&override_dir);
 }

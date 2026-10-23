@@ -525,6 +525,14 @@ await browserFlow(flow, async (page, { base, browser }) => {
   }
   wire[0]!.send(JSON.stringify({ type: 'Status', running: false, sim_time: 3, options: {
     temperature_c: 25, parasitics: false, junction_caps: false, tolerances: false, integration: 'trap', fixed_dt: 0, granularity: 1 } }))
+  // sim_time just rose, so the bar counts as running for a grace window and would
+  // show the achieved rate; a phone has no room for it, so no node may exist there
+  // (a CSS-hidden one is zero-sized and sits outside every clip box).
+  await lp.setViewportSize({ width: 320, height: 568 })
+  await settle(lp, 50)
+  ok('the achieved rate is not rendered on a phone while sim time advances',
+    await lp.locator('[data-testid="transport-rate"]').count() === 0)
+  await lp.setViewportSize({ width: 1440, height: 900 })
   await lp.locator('[data-testid="transport-step-back"]').click()
   // The fault count in the transport row opens the dock's fault table.
   await lp.locator('[data-testid="sim-fault-count"]').click()

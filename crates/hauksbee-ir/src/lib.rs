@@ -15,13 +15,18 @@
 //! tour) and docs/how-and-why/hauksbee-ir/lib.md (this module's deep-dive).
 
 mod bexpr;
+pub mod boot;
 pub mod debug;
 pub mod docs_url;
 pub mod evidence;
 pub mod glossary;
+pub mod header_pinouts;
 pub mod labels;
 mod models;
+pub mod observations;
 pub mod order;
+pub mod peripheral_limits;
+pub mod pin_functions;
 pub mod progress;
 pub mod run_record;
 mod source;

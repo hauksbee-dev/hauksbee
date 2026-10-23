@@ -34,9 +34,22 @@ accessors. `reset` mutates the loaded core: `supports_reset` defaults to false,
 with AVR opting in; unsupported Renode/QEMU sessions require a relaunch.
 The scheduler preflights every core and clears the old run only after all
 resets succeed. A possibly partial reset stops execution and preserves the
-old evidence. Reset is not invoked for rail events: a board that browns out
-has its analog collapse caught by a `rail` assertion while its firmware keeps
-executing as though the supply held.
+old evidence. A rail event does not call `reset` either; the scheduler's reset
+gate (`scheduler/electrics.rs`) acts on it instead. When the card has a
+`[models.reset]` table, a reset pin held below its VIL, or the watched supply
+below the card's brown-out threshold, holds the core in reset (its pins float
+and no chunk runs) until the pin or supply has been back above the release
+threshold for the card's release delay; the core then restarts from reset and a
+reset episode is reported with its cause. A card without the table keeps the
+old behaviour: the analog collapse is caught by a `rail` assertion while the
+firmware keeps executing as though the supply held.
+
+Pin output strength is per setting, not a fixed resistance: a card's
+`[[models.output_drive]]` rows give the datasheet VOH/VOL bounds per drive
+setting, the binder fits a high and a low output resistance from them, and
+`[models.drive_select]` says where the firmware's drive field lives so the
+scheduler can read it back (`Mcu::read_register`) and re-stamp the pin. Open-drain
+modes drive only the low level.
 
 ### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 
@@ -323,10 +336,16 @@ full watchdog fidelity and therefore emits neither disclosure when healthy.
 | Backend | armed and never fed | how it is known |
 |---------|---------------------|-----------------|
 | `simavr:atmega328p` | **reboots, at the right virtual time, repeatedly** | `tests/avr_watchdog.rs`, two-sided against the same firmware with the arming line removed |
-| `renode:stm32f103` | **resets once, then the core does not resume** | watchdog limitation is reported after the reset |
-| `renode:nrf52840` | **never fires** | watchdog limitation is reported; no reset is inferred |
+| `renode:stm32f103` | **reboots repeatedly** (starved IWDG; the fed control boots once) | `tests/renode_watchdog.rs`; the descriptor's reset macro restores VTOR, SP and PC, which is what the earlier "fires once then quiet" result was missing |
+| `renode:nrf52840` | **reboots repeatedly** (starved WDT; the fed control boots once) | `tests/renode_watchdog.rs`; the earlier "never fires" claim was wrong, the part's flash at 0 only hid the missing reset state |
 | `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
 | `renode:stm32f072`, `renode:stm32f4_discovery`, `renode:stm32g4`, `renode:stm32f7`, `renode:stm32l0`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | no starvation fixture establishes reset behavior for these parts |
+
+Reboots are counted by a persistent hook on the reset entry point; boots minus
+the first, minus host-requested resets, is the count `Mcu::watchdog_resets`
+returns. Known limit: a firmware's own software reset (`NVIC_SystemReset`) is
+counted with the watchdog bites, because a Renode watchpoint on `AIRCR` never
+fires for core accesses (measured on the F103), so the two cannot be told apart.
 
 ESP32 watchdogs are disabled during co-simulation because chunk boundaries pause
 the guest while the analog side solves. The backend reports this limitation on
@@ -371,7 +390,7 @@ report, an "Execution evidence:" block in the default text summary, and an
 | `supply_valid`, `supply_v` | supply pads inside the card's operating range (`min_v` of its supply envelope to its absolute maximum). A card with per-domain `supply_range` rows (the RP2040's 1.1 V DVDD beside its 3.3 V IOVDD) judges each pad against its own domain's floor; `supply_v` is then the deepest pad below its floor, or the lowest pad otherwise |
 | `clock_valid`, `clock_source` | read off the MCU's core oscillator pins (found by pin role/name, e.g. `XTAL1`/`XTAL2`, `OSC_IN`/`OSC_OUT`, `XIN`/`XOUT`): `yes` for a fitted crystal across the pair (directly, or with one leg through a fitted series resistor to a pin, the drive-level resistor many boards put on the output) or a fitted oscillator or driver on the input; `no` for a broken clock (pin tied to a rail, pins shorted, a crystal leg off the pin pair), which blocks eligibility; otherwise `unknown`, including a part with no external clock part on a card that declares an `internal_clock` (the source says "internal oscillator only"): the firmware or fuse clock selection is not checked, so it is never a valid-clock claim |
 | `executed` | entry reached, or any UART byte (not on a boot-ROM console), or any firmware GPIO edge |
-| `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid, clock not broken; otherwise why not |
+| `firmware_pass_eligible`, `blockers` | executed, no fault, reset not held, supply not invalid, clock not broken; otherwise why not. On a backend that models external-oscillator readiness (the Renode STM32 and RP2040 parts), a core that never started on a board with no crystal or oscillator fitted adds the blocker "the board fits no crystal or oscillator ...": the firmware is waiting for an oscillator-ready flag that silicon would never raise, and the bench headline says the same |
 
 No evidence of execution is never a firmware pass. Net toggles alone do not
 count, because an oscillator or a responder toggles nets with the core parked:

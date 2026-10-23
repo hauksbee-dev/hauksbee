@@ -1391,6 +1391,7 @@ mod tests {
             version_warning: copper_unvalidated.map(str::to_string),
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
+            clearance_unjudged: hauksbee_extract::UnjudgedClearance::default(),
         });
         let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
         let copper_plain = crate::plain::plain_drc_structured_with_rule_source(&drc, &provenance);

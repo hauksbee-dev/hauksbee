@@ -38,6 +38,7 @@ pub mod bom;
 pub mod datasheet_identity;
 pub mod dnp;
 pub mod drc;
+mod drc_rules;
 mod dsu;
 mod eagle;
 pub mod easyeda;
@@ -85,9 +86,10 @@ pub mod trace_current;
 pub use drc::{
     clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
     run_drc_with_clearance_rules, ClearanceRules, DeclaredTie, DrcFinding, DrcReport,
-    DrcTieQualification, Item, ItemKind, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM,
-    SHORT_TOUCH_EPS_MM,
+    DrcTieQualification, Item, ItemKind, NetClassRule, UnjudgedClearance, ViolationKind,
+    DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
 };
+pub use drc_rules::CustomClearanceRule;
 pub use eagle_sch::{
     declared_net_ties, looks_like_eagle_schematic, schematic_pad_names, schematic_part_identities,
     schematic_pin_net_identities, DeclaredNetTie, SchematicPartIdentity, SchematicPinNetIdentity,
@@ -99,9 +101,9 @@ pub use kicad_dru::{
 pub use netlint::{
     control_role, is_capacitor, is_connector_like, is_ground, is_led, is_led_identity,
     is_logic_or_switch_ref, is_placeholder_value, is_resistor, is_test_point_or_hole,
-    is_unconnected_net, model_card_file_in, norm, pin_is_no_connect, render_netlint, I2cMode,
-    LintCheck, LintFinding, NetLintReport, Severity, ABSTENTION_MARKER, CHECK_BEFORE_ORDERING,
-    DNP_FITTED_NOTE_MARKER, DNP_PULLUP_MESSAGE_MARKER, INFORMATIONAL_MARKER,
+    is_unconnected_net, model_card_file_in, norm, pin_is_no_connect, render_netlint, uart_pin_role,
+    I2cMode, LintCheck, LintFinding, NetLintReport, Severity, ABSTENTION_MARKER,
+    CHECK_BEFORE_ORDERING, DNP_FITTED_NOTE_MARKER, DNP_PULLUP_MESSAGE_MARKER, INFORMATIONAL_MARKER,
     MODEL_CARD_MESSAGE_MARKER, REMEDY_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 pub use si::{

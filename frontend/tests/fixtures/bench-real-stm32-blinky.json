@@ -1,0 +1,165 @@
+{
+  "duration_s": 1.500000000000001,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:stm32f103",
+      "core": "core_running",
+      "headline": "running",
+      "resets": 0,
+      "first_activity_s": 0.01,
+      "pins": [
+        {
+          "pin": "PC13",
+          "net": "PC13_LED",
+          "state": "pin_toggling",
+          "edges": 16,
+          "freq_hz": 5.035971223021579,
+          "duty": 0.49640287769784164,
+          "first_edge_s": 0.01,
+          "final_high": false,
+          "summary": "toggling 5.04 Hz, 50% duty",
+          "edge_samples": [
+            {
+              "t_s": 0.01,
+              "high": true
+            },
+            {
+              "t_s": 0.09999999999999999,
+              "high": false
+            },
+            {
+              "t_s": 0.20000000000000004,
+              "high": true
+            },
+            {
+              "t_s": 0.3000000000000001,
+              "high": false
+            },
+            {
+              "t_s": 0.4000000000000002,
+              "high": true
+            },
+            {
+              "t_s": 0.5000000000000002,
+              "high": false
+            },
+            {
+              "t_s": 0.6000000000000003,
+              "high": true
+            },
+            {
+              "t_s": 0.7000000000000004,
+              "high": false
+            },
+            {
+              "t_s": 0.8000000000000005,
+              "high": true
+            },
+            {
+              "t_s": 0.9000000000000006,
+              "high": false
+            },
+            {
+              "t_s": 1.0000000000000007,
+              "high": true
+            },
+            {
+              "t_s": 1.1000000000000008,
+              "high": false
+            },
+            {
+              "t_s": 1.2000000000000008,
+              "high": true
+            },
+            {
+              "t_s": 1.300000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.400000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.500000000000001,
+              "high": false
+            }
+          ]
+        },
+        {
+          "pin": "PA5",
+          "net": "PA5_OUT",
+          "state": "pin_static_high",
+          "edges": 1,
+          "first_edge_s": 0.01,
+          "final_high": true,
+          "summary": "static high, set at 10.0 ms",
+          "edge_samples": [
+            {
+              "t_s": 0.01,
+              "high": true
+            }
+          ]
+        },
+        {
+          "pin": "PA9",
+          "state": "pin_static_low",
+          "edges": 0,
+          "summary": "configured as an output, never changed"
+        }
+      ],
+      "uarts": [
+        {
+          "port": "UART",
+          "baud_note": "the baud rate is not read from the peripheral on this backend",
+          "bytes": 18,
+          "printable_ratio": 1.0,
+          "first_line": "hello from stm32",
+          "first_byte_s": 0.0
+        }
+      ]
+    }
+  ],
+  "bus_log": [
+    {
+      "t_s": 0.0,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        104,
+        101,
+        108,
+        108,
+        111,
+        32,
+        102,
+        114,
+        111,
+        109,
+        32,
+        115,
+        116,
+        109,
+        51,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"hello from stm32\""
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.0,
+      "kind": "event_first_uart_byte",
+      "mcu_ref": "U1",
+      "detail": "first serial output: \"hello from stm32\""
+    },
+    {
+      "t_s": 0.01,
+      "kind": "event_first_edge",
+      "mcu_ref": "U1",
+      "detail": "PA5 went high"
+    }
+  ]
+}

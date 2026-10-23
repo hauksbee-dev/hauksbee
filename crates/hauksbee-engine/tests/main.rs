@@ -21,6 +21,8 @@ mod behavioral_faults;
 mod behavioral_framework;
 #[path = "behavioral_vreg_rail.rs"]
 mod behavioral_vreg_rail;
+#[path = "bench_observability.rs"]
+mod bench_observability;
 #[path = "binder_correctness.rs"]
 mod binder_correctness;
 #[path = "binder_gpio_promotion.rs"]
@@ -33,6 +35,8 @@ mod bitbang_spi_cosim;
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]
 mod bom_placement_cli;
+#[path = "boot_straps_cosim.rs"]
+mod boot_straps_cosim;
 #[path = "bug_hunt_physics.rs"]
 mod bug_hunt_physics;
 #[path = "bundled_sensor_catalog.rs"]

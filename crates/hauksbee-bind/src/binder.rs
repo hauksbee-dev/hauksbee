@@ -105,6 +105,9 @@ pub struct McuBinding {
     /// RP2040's 3.3 V IOVDD and 1.1 V DVDD) has each pad judged against its
     /// own row rather than one part-wide floor.
     pub supply_floors: HashMap<String, f64>,
+    /// The card's pin drive strengths, drive-select register layout and
+    /// reset / brown-out thresholds. Empty when the card states none.
+    pub electrical: crate::mcu_electrical::McuElectrical,
 }
 
 /// One MCP4728 quad DAC discovered on the board.
@@ -183,6 +186,10 @@ pub struct BoundBoard {
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
     pub mcus: Vec<McuBinding>,
+    /// MCU reference -> the boot-mode table of the card it bound to, for the
+    /// co-simulator to resolve against the solved board at reset release. Only
+    /// MCUs whose card carries boot-mode rows appear.
+    pub mcu_boot: HashMap<String, hauksbee_models::boot_mode::BootSpec>,
     /// Processors that were skipped because the board file marks them DNP, as
     /// (reference, value). Non-empty with an empty `mcus` means the board has
     /// no simulable processor for a reason the user can undo (`--fit`), which
@@ -451,6 +458,9 @@ pub fn bind_board_driven(
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
+    // A switching converter's switch node is pulsed between the rails and is
+    // not a rail, whatever its name says: see `switch_node_nets`.
+    let switch_nodes = switch_node_nets(board, lib, facts);
     // A separate circuit's own ground is its reference: see
     // `island_reference_grounds`.
     let island_grounds = facts.map_or_else(
@@ -520,6 +530,10 @@ pub fn bind_board_driven(
                     net.name
                 ));
                 report.push(row);
+            } else if switch_nodes.contains(&net.id) {
+                // Not a rail: no ideal source is stamped on it, and the
+                // inductor that joins it to the output is not a short between
+                // two rails of different voltage.
             } else if let Some(v) = power_rail_voltage(&net.name)
                 .or_else(|| power_out_nets.get(&net.id).copied())
                 .or_else(|| module_supply_nets.get(&net.id).copied())
@@ -544,6 +558,7 @@ pub fn bind_board_driven(
     let mut component_kinds: HashMap<String, String> = HashMap::new();
     let mut digital: Vec<DigitalComponent> = Vec::new();
     let mut mcus: Vec<McuBinding> = Vec::new();
+    let mut mcu_boot: HashMap<String, hauksbee_models::boot_mode::BootSpec> = HashMap::new();
     let mut dacs: Vec<DacBinding> = Vec::new();
     let mut peripherals: Vec<PeripheralBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
@@ -681,6 +696,11 @@ pub fn bind_board_driven(
                         (&board.components, &level_nets),
                         lib.pin_rules(),
                     );
+                    if matches!(outcome, BindOutcome::Mcu { .. }) {
+                        if let Some(spec) = bound_card.boot_spec() {
+                            mcu_boot.insert(comp.reference.clone(), spec);
+                        }
+                    }
                     let rail = |n: Option<i64>| {
                         let id = node_of(n)?;
                         let name = circuit.node_name(id);
@@ -991,6 +1011,7 @@ pub fn bind_board_driven(
         net_names,
         digital,
         mcus,
+        mcu_boot,
         dnp_mcus,
         unsupported_mcus,
         component_kinds,
@@ -2814,15 +2835,41 @@ fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
     Some(role)
 }
 
+/// The names a pad's printed function lists, whole string first. A GPIO name
+/// that follows an underscore (`RTC_GPIO4`, `LP_GPIO4`, `RTC_IO4`) is the
+/// low-power domain's numbering, which matches the pad's GPIO on some chips
+/// (ESP32-S3 `RTC_GPIO4` is GPIO4, ESP32-C6 `LP_GPIO4` is GPIO4) and not on others
+/// (the ESP32 pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34). The name alone can't
+/// tell which, so it is never offered as a bare `GPIOn`; those chips also print
+/// the plain `GPIOn` on the pad. `ADC1_CHn` and `TOUCHn` name no GPIO.
 fn pinfunction_tokens(upper: &str) -> Vec<String> {
+    fn push(seg: &str, sep_before: Option<char>, tokens: &mut Vec<String>) {
+        if seg.is_empty() || (sep_before == Some('_') && is_gpio_name(seg)) {
+            return;
+        }
+        tokens.push(seg.to_string());
+    }
     let mut tokens = vec![upper.to_string()];
-    tokens.extend(
-        upper
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(str::to_string),
-    );
+    let mut prev_sep: Option<char> = None;
+    let mut seg_start = 0usize;
+    for (i, c) in upper.char_indices() {
+        if !c.is_ascii_alphanumeric() {
+            push(&upper[seg_start..i], prev_sep, &mut tokens);
+            seg_start = i + c.len_utf8();
+            prev_sep = Some(c);
+        }
+    }
+    push(&upper[seg_start..], prev_sep, &mut tokens);
     tokens
+}
+
+/// `GPIO4` or `IO4`: a bare GPIO number with nothing else in the name.
+fn is_gpio_name(seg: &str) -> bool {
+    let digits = seg
+        .strip_prefix("GPIO")
+        .or_else(|| seg.strip_prefix("IO"))
+        .unwrap_or("");
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
@@ -4258,7 +4305,7 @@ fn role_node_map_pins(
 /// Each source's role for a pad, in precedence order: the pin-function, the card's
 /// pads, a kind-aware electrode letter (C: cathode on a diode, collector on a BJT)
 /// and an Eagle P$1/P$2 ordinal re-reading the card's pads.
-fn pad_role_sources(
+pub(crate) fn pad_role_sources(
     pin: &hauksbee_extract::Pin,
     pins: &std::collections::BTreeMap<String, String>,
     kind: Option<ComponentKind>,
@@ -7823,6 +7870,21 @@ fn roles_by_name(role_nets: &HashMap<String, NodeId>) -> Vec<(&String, NodeId)> 
     by_role
 }
 
+/// The pad-to-role map for an MCU: the model's own roles win on the pads they
+/// name, and the footprint's pin functions fill the rest (see `bind_mcu`).
+fn merged_mcu_pin_roles(
+    comp: &Component,
+    model: &ModelEntry,
+    derived_when_empty: Option<&DerivedMcuPins>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut merged =
+        derived_when_empty.map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
+    for (pad, role) in &model.pins {
+        merged.insert(pad.clone(), role.clone());
+    }
+    merged
+}
+
 fn bind_mcu(
     comp: &Component,
     model: &ModelEntry,
@@ -7837,7 +7899,6 @@ fn bind_mcu(
     // in an SDK/extending-guide model) must NOT activate the Arduino-header pad
     // mapping. Only `module = true` does.
     let module = model.params.get_bool("module").unwrap_or(false);
-    let derived_when_empty = model.pins.is_empty().then(|| derive_mcu_pin_roles(comp));
     // Merge the two role sources PER PAD instead of treating a non-empty model
     // map as exhaustive. A DB pin map is curated for one package's numbering
     // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied to
@@ -7847,15 +7908,8 @@ fn bind_mcu(
     // on pads they name (they carry curated semantic suffixes like "pc6_reset"
     // that the plain pinfunction derivation would weaken); the derivation only
     // fills pads the model map does not cover.
-    let effective_pins: std::collections::BTreeMap<String, String> = {
-        let mut merged = derived_when_empty
-            .as_ref()
-            .map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
-        for (pad, role) in &model.pins {
-            merged.insert(pad.clone(), role.clone());
-        }
-        merged
-    };
+    let derived_when_empty = model.pins.is_empty().then(|| derive_mcu_pin_roles(comp));
+    let effective_pins = merged_mcu_pin_roles(comp, model, derived_when_empty.as_ref());
     let effective_pins = &effective_pins;
 
     let mut pad_roles = HashMap::new();
@@ -7893,6 +7947,7 @@ fn bind_mcu(
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     let mut adc_pin = HashMap::new();
+    let electrical = crate::mcu_electrical::McuElectrical::from_card(model);
     // Roles in name order, never hash order: two roles reaching one port pin
     // would otherwise race for it (see `port_pin_owners`).
     let by_role = roles_by_name(&role_nets);
@@ -7929,7 +7984,7 @@ fn bind_mcu(
                 node,
                 &net_name,
                 &format!("{}_{port}{bit}", comp.reference),
-                DEFAULT_RO,
+                electrical.initial_ohms(DEFAULT_RO),
             );
             // Start high-impedance: the firmware enables the driver by toggling
             // the pin (DDR + PORT writes surface as an output edge). Inertness
@@ -7986,6 +8041,7 @@ fn bind_mcu(
             })
             .reduce(f64::min),
         supply_floors: supply_floors(model),
+        electrical,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }
@@ -8558,6 +8614,77 @@ fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
         for pin in comp.pins.iter().filter(|p| is_out(p)) {
             if let Some(net_id) = pin.net.filter(|n| *n != 0) {
                 out.insert(net_id, format!("{} ({})", comp.reference, comp.value));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a pin name is a switching converter's switch node (`SW`, `SW1`,
+/// `LX`, `PH`, `SW_2`).
+fn is_switch_pin_name(name: &str) -> bool {
+    let f = name.trim().to_ascii_lowercase();
+    let f = f.split(['_', '/']).next().unwrap_or(&f);
+    let stem = f.trim_end_matches(|c: char| c.is_ascii_digit());
+    matches!(stem, "sw" | "lx" | "ph" | "swout" | "vsw")
+}
+
+/// Nets that are a switching converter's switch node: the net on a fitted
+/// regulator part's switch pin (`sw`, `lx`, `ph`), judged by its card's pin
+/// role, or by the pin's own name when the part has no card.
+///
+/// The node swings between the input and ground at the switching frequency and
+/// the inductor carries its average to the output. It is not a supply rail even
+/// when its name states a voltage (`+5V_SW`), and the inductor between it and
+/// the output rail is a filter, not a short between two rails of different
+/// voltage. A part is read as a converter only when it has a switch pin AND an
+/// input pin, so an analog switch or a load switch's `SW` pin is not caught.
+fn switch_node_nets(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    facts: Option<&BoardFacts>,
+) -> std::collections::HashSet<i64> {
+    let mut out = std::collections::HashSet::new();
+    for (index, comp) in board.components.iter().enumerate() {
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let found = part_facts(facts, index, lib, part);
+        let model = found.resolution.model.as_ref();
+        let switch_pads: Vec<&str> = match model {
+            Some(m) if m.kind == ComponentKind::Vreg => m
+                .pins
+                .iter()
+                .filter(|(_, role)| is_switch_pin_name(role))
+                .map(|(pad, _)| pad.as_str())
+                .collect(),
+            Some(_) => continue,
+            None => {
+                let has_input = comp.pins.iter().any(|p| {
+                    matches!(
+                        p.function.trim().to_ascii_uppercase().as_str(),
+                        "IN" | "VIN" | "VI" | "PVIN" | "AVIN"
+                    )
+                });
+                if !has_input {
+                    continue;
+                }
+                comp.pins
+                    .iter()
+                    .filter(|p| is_switch_pin_name(&p.function))
+                    .map(|p| p.number.as_str())
+                    .collect()
+            }
+        };
+        for pad in switch_pads {
+            let net = comp
+                .pins
+                .iter()
+                .find(|p| p.number == pad)
+                .and_then(|p| p.net)
+                .filter(|id| *id != 0);
+            if let Some(id) = net {
+                out.insert(id);
             }
         }
     }
@@ -13348,6 +13475,36 @@ style = "i2c_pointer"
         }
         for token in ["IO64", "IOREF", "P2.01", "P0.32"] {
             assert_eq!(role_from_mcu_pinfunction_token(token), None, "{token}");
+        }
+    }
+
+    /// A prefixed function name never becomes a bare GPIO: its number matches
+    /// the pad's GPIO on the ESP32-S3 and C6 but not on the ESP32, where the
+    /// pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34, so the name alone can't decide.
+    /// `ADC1_CH6` / `TOUCH0` name no GPIO. Only the pad's own unprefixed name
+    /// (`GPIO4`, `IO36`, `PA9`) is its GPIO, wherever it sits in the list.
+    #[test]
+    fn a_prefixed_function_name_never_becomes_a_bare_gpio() {
+        for (function, want) in [
+            ("GPI34/ADC1_CH6/RTC_GPIO4", None),
+            ("ADC1_CH6/RTC_GPIO4", None),
+            ("RTC_GPIO4", None),
+            ("LP_GPIO4", None),
+            ("LP_IO3", None),
+            ("ADC1_CH6", None),
+            ("TOUCH0", None),
+            ("TOUCH0/RTC_GPIO10", None),
+            ("GPIO4/ADC2_CH0/TOUCH0/RTC_GPIO10/HSPIHD", Some("gpio4")),
+            ("RTC_GPIO10/GPIO4", Some("gpio4")),
+            ("ADC2_CH0 GPIO4", Some("gpio4")),
+            ("IO36/SVP", Some("gpio36")),
+            ("PA9/USART1_TX", Some("pa9_txd")),
+        ] {
+            assert_eq!(
+                role_from_mcu_pinfunction(function).as_deref(),
+                want,
+                "{function}"
+            );
         }
     }
 

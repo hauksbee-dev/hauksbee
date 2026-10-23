@@ -61,7 +61,7 @@ kind = "no_faults"
 
 Other assertion kinds include `max_current`, `max_temp`, `rail_window`,
 `boot_coverage`, `pulse_width`, `protection_trip`, `phase_margin`, `ac_gain`,
-`peripheral`, `hwtrace`, and `model_coverage`. `docs/ci/CI.md` documents each
+`peripheral`, `hwtrace`, `model_coverage`, and the firmware-behaviour kinds `reaches`, `bus`, `resets` and `uart_baud` (the last three need the co-sim bench record and report INVALID until a run supplies it). To start from what the firmware does rather than from numbers, run `hauksbee-ci init <board> --firmware <image> --suggest-asserts`, and add one check with `hauksbee-ci add <spec> <kind> key=value...` (`--observe` takes unset numbers from a nominal run). `docs/ci/CI.md` documents each
 one's fields.
 
 When the user can say what the board is FOR, rather than which voltage a net

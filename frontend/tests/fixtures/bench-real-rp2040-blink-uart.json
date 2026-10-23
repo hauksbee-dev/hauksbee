@@ -1,0 +1,1835 @@
+{
+  "duration_s": 1.500000000000001,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:rp2040",
+      "core": "core_running",
+      "headline": "running",
+      "resets": 0,
+      "first_activity_s": 0.01,
+      "pins": [
+        {
+          "pin": "P025",
+          "net": "LED",
+          "state": "pin_toggling",
+          "edges": 75,
+          "freq_hz": 24.999999999999982,
+          "duty": 0.5,
+          "first_edge_s": 0.01,
+          "final_high": true,
+          "summary": "toggling 25.0 Hz, 50% duty",
+          "edge_samples": [
+            {
+              "t_s": 0.01,
+              "high": true
+            },
+            {
+              "t_s": 0.03,
+              "high": false
+            },
+            {
+              "t_s": 0.05,
+              "high": true
+            },
+            {
+              "t_s": 0.07,
+              "high": false
+            },
+            {
+              "t_s": 0.09,
+              "high": true
+            },
+            {
+              "t_s": 0.10999999999999999,
+              "high": false
+            },
+            {
+              "t_s": 0.12999999999999998,
+              "high": true
+            },
+            {
+              "t_s": 0.15,
+              "high": false
+            },
+            {
+              "t_s": 0.17,
+              "high": true
+            },
+            {
+              "t_s": 0.19000000000000003,
+              "high": false
+            },
+            {
+              "t_s": 0.21000000000000005,
+              "high": true
+            },
+            {
+              "t_s": 0.23000000000000007,
+              "high": false
+            },
+            {
+              "t_s": 0.25000000000000006,
+              "high": true
+            },
+            {
+              "t_s": 0.2700000000000001,
+              "high": false
+            },
+            {
+              "t_s": 0.2900000000000001,
+              "high": true
+            },
+            {
+              "t_s": 0.3100000000000001,
+              "high": false
+            },
+            {
+              "t_s": 0.3300000000000001,
+              "high": true
+            },
+            {
+              "t_s": 0.35000000000000014,
+              "high": false
+            },
+            {
+              "t_s": 0.37000000000000016,
+              "high": true
+            },
+            {
+              "t_s": 0.3900000000000002,
+              "high": false
+            },
+            {
+              "t_s": 0.4100000000000002,
+              "high": true
+            },
+            {
+              "t_s": 0.4300000000000002,
+              "high": false
+            },
+            {
+              "t_s": 0.45000000000000023,
+              "high": true
+            },
+            {
+              "t_s": 0.47000000000000025,
+              "high": false
+            },
+            {
+              "t_s": 0.49000000000000027,
+              "high": true
+            },
+            {
+              "t_s": 0.5100000000000002,
+              "high": false
+            },
+            {
+              "t_s": 0.5300000000000002,
+              "high": true
+            },
+            {
+              "t_s": 0.5500000000000003,
+              "high": false
+            },
+            {
+              "t_s": 0.5700000000000003,
+              "high": true
+            },
+            {
+              "t_s": 0.5900000000000003,
+              "high": false
+            },
+            {
+              "t_s": 0.6100000000000003,
+              "high": true
+            },
+            {
+              "t_s": 0.6300000000000003,
+              "high": false
+            },
+            {
+              "t_s": 0.6500000000000004,
+              "high": true
+            },
+            {
+              "t_s": 0.6700000000000004,
+              "high": false
+            },
+            {
+              "t_s": 0.6900000000000004,
+              "high": true
+            },
+            {
+              "t_s": 0.7100000000000004,
+              "high": false
+            },
+            {
+              "t_s": 0.7300000000000004,
+              "high": true
+            },
+            {
+              "t_s": 0.7500000000000004,
+              "high": false
+            },
+            {
+              "t_s": 0.7700000000000005,
+              "high": true
+            },
+            {
+              "t_s": 0.7900000000000005,
+              "high": false
+            },
+            {
+              "t_s": 0.8100000000000005,
+              "high": true
+            },
+            {
+              "t_s": 0.8300000000000005,
+              "high": false
+            },
+            {
+              "t_s": 0.8500000000000005,
+              "high": true
+            },
+            {
+              "t_s": 0.8700000000000006,
+              "high": false
+            },
+            {
+              "t_s": 0.8900000000000006,
+              "high": true
+            },
+            {
+              "t_s": 0.9100000000000006,
+              "high": false
+            },
+            {
+              "t_s": 0.9300000000000006,
+              "high": true
+            },
+            {
+              "t_s": 0.9500000000000006,
+              "high": false
+            },
+            {
+              "t_s": 0.9700000000000006,
+              "high": true
+            },
+            {
+              "t_s": 0.9900000000000007,
+              "high": false
+            },
+            {
+              "t_s": 1.0100000000000007,
+              "high": true
+            },
+            {
+              "t_s": 1.0300000000000007,
+              "high": false
+            },
+            {
+              "t_s": 1.0500000000000007,
+              "high": true
+            },
+            {
+              "t_s": 1.0700000000000007,
+              "high": false
+            },
+            {
+              "t_s": 1.0900000000000007,
+              "high": true
+            },
+            {
+              "t_s": 1.1100000000000008,
+              "high": false
+            },
+            {
+              "t_s": 1.1300000000000008,
+              "high": true
+            },
+            {
+              "t_s": 1.1500000000000008,
+              "high": false
+            },
+            {
+              "t_s": 1.1700000000000008,
+              "high": true
+            },
+            {
+              "t_s": 1.1900000000000008,
+              "high": false
+            },
+            {
+              "t_s": 1.2100000000000009,
+              "high": true
+            },
+            {
+              "t_s": 1.2300000000000009,
+              "high": false
+            },
+            {
+              "t_s": 1.2500000000000009,
+              "high": true
+            },
+            {
+              "t_s": 1.270000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.290000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.310000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.330000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.350000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.370000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.390000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.410000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.430000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.450000000000001,
+              "high": true
+            },
+            {
+              "t_s": 1.470000000000001,
+              "high": false
+            },
+            {
+              "t_s": 1.490000000000001,
+              "high": true
+            }
+          ]
+        }
+      ],
+      "uarts": [
+        {
+          "port": "UART",
+          "baud_note": "the baud rate is not read from the peripheral on this backend",
+          "bytes": 873,
+          "printable_ratio": 1.0,
+          "first_line": "hauksbee rp2040: main reached",
+          "first_byte_s": 0.0
+        }
+      ]
+    }
+  ],
+  "bus_log": [
+    {
+      "t_s": 0.0,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        104,
+        97,
+        117,
+        107,
+        115,
+        98,
+        101,
+        101,
+        32,
+        114,
+        112,
+        50,
+        48,
+        52,
+        48,
+        58,
+        32,
+        109,
+        97,
+        105,
+        110,
+        32,
+        114,
+        101,
+        97,
+        99,
+        104,
+        101,
+        100
+      ],
+      "acked": true,
+      "summary": "U1 UART \"hauksbee rp2040: main reached\""
+    },
+    {
+      "t_s": 0.0,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 0\""
+    },
+    {
+      "t_s": 0.02,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 0\""
+    },
+    {
+      "t_s": 0.04,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 1\""
+    },
+    {
+      "t_s": 0.060000000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 1\""
+    },
+    {
+      "t_s": 0.08,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 2\""
+    },
+    {
+      "t_s": 0.09999999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 2\""
+    },
+    {
+      "t_s": 0.11999999999999998,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 3\""
+    },
+    {
+      "t_s": 0.13999999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 3\""
+    },
+    {
+      "t_s": 0.16,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 4\""
+    },
+    {
+      "t_s": 0.18000000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 4\""
+    },
+    {
+      "t_s": 0.20000000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 5\""
+    },
+    {
+      "t_s": 0.22000000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 5\""
+    },
+    {
+      "t_s": 0.24000000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 6\""
+    },
+    {
+      "t_s": 0.26000000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 6\""
+    },
+    {
+      "t_s": 0.2800000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 7\""
+    },
+    {
+      "t_s": 0.3000000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 7\""
+    },
+    {
+      "t_s": 0.3200000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 8\""
+    },
+    {
+      "t_s": 0.34000000000000014,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 8\""
+    },
+    {
+      "t_s": 0.36000000000000015,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 9\""
+    },
+    {
+      "t_s": 0.38000000000000017,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 9\""
+    },
+    {
+      "t_s": 0.4000000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 10\""
+    },
+    {
+      "t_s": 0.4200000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 10\""
+    },
+    {
+      "t_s": 0.4400000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 11\""
+    },
+    {
+      "t_s": 0.46000000000000024,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 11\""
+    },
+    {
+      "t_s": 0.48000000000000026,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 12\""
+    },
+    {
+      "t_s": 0.5000000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 12\""
+    },
+    {
+      "t_s": 0.5200000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 13\""
+    },
+    {
+      "t_s": 0.5400000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 13\""
+    },
+    {
+      "t_s": 0.5600000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 14\""
+    },
+    {
+      "t_s": 0.5800000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 14\""
+    },
+    {
+      "t_s": 0.6000000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 15\""
+    },
+    {
+      "t_s": 0.6200000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 15\""
+    },
+    {
+      "t_s": 0.6400000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 16\""
+    },
+    {
+      "t_s": 0.6600000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 16\""
+    },
+    {
+      "t_s": 0.6800000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 17\""
+    },
+    {
+      "t_s": 0.7000000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 17\""
+    },
+    {
+      "t_s": 0.7200000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 18\""
+    },
+    {
+      "t_s": 0.7400000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 18\""
+    },
+    {
+      "t_s": 0.7600000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        49,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 19\""
+    },
+    {
+      "t_s": 0.7800000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        49,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 19\""
+    },
+    {
+      "t_s": 0.8000000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 20\""
+    },
+    {
+      "t_s": 0.8200000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 20\""
+    },
+    {
+      "t_s": 0.8400000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 21\""
+    },
+    {
+      "t_s": 0.8600000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 21\""
+    },
+    {
+      "t_s": 0.8800000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 22\""
+    },
+    {
+      "t_s": 0.9000000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 22\""
+    },
+    {
+      "t_s": 0.9200000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 23\""
+    },
+    {
+      "t_s": 0.9400000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 23\""
+    },
+    {
+      "t_s": 0.9600000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 24\""
+    },
+    {
+      "t_s": 0.9800000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 24\""
+    },
+    {
+      "t_s": 1.0000000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 25\""
+    },
+    {
+      "t_s": 1.0200000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 25\""
+    },
+    {
+      "t_s": 1.0400000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 26\""
+    },
+    {
+      "t_s": 1.0600000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 26\""
+    },
+    {
+      "t_s": 1.0800000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 27\""
+    },
+    {
+      "t_s": 1.1000000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 27\""
+    },
+    {
+      "t_s": 1.1200000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 28\""
+    },
+    {
+      "t_s": 1.1400000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        56
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 28\""
+    },
+    {
+      "t_s": 1.1600000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        50,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 29\""
+    },
+    {
+      "t_s": 1.1800000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        50,
+        57
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 29\""
+    },
+    {
+      "t_s": 1.2000000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 30\""
+    },
+    {
+      "t_s": 1.2200000000000009,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        48
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 30\""
+    },
+    {
+      "t_s": 1.2400000000000009,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 31\""
+    },
+    {
+      "t_s": 1.260000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        49
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 31\""
+    },
+    {
+      "t_s": 1.280000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 32\""
+    },
+    {
+      "t_s": 1.300000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        50
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 32\""
+    },
+    {
+      "t_s": 1.320000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 33\""
+    },
+    {
+      "t_s": 1.340000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        51
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 33\""
+    },
+    {
+      "t_s": 1.360000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 34\""
+    },
+    {
+      "t_s": 1.380000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        52
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 34\""
+    },
+    {
+      "t_s": 1.400000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 35\""
+    },
+    {
+      "t_s": 1.420000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        53
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 35\""
+    },
+    {
+      "t_s": 1.440000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 36\""
+    },
+    {
+      "t_s": 1.460000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        102,
+        102,
+        32,
+        51,
+        54
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led off 36\""
+    },
+    {
+      "t_s": 1.480000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        108,
+        101,
+        100,
+        32,
+        111,
+        110,
+        32,
+        51,
+        55
+      ],
+      "acked": true,
+      "summary": "U1 UART \"led on 37\""
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.0,
+      "kind": "event_first_uart_byte",
+      "mcu_ref": "U1",
+      "detail": "first serial output: \"hauksbee rp2040: main reached\""
+    },
+    {
+      "t_s": 0.01,
+      "kind": "event_first_edge",
+      "mcu_ref": "U1",
+      "detail": "P025 went high"
+    }
+  ]
+}

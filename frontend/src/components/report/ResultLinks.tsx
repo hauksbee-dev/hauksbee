@@ -17,8 +17,10 @@ export interface ResultLinkHandlers {
   vocab: Vocabulary | null
   /** Hovered (or focused) link, null when the pointer leaves. */
   onPoint?: (entity: ResultEntity | null) => void
-  /** Clicked link: select and frame it on the board. */
-  onGo?: (entity: ResultEntity) => void
+  /** Clicked link: select and frame it on the board. `scroll: false` lights it
+   *  without moving the page, for a link whose own surface is what the reader is
+   *  looking at (the bench strip's run view). */
+  onGo?: (entity: ResultEntity, opts?: { scroll?: boolean }) => void
   /** Open the existing model flow (draft from a datasheet, or write one) for
    *  a part. Absent where there is no flow to open (a restored session). */
   onGiveModel?: (ref: string) => void

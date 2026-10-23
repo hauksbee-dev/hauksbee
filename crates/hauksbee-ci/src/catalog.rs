@@ -32,6 +32,12 @@ pub enum Target {
     Board,
     Uart,
     Peripheral,
+    /// A scope trace the user is looking at: "Assert this" on a probed net.
+    Trace,
+    /// A decoded bus transaction.
+    Bus,
+    /// A bench-view row: a reset count, a park site, a decoded baud.
+    Bench,
 }
 
 impl Target {
@@ -42,6 +48,9 @@ impl Target {
             Self::Board => "board",
             Self::Uart => "uart",
             Self::Peripheral => "peripheral",
+            Self::Trace => "trace",
+            Self::Bus => "bus",
+            Self::Bench => "bench",
         }
     }
 }
@@ -56,12 +65,15 @@ pub enum Need {
     Trace,
     Supply,
     Peripheral,
+    /// The bench record of a co-sim run (bus log, reset count, decoded baud).
+    Bench,
 }
 
 impl Need {
     /// `(wire token, how a spec spells it, the fix in plain words)`.
     const fn copy(self) -> (&'static str, &'static str, &'static str) {
         match self {
+            Self::Bench => ("bench", "bench data", "Needs the bench record of a firmware run (bus log, reset count, decoded baud). Runs do not record it yet, so the check is accepted into the spec but reported as not judged, never as a pass."),
             Self::Firmware => ("firmware", "firmware", "Load a firmware image (.hex or .elf); in a spec it is `firmware = \"fw.hex\"`."),
             Self::Ac => ("ac", "[ac]", "Add an `[ac]` block (`fstart`, `fstop`, `points`) so the small-signal sweep runs."),
             Self::Scenario => ("scenario", "[[scenario]]", "Add a `[[scenario]]` that steps a part's load, give it an `id` and name that id here."),
@@ -85,7 +97,7 @@ impl Need {
             Self::Ac => Some(WebAction::add_ac_sweep()),
             Self::Scenario => Some(WebAction::add_scenario()),
             Self::Supply => Some(WebAction::add_supply(None, None)),
-            Self::Search | Self::Trace | Self::Peripheral => None,
+            Self::Search | Self::Trace | Self::Peripheral | Self::Bench => None,
         }
     }
 }
@@ -110,6 +122,10 @@ pub enum DefaultFrom {
     FirstUartLine,
     /// A fixed number.
     Constant(f64),
+    /// A named datum of the run's bench view (`reset_count`, `uart_baud`,
+    /// `park_symbol`, `bus_addr`...), read from the observation the user is
+    /// looking at; empty until a surface has that observation.
+    Bench(&'static str),
 }
 
 impl DefaultFrom {
@@ -127,6 +143,7 @@ impl DefaultFrom {
             Self::CardLogicLevels => json!({ "source": "card_logic_levels" }),
             Self::FirstUartLine => json!({ "source": "first_uart_line" }),
             Self::Constant(value) => json!({ "source": "constant", "value": value }),
+            Self::Bench(key) => json!({ "source": "bench", "key": key }),
         }
     }
 }
@@ -220,6 +237,16 @@ static OFFERS: &[(&str, Target, &str)] = &[
     ("fires", Target::Part, "{ref} trips at its threshold"),
     ("increases", Target::Part, "{ref} fires more as a swept net rises"),
     ("decreases", Target::Part, "{ref} fires less as a swept net rises"),
+    // Offers from what a user is looking at: a scope trace, a decoded bus
+    // transaction, a bench row, a UART line. "Assert this" and "Assert what I
+    // expected" both open the same editor, pre-filled from the observation.
+    ("toggle", Target::Trace, "Assert that {net} keeps toggling like this"),
+    ("voltage", Target::Trace, "Assert that {net} stays within this range"),
+    ("pulse_width", Target::Trace, "Assert that the first pulse on {net} is this wide"),
+    ("bus", Target::Bus, "Assert that this device keeps answering on the bus"),
+    ("resets", Target::Bench, "Assert that the MCU resets no more than this"),
+    ("reaches", Target::Bench, "Assert that the firmware reaches this function"),
+    ("uart_baud", Target::Uart, "Assert that the UART runs at this baud rate"),
 ];
 
 /// The offers for `kind`: `(target, words)` pairs.
@@ -348,6 +375,30 @@ pub static CATALOG: &[Entry] = &[
         needs: &[Need::Search],
         example: "[search]\n[[search.sweep]]\nnet = \"+5V\"\nvolts = [4.5, 5.0]\n\n[[assert]]\nkind = \"decreases\"\nref = \"U1\"\nalong = \"+5V\"\nafter_ms = 0.05\n",
         fails_because: "the response is flat or rising between two neighbouring sweep points, which is a topology finding rather than a part tolerance; the report names the pair." },
+    Entry { kind: "bus", title: "A bus device answers", summary: "The firmware talks to an I2C address (it ACKs, at least a number of times) or sends an SPI frame containing given bytes.",
+        required: &[req("protocol", "i2c or spi")],
+        optional: &[opt("addr", "the 7-bit I2C address, 0..127", "none").fill(DefaultFrom::Bench("bus_addr")), opt("acked", "true if the device must ACK, false if it must not", "true"), opt("bytes", "SPI: hex bytes the frame must contain", "none").fill(DefaultFrom::Bench("bus_bytes")), opt("min_transactions", "at least this many transactions", "1"), opt("bus", "which bus, e.g. I2C1", "any bus"), opt("mcu", "which MCU's bus to read", "all MCUs"), NAME],
+        needs: &[Need::Firmware, Need::Bench],
+        example: "[[assert]]\nkind = \"bus\"\nprotocol = \"i2c\"\naddr = 0x48\nmin_transactions = 2\n",
+        fails_because: "no transaction like it was seen on the bus; check the address, the pull-ups on SDA and SCL, and that the firmware initialises the peripheral." },
+    Entry { kind: "resets", title: "The MCU does not keep resetting", summary: "The MCU resets at most a number of times during the run, optionally counting only one cause (a watchdog, a brown-out).",
+        required: &[req("max_resets", "the most resets allowed (0 for a board that must never reset)").fill(DefaultFrom::Bench("reset_count"))],
+        optional: &[opt("cause", "count only this cause: power_on, brown_out, watchdog, software or pin", "every cause"), opt("mcu", "which MCU", "all MCUs"), NAME],
+        needs: &[Need::Firmware, Need::Bench],
+        example: "[[assert]]\nkind = \"resets\"\nmax_resets = 0\ncause = \"brown_out\"\n",
+        fails_because: "the MCU reset more often than allowed; the cause says why (a sagging rail for brown_out, a missed refresh for watchdog)." },
+    Entry { kind: "reaches", title: "Firmware reaches a function", summary: "The firmware executes a named function (within a deadline), or is not parked in one at the end of the run.",
+        required: &[req("symbol", "the function or label the firmware must reach (or give not_parked_in)").fill(DefaultFrom::Bench("entry_symbol"))],
+        optional: &[opt("not_parked_in", "instead of symbol: the firmware must not end the run inside this function", "none").fill(DefaultFrom::Bench("park_symbol")), opt("deadline_ms", "must reach it by this long after reset", "the whole run"), opt("mcu", "which MCU", "all MCUs"), NAME],
+        needs: &[Need::Firmware],
+        example: "[[assert]]\nkind = \"reaches\"\nsymbol = \"main\"\n",
+        fails_because: "the program counter never got to the symbol; check the boot path (clock, reset line, boot pins) and that the image is the right one." },
+    Entry { kind: "uart_baud", title: "The UART runs at a baud rate", summary: "The serial port the firmware set up runs at the expected baud rate, within a tolerance.",
+        required: &[req("baud", "the expected baud rate").fill(DefaultFrom::Bench("uart_baud"))],
+        optional: &[opt("tolerance", "fraction of baud, in (0, 1]", "0.03").fill(DefaultFrom::Constant(0.03)), opt("mcu", "which MCU's UART", "all MCUs"), NAME],
+        needs: &[Need::Firmware, Need::Bench],
+        example: "[[assert]]\nkind = \"uart_baud\"\nbaud = 115200\n",
+        fails_because: "the UART divisor gives a different rate than expected, usually a wrong clock tree: the baud is derived from the peripheral clock, so check the PLL and the crystal." },
 ];
 
 /// The entry for `kind`, folding the `boot-coverage` alias onto `boot_coverage`.
@@ -389,6 +440,7 @@ fn unit(kind: &str, name: &str) -> Option<&'static str> {
         "amps" => Some("A"),
         "celsius" => Some("C"),
         "freq_hz" => Some("Hz"),
+        "baud" => Some("baud"),
         "dip_below" | "recover_to" | "spike_above" | "settle_to" | "reset_below" | "target" => {
             Some("V")
         }
@@ -458,6 +510,78 @@ fn entry_json(e: &Entry) -> Value {
             // instead of the spec text in `fix`; absent when it has no flow.
             json!({ "need": token, "label": spelled, "fix": fix, "action": n.action() })
         }).collect::<Vec<_>>(),
+    })
+}
+
+/// Read the text of one `key=value` the command line gave as the TOML value
+/// `key` takes in a `kind` assertion.
+///
+/// The catalogue is the only place that knows which fields a kind has and what
+/// type each one is, so `hauksbee-ci add` asks here instead of keeping a second
+/// table: a number is a number, a count is a whole number (`0x48` is accepted,
+/// since an I2C address is written that way), a flag is `true` or `false`, and
+/// everything else is text.
+///
+/// # Errors
+///
+/// A sentence naming the kind's real fields (with a did-you-mean) when `key`
+/// is not one of them, or saying what the field wants when `raw` is not that.
+pub fn parse_field_value(kind: &str, key: &str, raw: &str) -> Result<toml::Value, String> {
+    let e = entry(kind).ok_or_else(|| format!("unknown assertion kind '{kind}'"))?;
+    let names: Vec<&str> = e.fields().map(|f| f.name).collect();
+    if !names.contains(&key) {
+        return Err(format!(
+            "a `{kind}` assertion has no field `{key}`{}; its fields: {}",
+            crate::error::did_you_mean_hint(key, &names),
+            names.join(", ")
+        ));
+    }
+    let wants = |what: &str| format!("`{key}` wants {what}, got `{raw}`");
+    match field_type(key) {
+        "number" => raw
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .map(toml::Value::Float)
+            .ok_or_else(|| wants("a number")),
+        "integer" => {
+            let parsed = raw.strip_prefix("0x").map_or_else(
+                || raw.parse::<i64>().ok(),
+                |hex| i64::from_str_radix(hex, 16).ok(),
+            );
+            parsed
+                .map(toml::Value::Integer)
+                .ok_or_else(|| wants("a whole number"))
+        }
+        "boolean" => match raw {
+            "true" => Ok(toml::Value::Boolean(true)),
+            "false" => Ok(toml::Value::Boolean(false)),
+            _ => Err(wants("true or false")),
+        },
+        _ => Ok(toml::Value::String(raw.to_string())),
+    }
+}
+
+/// The fields a reading of `value` fills in for `kind`.
+///
+/// These follow the catalogue's own `default_from` rules: a field that is the
+/// measured value plus or minus a margin, and the margin a rate is judged
+/// within. The app resolves the same rules against its live reading, so "take
+/// it from the run" gives the same numbers on every surface.
+#[must_use]
+pub fn measured_fields(kind: &str, value: f64) -> Vec<(&'static str, toml::Value)> {
+    let round4 = |v: f64| format!("{v:.3e}").parse::<f64>().unwrap_or(v);
+    entry(kind).map_or_else(Vec::new, |e| {
+        e.fields()
+            .filter_map(|f| match f.from? {
+                DefaultFrom::Measured(pct) => Some((
+                    f.name,
+                    toml::Value::Float(round4(value * (1.0 + pct / 100.0))),
+                )),
+                DefaultFrom::Constant(c) => Some((f.name, toml::Value::Float(c))),
+                _ => None,
+            })
+            .collect()
     })
 }
 
@@ -569,7 +693,7 @@ mod tests {
         table.sort_unstable();
         loader.sort_unstable();
         assert_eq!(table, loader);
-        assert_eq!(loader.len(), 19, "a new kind needs a catalogue entry");
+        assert_eq!(loader.len(), 23, "a new kind needs a catalogue entry");
         for e in CATALOG {
             let a = Assertion {
                 kind: e.kind.to_string(),
@@ -709,7 +833,7 @@ mod tests {
             .iter()
             .find(|k| k["kind"] == "voltage")
             .unwrap();
-        assert_eq!(v["targets"], json!(["net"]));
+        assert_eq!(v["targets"], json!(["net", "trace"]));
         assert!(v["offer"]["net"].as_str().unwrap().contains("{net}"));
         let min = v["fields"]
             .as_array()
@@ -743,9 +867,41 @@ mod tests {
     #[test]
     fn needs_offer_an_action_only_where_the_app_has_a_flow() {
         let with = [Need::Firmware, Need::Ac, Need::Scenario, Need::Supply];
-        let without = [Need::Search, Need::Trace, Need::Peripheral];
+        let without = [Need::Search, Need::Trace, Need::Peripheral, Need::Bench];
         assert!(with.iter().all(|n| n.action().is_some()));
         assert!(without.iter().all(|n| n.action().is_none()));
+    }
+
+    /// The four observation kinds are in the table, offered from the surface a
+    /// person sees the observation on, and name the bench need only where a run
+    /// cannot yet judge them.
+    #[test]
+    fn the_observation_kinds_are_offered_where_the_observation_is_seen() {
+        let targets =
+            |k: &str| -> Vec<&'static str> { offers_for(k).map(|(t, _)| t.name()).collect() };
+        assert!(targets("toggle").contains(&"trace"));
+        assert!(targets("voltage").contains(&"trace"));
+        assert!(targets("pulse_width").contains(&"trace"));
+        assert_eq!(targets("bus"), ["bus"]);
+        assert_eq!(targets("resets"), ["bench"]);
+        assert_eq!(targets("reaches"), ["bench"]);
+        assert!(targets("uart_baud").contains(&"uart"));
+        for kind in ["bus", "resets", "uart_baud"] {
+            assert!(entry(kind).unwrap().needs.contains(&Need::Bench), "{kind}");
+        }
+        // A reach of the entry symbol is judged from the execution evidence a run records today.
+        assert!(!entry("reaches").unwrap().needs.contains(&Need::Bench));
+        let all = to_json();
+        let baud = all["kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["kind"] == "uart_baud")
+            .unwrap();
+        assert_eq!(baud["fields"][0]["default_from"]["source"], "bench");
+        assert_eq!(baud["fields"][0]["unit"], "baud");
+        assert_eq!(baud["fields"][0]["type"], "integer");
+        assert_eq!(baud["prerequisites"][1]["need"], "bench");
     }
 
     #[test]

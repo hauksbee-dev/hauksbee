@@ -83,6 +83,11 @@ pub struct RunConfig {
     pub ac_loop: Option<String>,
     pub probe: Vec<String>,
     pub probe_csv: Option<std::path::PathBuf>,
+    /// `--vcd FILE`: write the headless run as a VCD waveform (MCU pins,
+    /// serial lines, decoded I2C/SPI tracks, event markers).
+    pub vcd: Option<std::path::PathBuf>,
+    /// `--bus-log`: print every bus and serial transaction of the run.
+    pub bus_log: bool,
     /// Solver chunk width in microseconds. Narrower chunks resolve firmware
     /// pulses the default width steps straight over, at proportional cost.
     pub chunk_us: Option<f64>,

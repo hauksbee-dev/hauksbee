@@ -3,6 +3,9 @@
 // return, and what `/api/startup` embeds under `report` when a board was
 // preloaded via `hauksbee run <board> --serve`.
 
+import type { BenchReport } from './bench'
+export type * from './bench'
+
 /** The C5.3 contract emitted by every invalid-for-analysis result. */
 export interface RefusalContract {
   claim: string
@@ -178,6 +181,11 @@ export interface WebCosimSection {
   timing_refusals?: string[]
   fallback_windows?: WebFallbackWindow[]
   error_budget?: ErrorBudget
+  /** What the run looked like from the bench: pins, serial, buses, events. */
+  bench?: BenchReport | null
+  /** True when the board's MCU needs an emulator (Renode, QEMU) that the
+   *  synchronous analysis never runs: the app offers to run it as a job. */
+  external_backend?: boolean
 }
 
 export interface WebComponent {
@@ -925,7 +933,9 @@ export type BoardRequest =
   /** Settle an open variant selection with `[[override]] select`. */
   | { type: 'select'; ref: string; select: string }
   /** One exact `[[assert]]` table from the in-place editor, queued as written. */
-  | { type: 'assert'; kind: string; toml: string }
+  | { type: 'assert'; kind: string; toml: string
+    /** The run length (ms) the check needs, raised never lowered, like a `check` request's. */
+    run_ms?: string }
 
 /** A request in the queue; `seq` orders and de-duplicates consumption across
  *  remounts. */
