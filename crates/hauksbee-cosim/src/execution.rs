@@ -289,24 +289,10 @@ impl ExecutionEvidence {
                 clock.detail
             ));
         }
-        // On silicon the firmware's wait for the external oscillator never ends
-        // when nothing is fitted; the emulator reproduces that, and the run
-        // then shows a core that never got to `main` and nothing else. Say why.
         let stalled_on_external_clock =
             !executed && board.external_clock_modelled && !clock.external_present();
         if stalled_on_external_clock {
-            blockers.push(format!(
-                "{EXTERNAL_CLOCK_STALL_PREFIX} on the part's external clock pins \
-                 ({}), and this backend models oscillator readiness as silicon does, so \
-                 firmware that waits for the external oscillator to become ready (an SDK \
-                 start-up loop, an HSE or XOSC ready flag) stalls here: fit the crystal \
-                 or oscillator the part's reference design uses",
-                if clock.detail.is_empty() {
-                    "nothing is bound to them"
-                } else {
-                    &clock.detail
-                }
-            ));
+            blockers.push(external_clock_blocker(&clock.detail));
         }
         Self {
             mcu_ref: mcu_ref.to_string(),
@@ -333,6 +319,25 @@ impl ExecutionEvidence {
             stalled_on_external_clock,
         }
     }
+}
+
+/// The blocker for a core that never ran because the firmware waits for an
+/// external oscillator the board does not fit. On silicon that wait never ends
+/// when nothing is fitted; the emulator reproduces it, and the run then shows
+/// a core that never got to `main` and nothing else, so this says why.
+fn external_clock_blocker(clock_detail: &str) -> String {
+    format!(
+        "{EXTERNAL_CLOCK_STALL_PREFIX} on the part's external clock pins \
+         ({}), and this backend models oscillator readiness as silicon does, so \
+         firmware that waits for the external oscillator to become ready (an SDK \
+         start-up loop, an HSE or XOSC ready flag) stalls here: fit the crystal \
+         or oscillator the part's reference design uses",
+        if clock_detail.is_empty() {
+            "nothing is bound to them"
+        } else {
+            clock_detail
+        }
+    )
 }
 
 /// Whether the core is parked in a tight loop early in start-up, and where.

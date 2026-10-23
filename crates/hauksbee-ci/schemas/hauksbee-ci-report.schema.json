@@ -1042,7 +1042,7 @@
           ]
         },
         "executed": {
-          "description": "Any positive evidence the firmware ran: entry reached, UART bytes, or a\nGPIO toggle.",
+          "description": "Any positive evidence the firmware ran: entry reached, UART bytes, or a\nGPIO toggle. False for an early stall with no output of its own.",
           "type": "boolean"
         },
         "faults": {
@@ -1106,6 +1106,17 @@
             }
           ],
           "description": "Whether the board held the reset line asserted for the whole run."
+        },
+        "stall": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Stall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set when the core stalled early (stuck before `main`, or in a clock\nwait): such a run is not \"executed\" unless the firmware also produced\nUART or GPIO output."
         },
         "supply_v": {
           "description": "Lowest supply-pad voltage at the end of the run.",
@@ -1953,6 +1964,52 @@
         }
       ]
     },
+    "Stall": {
+      "description": "An early stall: the core sat in a tight loop at start-up, so it never ran\nthe firmware's own behaviour, whatever else the run recorded.",
+      "properties": {
+        "detail": {
+          "description": "One sentence saying where the core stuck and what to look at.",
+          "type": "string"
+        },
+        "pc": {
+          "description": "Program counter the core was parked at.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/definitions/StallPhase"
+        },
+        "symbol": {
+          "description": "Function containing `pc`, when the firmware ELF has symbols.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "pc",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "StallPhase": {
+      "description": "Where in start-up a core stalled.",
+      "oneOf": [
+        {
+          "const": "before_main",
+          "description": "Parked in a tight loop and `main` was never reached.",
+          "type": "string"
+        },
+        {
+          "const": "clock_wait",
+          "description": "Parked in a function that waits for a clock or oscillator.",
+          "type": "string"
+        }
+      ]
+    },
     "StrapReading": {
       "description": "One strap pin as the chip saw it at reset release.",
       "properties": {
@@ -2286,6 +2343,6 @@
       "type": "object"
     }
   },
-  "description": "One line of `hauksbee-ci run <spec>... --json`: a run report (`ok: true`) or a spec/board error (`ok: false`). A multi-spec invocation prints one line per spec (NDJSON) and may mix the two. schema_version 2. GENERATED from `CiJsonLine` and `CiJsonAssertion` in crates/hauksbee-ci/src/report.rs. Do not hand-edit; regenerate with: UPDATE_CI_REPORT_SCHEMA=1 cargo test -p hauksbee-ci --test ci_report_schema_drift",
+  "description": "One line of `hauksbee-ci run <spec>... --json`: a run report (`ok: true`) or a spec/board error (`ok: false`). A multi-spec invocation prints one line per spec (NDJSON) and may mix the two. schema_version 2. GENERATED from `CiJsonLine` and `CiJsonAssertion` in crates/hauksbee-ci/src/report.rs. Do not hand-edit; regenerate with: UPDATE_CI_REPORT_SCHEMA=1 cargo test -p hauksbee-ci --test it ci_report_schema_drift",
   "title": "hauksbee-ci run --json output line"
 }
