@@ -6056,7 +6056,7 @@ backend = "qemu:esp32s3"
 # oscillator", "Up to 16 MB Quad SPI flash".
 module_clock_hz = 40000000
 module_clock_source = "Espressif ESP32-S3-WROOM-1 datasheet PDF p.2: 40 MHz crystal oscillator integrated on the module"
-module_flash = "up to 16 MB Quad SPI flash, ESP32-S3-WROOM-1 datasheet PDF p.2"
+module_flash = "up to 16 MB Quad SPI flash (ESP32-S3-WROOM-1/1U datasheet v1.8 PDF p.2); up to 32 MB Octal SPI flash (ESP32-S3-WROOM-2 datasheet v1.7 PDF p.2)"
 # ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1: EN (pad 3) "High: on, enables
 # the chip. Low: off ... Do not leave the EN pin floating." The module has no
 # pull on it; sec 9 "Peripheral Schematics" asks for an RC delay on the board
@@ -8539,7 +8539,7 @@ backend = "renode:rp2040"
 # W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and
 # USB connector"; the feature list (PDF p.4) gives "2 MB Flash". The ABM8-272-T3
 # centre frequency is 12.000 MHz: Abracon ABM8-272-T3 datasheet,
-# https://abracon.com/Resonators/abm8-272-t3.pdf, sha256
+# https://abracon.com/datasheets/ABM8-272-T3.pdf, sha256
 # aead22b6bd9d6f8ad4472352f70fce3ade633e90b9772ba80fabe8fd0856ae91, electrical
 # specification table, "Center Frequency 12.000 MHz" (PDF p.1). The Pico W
 # datasheet (https://datasheets.raspberrypi.com/picow/pico-w-datasheet.pdf,
