@@ -5450,6 +5450,19 @@ value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WROOM[-_ ]?32.*|ESP32[-_ ]?W
 # the rail, same as renode:). With no firmware given the scheduler skips the
 # MCU entirely, so lint/report-only runs never need QEMU.
 backend = "qemu:esp32"
+# The module's crystal and SPI flash are inside the can, never on the board.
+# Espressif ESP32-WROOM-32E & ESP32-WROOM-32UE Datasheet v2.1,
+# https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf,
+# sha256 4c7a345d1c1bfec34c38665639e39a7f43b79a35a12f6adcc2c7c0f83850f8b8,
+# section 1 "Module Overview" Integrated Components on Module (PDF p.2): "40 MHz
+# crystal oscillator", "4/8/16 MB SPI flash"; Table 1 Series Comparison (PDF p.3).
+# The ESP32-WROVER-E & WROVER-IE Datasheet
+# (esp32-wrover-e_esp32-wrover-ie_datasheet_en.pdf, sha256
+# 611e8506f352225e9ab09b4c2c3286885022b2f77a44ee8f0ab88a6302616f32) states the
+# same "40 MHz crystal oscillator" and "4/8/16 MB SPI flash" on PDF p.2.
+module_clock_hz = 40000000
+module_clock_source = "Espressif ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal oscillator integrated on the module (WROVER-E datasheet PDF p.2 states the same)"
+module_flash = "4/8/16 MB SPI flash, ESP32-WROOM-32E datasheet v2.1 PDF p.2-3"
 
 [models.pins]
 # ESP-WROOM-32 module pad map (KiCad RF_Module:ESP32-WROOM-32 / Olimex symbol).
@@ -6035,6 +6048,15 @@ footprint_re = '(?i)ESP32[-_]?S3[-_]?WROOM[-_]?[12]'
 
 [models.params]
 backend = "qemu:esp32s3"
+# The module's crystal and SPI flash are inside the can, never on the board:
+# ESP32-S3-WROOM-1 & ESP32-S3-WROOM-1U Datasheet,
+# https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf,
+# sha256 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435,
+# Module Overview, Integrated Components on Module (PDF p.2): "40 MHz crystal
+# oscillator", "Up to 16 MB Quad SPI flash".
+module_clock_hz = 40000000
+module_clock_source = "Espressif ESP32-S3-WROOM-1 datasheet PDF p.2: 40 MHz crystal oscillator integrated on the module"
+module_flash = "up to 16 MB Quad SPI flash, ESP32-S3-WROOM-1 datasheet PDF p.2"
 # ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1: EN (pad 3) "High: on, enables
 # the chip. Low: off ... Do not leave the EN pin floating." The module has no
 # pull on it; sec 9 "Peripheral Schematics" asks for an RC delay on the board
@@ -6538,6 +6560,16 @@ footprint_re = '(?i)ESP32[-_]?C3[-_]?MINI[-_]?1'
 
 [models.params]
 backend = "qemu:esp32c3"
+# The module's crystal is inside the can, never on the board: ESP32-C3-MINI-1 &
+# ESP32-C3-MINI-1U Datasheet,
+# https://www.espressif.com/sites/default/files/documentation/esp32-c3-mini-1_datasheet_en.pdf,
+# sha256 de7361381348d82a1abd337f10170be7a420675987568f71fe3c5b100deed270,
+# Module Overview, Integrated Components on Module (PDF p.2): "40 MHz crystal
+# oscillator". The datasheet's footnote on PDF p.4 says the module's SPI flash
+# runs at up to 80 MHz; the flash size is a per-part-number option, so none is
+# declared here.
+module_clock_hz = 40000000
+module_clock_source = "Espressif ESP32-C3-MINI-1 datasheet PDF p.2: 40 MHz crystal oscillator integrated on the module"
 
 [models.pins]
 # ESP32-C3-MINI-1/-1U Datasheet v2.2, Table 3-1 "Pin Definitions": GND = 1, 2
@@ -8481,7 +8513,7 @@ description = "Raspberry Pi Pico module (RP2040 carrier, 40-pin 2.54mm header; P
 # "Pico 2" (different chip, not modelled) do not. Match rules are ANDed, so no
 # footprint_re: a board carrying only the value or only the product code must
 # still bind.
-value_re = "(?i)^((r(aspberry)?[-_ ]?pi[-_ ]?)?pico([-_ ]?(wh?|h))?|sc091[5-9])$"
+value_re = "(?i)^((r(aspberry)?[-_ ]?pi[-_ ]?)?pico([-_ ]?(wh?|h))?([-_ ]?(smd|tht))?|sc091[5-9])$"
 
 [models.params]
 # The Pico wraps an RP2040 plus its QSPI flash, so it gets the same co-sim
@@ -8495,6 +8527,27 @@ value_re = "(?i)^((r(aspberry)?[-_ ]?pi[-_ ]?)?pico([-_ ]?(wh?|h))?|sc091[5-9])$
 # to Arduino-Nano header names (d0..d13 -> AVR ports), which is wrong here. The
 # flat "gpio<n>" roles below parse in the standard (non-module) convention.
 backend = "renode:rp2040"
+# The Pico's own crystal and flash live INSIDE the module, so a board that places
+# the Pico never carries them and the RP2040's XIN/XOUT are not on the header.
+# Without this the clock reads "no core oscillator pins identified" and the
+# Renode descriptor never reports the crystal present, so the RP2040 stalls in
+# oscillator start-up. Source: Raspberry Pi Pico Datasheet (build-date
+# 2024-07-22), https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf,
+# sha256 757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb:
+# chapter 1 "About Raspberry Pi Pico" (PDF p.5): "Pico provides minimal (yet
+# flexible) external circuitry to support the RP2040 chip: flash (Winbond
+# W25Q16JV), crystal (Abracon ABM8-272-T3), power supplies and decoupling, and
+# USB connector"; the feature list (PDF p.4) gives "2 MB Flash". The ABM8-272-T3
+# centre frequency is 12.000 MHz: Abracon ABM8-272-T3 datasheet,
+# https://abracon.com/Resonators/abm8-272-t3.pdf, sha256
+# aead22b6bd9d6f8ad4472352f70fce3ade633e90b9772ba80fabe8fd0856ae91, electrical
+# specification table, "Center Frequency 12.000 MHz" (PDF p.1). The Pico W
+# datasheet (https://datasheets.raspberrypi.com/picow/pico-w-datasheet.pdf,
+# sha256 ba8649ba98437301b9f1621504569a27f1d2ba6111795b4df76783adb08de7c5) states
+# the same flash and crystal on PDF p.4-5.
+module_clock_hz = 12000000
+module_clock_source = "Raspberry Pi Pico datasheet PDF p.5: crystal Abracon ABM8-272-T3 on the module; Abracon ABM8-272-T3 datasheet p.1: 12.000 MHz"
+module_flash = "2 MB QSPI (Winbond W25Q16JV), Raspberry Pi Pico datasheet PDF p.4-5"
 
 [models.pins]
 # Raspberry Pi Pico 40-pin header (Pico datasheet, ch. 2 "Pin information";

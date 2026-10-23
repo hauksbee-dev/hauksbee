@@ -166,6 +166,8 @@ mod mcu_family_router;
 mod model_check;
 #[path = "models_resolve_layers.rs"]
 mod models_resolve_layers;
+#[path = "module_cosim_binding.rs"]
+mod module_cosim_binding;
 #[path = "multi_spi_dispatch.rs"]
 mod multi_spi_dispatch;
 #[path = "nep_private_acceptance.rs"]
@@ -192,6 +194,8 @@ mod power_invariants;
 mod power_pin_corpus;
 #[path = "power_supply.rs"]
 mod power_supply;
+#[path = "qspi_ss_flash_cs_strap.rs"]
+mod qspi_ss_flash_cs_strap;
 #[path = "rail_suppression_and_cc_floor.rs"]
 mod rail_suppression_and_cc_floor;
 #[path = "refusal_contract.rs"]
@@ -234,6 +238,8 @@ mod stm32_bind_check;
 mod stm32_clock_readiness_cosim;
 #[path = "stm32_renode_cosim.rs"]
 mod stm32_renode_cosim;
+#[path = "stm32f072_board_cosim.rs"]
+mod stm32f072_board_cosim;
 #[path = "stormduino_bind.rs"]
 mod stormduino_bind;
 #[path = "strap_lint_corpus.rs"]
