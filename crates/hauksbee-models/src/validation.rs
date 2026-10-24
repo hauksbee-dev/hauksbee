@@ -2186,9 +2186,11 @@ fn check_supply_cap(entry: &ModelEntry, p: &mut Problems) {
 /// ground pad, and a channel is named for each; the basis cites the datasheet.
 fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
     check_listed_pads(entry, p);
+    // Any card whose pads a crystal hangs on states its load capacitance: an MCU's
+    // oscillator, a clock generator's, an RTC's.
+    check_xtal_int_caps(entry, p);
     let cap = &entry.pin_capability;
     let mcu_tables = cap.adc.is_some()
-        || !cap.xtal_int_caps.is_empty()
         || PeripheralFunction::ALL
             .iter()
             .any(|f| cap.table(*f).is_some());
@@ -2198,7 +2200,6 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
     p.require(entry.kind == ComponentKind::Mcu, || {
         "[models.pin_capability.adc] belongs on an mcu card".into()
     });
-    check_xtal_int_caps(entry, p);
     if let Some(adc) = &entry.pin_capability.adc {
         check_capability_table(
             entry,

@@ -358,6 +358,91 @@ pub enum IntegratedCaps {
     Unspecified { basis: String },
 }
 
+impl IntegratedCaps {
+    /// What `model`'s card states for the oscillator whose pads include `pad`
+    /// (`[[models.pin_capability.xtal_int_caps]]`), with the card and datasheet
+    /// basis; `None` when the card lists no integrated load for that pad.
+    #[must_use]
+    pub fn of_card(model: &hauksbee_models::ModelEntry, pad: &str) -> Option<Self> {
+        let cap = model.xtal_int_caps_on(pad)?;
+        let basis = format!("card '{}' {}: {}", model.id, cap.oscillator, cap.basis);
+        Some(match (cap.min_f, cap.max_f) {
+            (Some(lo), Some(hi)) => Self::Range {
+                lo_pf: lo * 1e12,
+                hi_pf: hi * 1e12,
+                basis,
+            },
+            _ => Self::Unspecified { basis },
+        })
+    }
+}
+
+/// The on-chip load capacitance a card states for a crystal's oscillator pad.
+///
+/// `model_of` gives a part's card (`None` for no card, or one too weak to speak
+/// for the part).
+///
+/// The driver is found on either crystal net, or one series resistor away (the
+/// RP2040 damping-resistor topology). Shared by the bound-card pipeline, which
+/// resolves each part through the binder, and the card-less
+/// [`ExtractedBoard::si_checks`], which asks the built-in library directly.
+pub fn driver_caps_with(
+    board: &ExtractedBoard,
+    nets: &[i64; 2],
+    model_of: impl Fn(&Component) -> Option<hauksbee_models::ModelEntry>,
+) -> Option<IntegratedCaps> {
+    let mut candidates: Vec<i64> = nets.to_vec();
+    for &n in nets {
+        for (c, _) in board.net_members(n) {
+            if !AssemblyState::of(c).is_present() || !is_resistor(c) {
+                continue;
+            }
+            candidates.extend(c.pins.iter().filter_map(|p| p.net).filter(|id| *id != n));
+        }
+    }
+    candidates.iter().find_map(|&n| {
+        board.net_members(n).into_iter().find_map(|(c, pin)| {
+            if !AssemblyState::of(c).is_present() {
+                return None;
+            }
+            IntegratedCaps::of_card(&model_of(c)?, &pin.number)
+        })
+    })
+}
+
+/// [`driver_caps_with`] over the built-in model library, for a board judged
+/// without bound cards. Only a card that names the part counts: a guessed or
+/// unresolved stand-in never speaks for an oscillator's load.
+fn library_driver_caps(board: &ExtractedBoard, nets: &[i64; 2]) -> Option<IntegratedCaps> {
+    use hauksbee_models::{Confidence, ModelLibrary};
+    let lib = ModelLibrary::builtin_shared();
+    driver_caps_with(board, nets, |c| {
+        let mut q = hauksbee_models::ComponentQuery::new(
+            Some(c.lib_id.clone()).filter(|s| !s.is_empty()),
+            Some(c.value.clone()).filter(|s| !s.is_empty()),
+            Some(c.footprint.clone()).filter(|s| !s.is_empty()),
+        );
+        q.reference = Some(c.reference.clone());
+        q.properties.clone_from(&c.properties);
+        q.pads = c
+            .pins
+            .iter()
+            .map(|p| p.number.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect();
+        q.mpn = c
+            .properties
+            .iter()
+            .find(|(k, _)| crate::bom::is_mpn_property_key(k))
+            .map(|(_, v)| v.clone());
+        let res = lib.resolve(&q);
+        if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
+            return None;
+        }
+        res.model
+    })
+}
+
 /// What the bound cards say about one crystal and its driver.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CrystalFacts {
@@ -1043,7 +1128,19 @@ fn check_crystal_load_cap_with(
             // a placeholder, or something we cannot model. Skip.
             continue;
         }
-        let facts = cards.get(&xtal.reference);
+        // The bound cards' facts; where they name no driver capacitance (a card-less
+        // run, or a driver the pipeline did not bind), the built-in library's card
+        // for the driver is read through the same field.
+        let bound = cards.get(&xtal.reference);
+        let from_library = if bound.is_some_and(|f| f.driver_caps.is_some()) {
+            None
+        } else {
+            library_driver_caps(board, &[sig_nets[0], sig_nets[1]]).map(|caps| CrystalFacts {
+                driver_caps: Some(caps),
+                ..bound.cloned().unwrap_or_default()
+            })
+        };
+        let facts = from_library.as_ref().or(bound);
 
         // Find a load cap on each terminal. The RP2040 series-resistor topology
         // puts the second cap on a `Net-(Cx-Pad1)` node bridged through the 1k

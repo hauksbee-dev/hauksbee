@@ -102,11 +102,14 @@ series-resistor topology that could not be traced).
 
 ### Drivers with integrated load caps
 
-An MCU card states the on-chip load capacitance of an oscillator pad pair in
+A card (an MCU's, a clock generator's, an RTC's) states the on-chip load
+capacitance of an oscillator pad pair in
 `[[models.pin_capability.xtal_int_caps]]` (see `docs/models/MODELS.md`): the
 capacitance each pad has to ground, as a `min_f`/`max_f` range, or no range when
 the bank is software-tuned and the datasheet prints none. The driver is found on
-either crystal net or one series resistor away.
+either crystal net or one series resistor away. A run with no bound cards
+(`ExtractedBoard::si_checks`) reads the same field from the built-in library, so
+the card speaks either way.
 
 - A printed range adds in parallel to each external cap (`series(C1 + Ci, C2 +
   Ci) + stray`, over the range), and with no external caps the crystal is
@@ -116,6 +119,12 @@ either crystal net or one series resistor away.
   less and a finding above that, which needs external caps (the EFM32PG22
   datasheet says the same, Table 4.12 note 2: above 12 pF requires external load
   capacitors). The limit is derived from the card's range, not a separate field.
+- A software-selected load that the board cannot show is judged against the
+  range the chip can add. The Si5351 clock generator selects its crystal load of
+  6, 8 or 10 pF in register 183 (AN619 p.60), 12 to 20 pF on each of XA and XB;
+  its card states that range, so a 10 pF crystal on two 2 pF caps is reachable
+  and a note, and only a crystal or cap pair the whole range cannot reach is a
+  finding.
 - A tunable bank with no printed range cannot be computed: info, no judgement,
   with or without external caps.
 - RTCs and other parts without a card are recognised by name as before

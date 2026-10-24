@@ -2,3 +2,245 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+# Silicon Labs / Skyworks Si5351A/B/C-B I2C-programmable any-frequency CMOS clock generator, 20-pin QFN.
+#
+# Identity, pad map and the crystal oscillator's on-chip load capacitance only. The clock synthesis
+# (PLLs, MultiSynth dividers, spread spectrum, output drivers) and the I2C register file are not
+# modelled.
+#
+# The crystal load capacitance is the reason this card exists for the crystal check: the Si5351
+# carries its own programmable load capacitors (data sheet Rev. 1.3, section 4.1.1 Crystal Inputs
+# (XA, XB), p.15: "Internal load capacitors are provided to eliminate the need for external
+# components when connecting a crystal"), selected by register 183 XTAL_CL[1:0]
+# (AN619 Rev. 0.8, Register 183, p.60: 01 = 6 pF, 10 = 8 pF, 11 = 10 pF default, 00 reserved).
+# Those figures are the load the crystal sees across XA and XB, the two pads in series, so each pad
+# carries twice the figure: 12, 16 or 20 pF. Section 4.1.1 allows additional external load
+# capacitance of 2 pF or less (for example 4 pF on each of XA and XB, Table 8 note 1, p.11, for a
+# 12 pF crystal on the 10 pF setting). A board therefore fits tiny or no caps on XA/XB and sets the
+# crystal's CL in software, which a netlist cannot show; the crystal check judges the external caps
+# against the range the chip can add.
+#
+# XA is pad 1 and XB is pad 2 in every QFN package of the data sheet (Tables 14 to 19, pp.27-32); the
+# 10-MSOP (Table 20) numbers them 2 and 3 and has no card here. The three 20-pin QFN versions differ in
+# pads 3 and 6 only: A0 / VC / INTR on 3, SSEN / SSEN / CLKIN on 6.
+
+[[models]]
+id = "si5351c_qfn20"
+kind = "digital"
+description = "Si5351C-B clock generator with CLKIN, 20-pin QFN (QFN20 4x4 mm); identity, pad map and crystal on-chip load capacitance only; the PLLs, MultiSynth dividers, spread spectrum, output drivers and the I2C register file are not modelled."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a programmable PLL and MultiSynth clock generator with an I2C register map that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "QFN20"
+pins = { "1" = "XA", "2" = "XB", "3" = "INTR", "4" = "SCL", "5" = "SDA", "6" = "CLKIN", "7" = "OEB", "8" = "CLK3", "9" = "CLK2", "10" = "VDDOB", "11" = "VDDOA", "12" = "CLK1", "13" = "CLK0", "14" = "VDDOD", "15" = "CLK7", "16" = "CLK6", "17" = "CLK5", "18" = "VDDOC", "19" = "CLK4", "20" = "VDD" }
+
+[[models.source.references]]
+title = "Si5351A/B/C-B I2C-Programmable Any-Frequency CMOS Clock Generator + VCXO, Rev. 1.3, August 27, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/data-sheets/Si5351-B.pdf"
+locator = "Table 16 Si5351C Pin Descriptions p.29; section 4.1.1 Crystal Inputs (XA, XB) p.15; Table 8 Crystal Requirements p.11"
+sha256 = "f3bc5285fccafa3fcd06e9a7fa6abb67fb43e8c23f6147b14caecc9a4851101f"
+
+[[models.source.references]]
+title = "AN619: Manually Generating an Si5351 Register Map for 10-MSOP and 20-QFN Devices, Rev. 0.8, September 23, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN619.pdf"
+locator = "Register 183. Crystal Internal Load Capacitance, p.60"
+
+[models.match]
+value_re = '(?i)^SI5351C'
+
+[models.params]
+identity_only = true
+warning = "Pad map and crystal on-chip load capacitance only: the PLLs, MultiSynth dividers, spread spectrum, output drivers and I2C register file are not modelled."
+unlocked_by = "A validated programmable clock-generator model with the register map and output stages."
+
+[models.pins]
+"1" = "osci"    # XA, crystal input
+"2" = "osco"    # XB, crystal input
+"3" = "intr"    # INTR, open-drain interrupt output
+"4" = "scl"
+"5" = "sda"
+"6" = "clkin"   # PLL clock input
+"7" = "oeb"     # output driver enable, active low
+"8" = "clk3"
+"9" = "clk2"
+"10" = "vddob"
+"11" = "vddoa"
+"12" = "clk1"
+"13" = "clk0"
+"14" = "vddod"
+"15" = "clk7"
+"16" = "clk6"
+"17" = "clk5"
+"18" = "vddoc"
+"19" = "clk4"
+"20" = "vdd"
+
+# The crystal's load capacitance is on the die. AN619 Rev. 0.8 p.60: XTAL_CL[1:0] selects an internal
+# CL of 6, 8 or 10 pF (00 is reserved), the load across XA and XB; per pad that is 12 to 20 pF. Data
+# sheet Rev. 1.3 section 4.1.1 (p.15) and Table 8 note 1 (p.11) allow up to 2 pF more from external
+# caps, and Table 8 (p.11) supports crystals of CL 6 to 12 pF.
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "XTAL"
+pads = ["1", "2"]
+min_f = 12.0e-12
+max_f = 20.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): programmable internal XTAL load capacitance, 2 pF or less more from external caps; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, register 183 bits 7:6; AN619 Rev. 0.8 Register 183 (p.60): XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default), 00 reserved; that is the load across XA and XB, so 12 to 20 pF on each pad; Table 16 (p.29) XA pin 1, XB pin 2"
+
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "pll_and_multisynth", "spread_spectrum", "clock_output_stages", "vcxo_and_clkin_paths", "output_enable_and_interrupt_behaviour", "supply_sequencing", "power_on_reset"]
+
+[[models]]
+id = "si5351a_qfn20"
+kind = "digital"
+description = "Si5351A-B clock generator with I2C address pin, 20-pin QFN (QFN20 4x4 mm); identity, pad map and crystal on-chip load capacitance only; the PLLs, MultiSynth dividers, spread spectrum, output drivers and the I2C register file are not modelled."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a programmable PLL and MultiSynth clock generator with an I2C register map that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "QFN20"
+pins = { "1" = "XA", "2" = "XB", "3" = "A0", "4" = "SCL", "5" = "SDA", "6" = "SSEN", "7" = "OEB", "8" = "CLK3", "9" = "CLK2", "10" = "VDDOB", "11" = "VDDOA", "12" = "CLK1", "13" = "CLK0", "14" = "VDDOD", "15" = "CLK7", "16" = "CLK6", "17" = "CLK5", "18" = "VDDOC", "19" = "CLK4", "20" = "VDD" }
+
+[[models.source.references]]
+title = "Si5351A/B/C-B I2C-Programmable Any-Frequency CMOS Clock Generator + VCXO, Rev. 1.3, August 27, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/data-sheets/Si5351-B.pdf"
+locator = "Table 14 Si5351A Pin Descriptions p.27; section 4.1.1 Crystal Inputs (XA, XB) p.15; Table 8 Crystal Requirements p.11"
+sha256 = "f3bc5285fccafa3fcd06e9a7fa6abb67fb43e8c23f6147b14caecc9a4851101f"
+
+[[models.source.references]]
+title = "AN619: Manually Generating an Si5351 Register Map for 10-MSOP and 20-QFN Devices, Rev. 0.8, September 23, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN619.pdf"
+locator = "Register 183. Crystal Internal Load Capacitance, p.60"
+
+[models.match]
+value_re = '(?i)^SI5351A'
+
+[models.params]
+identity_only = true
+warning = "Pad map and crystal on-chip load capacitance only: the PLLs, MultiSynth dividers, spread spectrum, output drivers and I2C register file are not modelled."
+unlocked_by = "A validated programmable clock-generator model with the register map and output stages."
+
+[models.pins]
+"1" = "osci"    # XA, crystal input
+"2" = "osco"    # XB, crystal input
+"3" = "a0"      # I2C address bit
+"4" = "scl"
+"5" = "sda"
+"6" = "ssen"    # spread spectrum enable
+"7" = "oeb"     # output driver enable, active low
+"8" = "clk3"
+"9" = "clk2"
+"10" = "vddob"
+"11" = "vddoa"
+"12" = "clk1"
+"13" = "clk0"
+"14" = "vddod"
+"15" = "clk7"
+"16" = "clk6"
+"17" = "clk5"
+"18" = "vddoc"
+"19" = "clk4"
+"20" = "vdd"
+
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "XTAL"
+pads = ["1", "2"]
+min_f = 12.0e-12
+max_f = 20.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): programmable internal XTAL load capacitance, 2 pF or less more from external caps; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, register 183 bits 7:6; AN619 Rev. 0.8 Register 183 (p.60): XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default), 00 reserved; that is the load across XA and XB, so 12 to 20 pF on each pad; Table 14 (p.27) XA pin 1, XB pin 2"
+
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "pll_and_multisynth", "spread_spectrum", "clock_output_stages", "output_enable_behaviour", "supply_sequencing", "power_on_reset"]
+
+[[models]]
+id = "si5351b_qfn20"
+kind = "digital"
+description = "Si5351B-B clock generator with VCXO control input, 20-pin QFN (QFN20 4x4 mm); identity, pad map and crystal on-chip load capacitance only; the PLLs, MultiSynth dividers, VCXO pulling, spread spectrum, output drivers and the I2C register file are not modelled."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a programmable PLL and MultiSynth clock generator with an I2C register map that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "QFN20"
+pins = { "1" = "XA", "2" = "XB", "3" = "VC", "4" = "SCL", "5" = "SDA", "6" = "SSEN", "7" = "OEB", "8" = "CLK3", "9" = "CLK2", "10" = "VDDOB", "11" = "VDDOA", "12" = "CLK1", "13" = "CLK0", "14" = "VDDOD", "15" = "CLK7", "16" = "CLK6", "17" = "CLK5", "18" = "VDDOC", "19" = "CLK4", "20" = "VDD" }
+
+[[models.source.references]]
+title = "Si5351A/B/C-B I2C-Programmable Any-Frequency CMOS Clock Generator + VCXO, Rev. 1.3, August 27, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/data-sheets/Si5351-B.pdf"
+locator = "Table 15 Si5351B Pin Descriptions p.28; section 4.1.1 Crystal Inputs (XA, XB) p.15; Table 8 Crystal Requirements p.11"
+sha256 = "f3bc5285fccafa3fcd06e9a7fa6abb67fb43e8c23f6147b14caecc9a4851101f"
+
+[[models.source.references]]
+title = "AN619: Manually Generating an Si5351 Register Map for 10-MSOP and 20-QFN Devices, Rev. 0.8, September 23, 2021"
+url = "https://www.skyworksinc.com/-/media/Skyworks/SL/documents/public/application-notes/AN619.pdf"
+locator = "Register 183. Crystal Internal Load Capacitance, p.60"
+
+[models.match]
+value_re = '(?i)^SI5351B'
+
+[models.params]
+identity_only = true
+warning = "Pad map and crystal on-chip load capacitance only: the PLLs, MultiSynth dividers, VCXO pulling, spread spectrum, output drivers and I2C register file are not modelled."
+unlocked_by = "A validated programmable clock-generator model with the register map and output stages."
+
+[models.pins]
+"1" = "osci"    # XA, crystal input
+"2" = "osco"    # XB, crystal input
+"3" = "vc"      # VCXO control voltage input
+"4" = "scl"
+"5" = "sda"
+"6" = "ssen"    # spread spectrum enable
+"7" = "oeb"     # output driver enable, active low
+"8" = "clk3"
+"9" = "clk2"
+"10" = "vddob"
+"11" = "vddoa"
+"12" = "clk1"
+"13" = "clk0"
+"14" = "vddod"
+"15" = "clk7"
+"16" = "clk6"
+"17" = "clk5"
+"18" = "vddoc"
+"19" = "clk4"
+"20" = "vdd"
+
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "XTAL"
+pads = ["1", "2"]
+min_f = 12.0e-12
+max_f = 20.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): programmable internal XTAL load capacitance, 2 pF or less more from external caps; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, register 183 bits 7:6; AN619 Rev. 0.8 Register 183 (p.60): XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default), 00 reserved; that is the load across XA and XB, so 12 to 20 pF on each pad; Table 15 (p.28) XA pin 1, XB pin 2"
+
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "pll_and_multisynth", "vcxo_pulling", "spread_spectrum", "clock_output_stages", "output_enable_behaviour", "supply_sequencing", "power_on_reset"]
