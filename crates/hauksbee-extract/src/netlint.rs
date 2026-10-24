@@ -19,6 +19,7 @@
 use crate::assembly::AssemblyState;
 use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_ir::pin_functions::{dedicated_i2c_pin, names_spi_line, PeripheralFunction};
 use hauksbee_models::refdes::RefClass;
 use std::fmt::Write as _;
 
@@ -1431,10 +1432,13 @@ pub fn pin_is_no_connect(p: &Pin) -> bool {
 // Check 1: missing I2C pull-ups.
 // ---------------------------------------------------------------------------
 
+/// The I2C line a net name states, if any.
+///
 /// A net is an I2C data/clock line if its (leaf) name is exactly SDA/SCL or a
 /// recognised decorated form (`I2C_SDA`, SDA1, ASDA, `SDA_3V3`, ...). We require the
 /// SDA/SCL token to stand as its own word so we do not match "USDA" sub-strings
 /// or unrelated nets.
+#[must_use]
 pub fn i2c_role(name: &str) -> Option<&'static str> {
     let n = norm(name);
     // Split on common separators and look for an exact SDA/SCL token.
@@ -1681,89 +1685,233 @@ fn dnp_pullup_message(
     })
 }
 
+/// The I2C line the symbol pins of a net state when its own name does not: a
+/// present, non-connector part's pin that is only `SDA` or `SCL`
+/// ([`dedicated_i2c_pin`]). Pins that disagree (one `SDA`, one `SCL`) state
+/// nothing. Returns the line and the pin that says so (`U2 pin 1 'SDA'`).
+fn i2c_role_from_pins(mem: &[(&Component, &Pin)]) -> Option<(&'static str, String)> {
+    let mut found: Option<(&'static str, String)> = None;
+    for (c, p) in mem {
+        if !AssemblyState::of(c).is_present() || is_connector_like(c) {
+            continue;
+        }
+        let role = match dedicated_i2c_pin(&p.function) {
+            Some(PeripheralFunction::I2cSda) => "SDA",
+            Some(PeripheralFunction::I2cScl) => "SCL",
+            _ => continue,
+        };
+        match &found {
+            Some((r, _)) if *r != role => return None,
+            Some(_) => {}
+            None => {
+                found = Some((
+                    role,
+                    format!("{} pin {} '{}'", c.reference, p.number, p.function.trim()),
+                ));
+            }
+        }
+    }
+    found
+}
+
 fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
             continue;
         }
-        let Some(role) = i2c_role(&net.name) else {
-            continue;
-        };
         let mem = members(board, net.id);
-        // A real two-wire bus has at least two members (master + peripheral, or
-        // a peripheral + the pull). A single-member "SDA" is a stub / NC pad.
-        if mem.len() < 2 {
-            continue;
-        }
+        // The net's own name first; a net named for something else (`SENSOR_D`,
+        // `Net-(R4-Pad1)`) is still the bus when the pins on it say so.
+        let (role, by_pins) = match i2c_role(&net.name) {
+            Some(role) => (role, None),
+            None => match i2c_role_from_pins(&mem) {
+                Some((role, pin)) => (role, Some(pin)),
+                None => continue,
+            },
+        };
+        report.findings.extend(i2c_net_finding(
+            board,
+            net,
+            &mem,
+            role,
+            by_pins.as_deref(),
+            &|_, p| !p.function.trim().is_empty(),
+        ));
+    }
+}
 
-        let scan = pullup_scan(board, net.id, None);
-        let mut has_pullup = scan.fitted;
-        // Dedup active devices by reference: an IPC-356 both-sided through-hole
-        // access record lists a device's bus pad twice, so a raw per-entry count
-        // turned a single-device (ambiguous → skip) bus into `active_devices == 2`
-        // and fired a false "on-board master and peripheral, no pull-up" finding.
-        let mut active_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut exits_to_connector = false;
-        let mut via_module_socket = false;
-        let mut via_dnp_end = false;
+/// The missing-pull-up finding for a net a model card says is an I2C line.
+///
+/// `role` is `"SDA"` or `"SCL"` and `evidence` names the card pad that says so
+/// (`U2 pin 1 'SDA'`). It judges the net exactly as the name- and pin-named buses are judged, and
+/// is silent on a net that is not a bus, has a pull-up, or has a part or end
+/// it cannot read. `readable` says whether a part's pin on the bus can be read
+/// (it has a symbol pin name, or a card for the pad).
+#[must_use]
+pub fn i2c_pullup_finding_for_net(
+    board: &ExtractedBoard,
+    net_id: i64,
+    role: &str,
+    evidence: &str,
+    readable: &dyn Fn(&Component, &Pin) -> bool,
+) -> Option<LintFinding> {
+    let net = board.net(net_id)?;
+    if net.id == 0 || is_unconnected_net(&net.name) {
+        return None;
+    }
+    let role = if role.eq_ignore_ascii_case("SCL") {
+        "SCL"
+    } else {
+        "SDA"
+    };
+    i2c_net_finding(
+        board,
+        net,
+        &members(board, net_id),
+        role,
+        Some(evidence),
+        readable,
+    )
+}
 
-        for (c, _p) in &mem {
-            // Only assembled, identity-trusted parts count: an absent device
-            // must not inflate the bus. A socket or header marked DNP is the
-            // exception: it stands for the module or cable that mates with it
-            // later, so it is still the bus's far end.
-            match AssemblyState::of(c) {
-                AssemblyState::Present(_) => {}
-                AssemblyState::DnpAbsent(_) => {
-                    if is_dnp_bus_end(c) {
-                        exits_to_connector = true;
-                        via_module_socket |= is_module_socket(c);
-                        via_dnp_end = true;
-                    }
-                    continue;
+/// What the members of a net say about the bus on it.
+struct BusSurvey {
+    has_pullup: bool,
+    ends: BusEnds,
+    /// A part on the bus cannot be read: its identity is in dispute, or its pin
+    /// on the bus has no name.
+    unread: bool,
+}
+
+/// Survey the members of `net_id` for the pull-up they supply and where the bus ends.
+///
+/// `fitted` is whether a fitted resistor already pulls the line up.
+fn survey_bus(
+    board: &ExtractedBoard,
+    net_id: i64,
+    mem: &[(&Component, &Pin)],
+    fitted: bool,
+    readable: &dyn Fn(&Component, &Pin) -> bool,
+) -> BusSurvey {
+    let mut has_pullup = fitted;
+    // Dedup active devices by reference: an IPC-356 both-sided through-hole
+    // access record lists a device's bus pad twice, so a raw per-entry count
+    // turned a single-device (ambiguous → skip) bus into `active_devices == 2`
+    // and fired a false "on-board master and peripheral, no pull-up" finding.
+    let mut active_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut exits_to_connector = false;
+    let mut via_module_socket = false;
+    let mut via_dnp_end = false;
+    // Pin-named buses only: a part on the bus that cannot be read (its
+    // identity is in dispute, or its pin on the bus has no name).
+    let mut unread = false;
+
+    for (c, p) in mem {
+        // Only assembled, identity-trusted parts count: an absent device
+        // must not inflate the bus. A socket or header marked DNP is the
+        // exception: it stands for the module or cable that mates with it
+        // later, so it is still the bus's far end.
+        match AssemblyState::of(c) {
+            AssemblyState::Present(_) => {}
+            AssemblyState::DnpAbsent(_) => {
+                if is_dnp_bus_end(c) {
+                    exits_to_connector = true;
+                    via_module_socket |= is_module_socket(c);
+                    via_dnp_end = true;
                 }
-                AssemblyState::IdentityUnknown(_) => continue,
-            }
-            // A level translator with integrated pull-ups (NTS010x / TXS010x /
-            // PCA9517-class auto-direction parts) supplies the bus
-            // pull-up itself: an external resistor is optional, not missing. A
-            // pure pass-gate (PCA9306) does NOT, so it is excluded from this.
-            if has_integrated_i2c_pullups(c) {
-                has_pullup = true;
-            }
-            if is_connector_like(c) {
-                exits_to_connector = true;
-                via_module_socket |= is_module_socket(c);
                 continue;
             }
-            // A transistor current source (or switched pull-up) is the pull-up,
-            // not a device on the bus.
-            if is_transistor_pullup(board, c, net.id) {
-                has_pullup |= !crate::dnp::fitted_from_dnp_policy(c);
+            AssemblyState::IdentityUnknown(_) => {
+                unread = true;
                 continue;
-            }
-            // An IC / sensor pin on the bus means the bus is used on-board. A
-            // resistor ARRAY is a passive pull-up, not an active device, exclude
-            // it so it does not inflate `active_devices` and manufacture the
-            // two-device "missing pull-up" case.
-            let r = c.reference.to_ascii_uppercase();
-            if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
-            {
-                active_refs.insert(c.reference.as_str());
             }
         }
-
-        if has_pullup {
+        // A level translator with integrated pull-ups (NTS010x / TXS010x /
+        // PCA9517-class auto-direction parts) supplies the bus
+        // pull-up itself: an external resistor is optional, not missing. A
+        // pure pass-gate (PCA9306) does NOT, so it is excluded from this.
+        if has_integrated_i2c_pullups(c) {
+            has_pullup = true;
+        }
+        if is_connector_like(c) {
+            exits_to_connector = true;
+            via_module_socket |= is_module_socket(c);
             continue;
         }
-        let active_devices = active_refs.len();
-
-        let regime = pullup_regime(&BusEnds {
+        // A transistor current source (or switched pull-up) is the pull-up,
+        // not a device on the bus.
+        if is_transistor_pullup(board, c, net_id) {
+            has_pullup |= !crate::dnp::fitted_from_dnp_policy(c);
+            continue;
+        }
+        // An IC / sensor pin on the bus means the bus is used on-board. A
+        // resistor ARRAY is a passive pull-up, not an active device, exclude
+        // it so it does not inflate `active_devices` and manufacture the
+        // two-device "missing pull-up" case.
+        let r = c.reference.to_ascii_uppercase();
+        if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c)) {
+            active_refs.insert(c.reference.as_str());
+            unread |= !readable(c, p);
+        }
+    }
+    BusSurvey {
+        has_pullup,
+        ends: BusEnds {
             via_module_socket,
             exits_to_connector,
             via_dnp_end,
-            active_devices,
-        });
+            active_devices: active_refs.len(),
+        },
+        unread,
+    }
+}
+
+/// One net's missing-pull-up finding, when it is the I2C line `role`.
+///
+/// `by_pins` is the evidence when the net's name does not say so.
+fn i2c_net_finding(
+    board: &ExtractedBoard,
+    net: &Net,
+    mem: &[(&Component, &Pin)],
+    role: &str,
+    by_pins: Option<&str>,
+    readable: &dyn Fn(&Component, &Pin) -> bool,
+) -> Option<LintFinding> {
+    {
+        // A pin that spells an I2C line proves nothing on a net called for SPI
+        // or a clock: a display's serial pins are often named `SCL` and `SDA`.
+        if by_pins.is_some() && names_spi_line(&net.name) {
+            return None;
+        }
+        // A real two-wire bus has at least two members (master + peripheral, or
+        // a peripheral + the pull). A single-member "SDA" is a stub / NC pad.
+        if mem.len() < 2 {
+            return None;
+        }
+        let scan = pullup_scan(board, net.id, None);
+        let survey = survey_bus(board, net.id, mem, scan.fitted, readable);
+        if survey.has_pullup {
+            return None;
+        }
+        let BusSurvey { ends, unread, .. } = survey;
+        let active_devices = ends.active_devices;
+        let regime = if let Some(pin) = by_pins {
+            // A bus found by its pins alone is judged only where nothing about
+            // it is unknown: a connector or socket (the pull may be off-board)
+            // and a part that cannot be read abstain.
+            if ends.exits_to_connector || unread || active_devices < 2 {
+                return None;
+            }
+            Some((
+                Severity::High,
+                format!(
+                    "on-board master and peripheral, no pull-up present; the net is the bus \
+                     because of {pin}"
+                ),
+            ))
+        } else {
+            pullup_regime(&ends).map(|(sev, note)| (sev, note.to_string()))
+        };
         // A pull-up that is do-not-populate is not a pull-up on the built board.
         // Where the regime would otherwise abstain (a single on-board device
         // and no header), its presence in the layout is the evidence that the
@@ -1771,12 +1919,13 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         let Some((sev, note)) = regime.or_else(|| {
             scan.absent_ref.is_some().then_some((
                 Severity::Low,
-                "only one device sits on the bus, so the pull-up may be fitted elsewhere",
+                "only one device sits on the bus, so the pull-up may be fitted elsewhere"
+                    .to_string(),
             ))
         }) else {
             // A single on-board device with no header and no pull: ambiguous,
             // skip rather than risk a false positive.
-            continue;
+            return None;
         };
 
         if let Some(message) = dnp_pullup_message(
@@ -1784,28 +1933,36 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             &net.name,
             scan.absent_ref.as_deref(),
             scan.dnp_ref.as_deref(),
-            note,
+            &note,
         ) {
-            report.findings.push(LintFinding {
+            return Some(LintFinding {
                 check: LintCheck::MissingI2cPullup,
                 severity: sev,
                 message,
-                refs: present_refs(&mem),
+                refs: present_refs(mem),
                 nets: vec![net.name.clone()],
             });
-            continue;
         }
 
-        report.findings.push(LintFinding {
+        let remedy = if by_pins.is_some() {
+            format!(
+                " {REMEDY_MARKER}Add a resistor (2.2 to 10 kilohms, by bus speed) from '{}' to \
+                 the rail the devices run from.",
+                net.name
+            )
+        } else {
+            String::new()
+        };
+        Some(LintFinding {
             check: LintCheck::MissingI2cPullup,
             severity: sev,
             message: format!(
-                "I2C {role} net '{}' has no pull-up to a rail: {note}",
+                "I2C {role} net '{}' has no pull-up to a rail: {note}{remedy}",
                 net.name
             ),
             refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
             nets: vec![net.name.clone()],
-        });
+        })
     }
 }
 
@@ -3197,6 +3354,202 @@ mod i2c_pullup_dedup_tests {
             0,
             "a single device (its pad merely double-listed) must not fire a missing-pullup finding"
         );
+    }
+}
+
+/// A bus whose nets are not named for it: the symbol pins on them say what it is.
+#[cfg(test)]
+mod i2c_pin_named_bus_tests {
+    use crate::testutil::{board, part, pin};
+    use crate::{Component, ExtractedBoard, LintCheck, LintFinding, Pin, Severity};
+
+    const DATA: i64 = 1;
+    const CLOCK: i64 = 2;
+    const RAIL: i64 = 3;
+
+    fn named(number: &str, net: i64, function: &str) -> Pin {
+        let mut p = pin(number, Some(net));
+        p.function = function.into();
+        p
+    }
+
+    /// A controller on both lines; its pads are port names, not bus names.
+    fn controller() -> Component {
+        part(
+            "U1",
+            "MCU",
+            "",
+            "QFN-40",
+            vec![named("5", DATA, "PB7"), named("6", CLOCK, "PB6")],
+        )
+    }
+
+    /// A peripheral whose pins carry the given names on the two lines.
+    fn peripheral(data: &str, clock: &str) -> Component {
+        part(
+            "U2",
+            "SENSOR",
+            "",
+            "SOIC-8",
+            vec![named("1", DATA, data), named("2", CLOCK, clock)],
+        )
+    }
+
+    fn pull(reference: &str, net: i64) -> Component {
+        part(
+            reference,
+            "4.7k",
+            "",
+            "R_0603",
+            vec![pin("1", Some(RAIL)), pin("2", Some(net))],
+        )
+    }
+
+    fn run(parts: Vec<Component>) -> Vec<LintFinding> {
+        let b: ExtractedBoard = board(
+            &[(DATA, "SENS_D"), (CLOCK, "SENS_C"), (RAIL, "+3V3")],
+            parts,
+        );
+        b.net_lint()
+            .of_check(LintCheck::MissingI2cPullup)
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn pins_named_sda_and_scl_make_an_unnamed_net_a_bus_with_no_pull_up() {
+        let found = run(vec![controller(), peripheral("SDA", "SCL")]);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found.iter().all(|f| f.severity == Severity::High));
+        let data = found.iter().find(|f| f.nets == ["SENS_D"]).unwrap();
+        assert!(
+            data.message.contains("I2C SDA net 'SENS_D'"),
+            "{}",
+            data.message
+        );
+        assert!(data.message.contains("U2 pin 1 'SDA'"), "{}", data.message);
+        assert!(data.own_remedy().is_some(), "{}", data.message);
+        assert!(found
+            .iter()
+            .any(|f| f.message.contains("I2C SCL net 'SENS_C'")));
+    }
+
+    #[test]
+    fn the_bus_words_around_the_line_name_do_not_matter() {
+        for (data, clock) in [
+            ("I2C_SDA", "I2C_SCL"),
+            ("TWI_SDA", "TWI_SCL"),
+            ("SDA0", "SCL0"),
+        ] {
+            let found = run(vec![controller(), peripheral(data, clock)]);
+            assert_eq!(found.len(), 2, "{data}: {found:#?}");
+        }
+    }
+
+    #[test]
+    fn a_pull_up_resistor_keeps_a_pin_named_bus_silent() {
+        let found = run(vec![
+            controller(),
+            peripheral("SDA", "SCL"),
+            pull("R1", DATA),
+            pull("R2", CLOCK),
+        ]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_resistor_network_pull_up_keeps_a_pin_named_bus_silent() {
+        let network = part(
+            "RN1",
+            "4k7",
+            "",
+            "R_Array_Convex_4x0603",
+            vec![
+                pin("1", Some(RAIL)),
+                pin("2", Some(DATA)),
+                pin("3", Some(RAIL)),
+                pin("4", Some(CLOCK)),
+            ],
+        );
+        let found = run(vec![controller(), peripheral("SDA", "SCL"), network]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_connector_on_the_bus_abstains() {
+        let header = part(
+            "J1",
+            "Conn_01x04",
+            "Connector:PinHeader",
+            "PinHeader_1x04_P2.54mm",
+            vec![pin("1", Some(DATA)), pin("2", Some(CLOCK))],
+        );
+        let found = run(vec![controller(), peripheral("SDA", "SCL"), header]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_part_that_cannot_be_read_abstains() {
+        // The controller's pins carry no names at all.
+        let mut blind = controller();
+        blind.pins.iter_mut().for_each(|p| p.function.clear());
+        let found = run(vec![blind, peripheral("SDA", "SCL")]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn spi_and_multiplexed_pin_names_do_not_make_a_bus() {
+        for (data, clock) in [
+            ("SDO", "SCK"),
+            ("SDI", "SCLK"),
+            ("MISO", "MOSI"),
+            ("SDA/SDI", "SCL/SCLK"),
+            ("PB6/SDA", "PB7/SCL"),
+        ] {
+            let found = run(vec![controller(), peripheral(data, clock)]);
+            assert!(found.is_empty(), "{data} {clock}: {found:#?}");
+        }
+    }
+
+    #[test]
+    fn a_net_whose_pins_name_both_lines_is_not_judged() {
+        let both = part(
+            "U3",
+            "SENSOR",
+            "",
+            "SOIC-8",
+            vec![named("1", DATA, "SCL"), named("2", CLOCK, "SDA")],
+        );
+        let found = run(vec![controller(), peripheral("SDA", "SCL"), both]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_net_called_for_spi_or_a_clock_is_not_an_i2c_bus() {
+        // A display whose serial pins are named SCL/SDA, wired as SPI.
+        let b: ExtractedBoard = board(
+            &[
+                (DATA, "DISPLAY-MOSI"),
+                (CLOCK, "DISPLAY-CLK"),
+                (RAIL, "+3V3"),
+            ],
+            vec![controller(), peripheral("SDA", "SCL")],
+        );
+        let found: Vec<_> = b
+            .net_lint()
+            .of_check(LintCheck::MissingI2cPullup)
+            .cloned()
+            .collect();
+        assert!(
+            !found.iter().any(|f| f.nets == ["DISPLAY-CLK"]),
+            "{found:#?}"
+        );
+    }
+
+    #[test]
+    fn one_device_alone_is_not_a_bus() {
+        let found = run(vec![peripheral("SDA", "SCL")]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 }
 
