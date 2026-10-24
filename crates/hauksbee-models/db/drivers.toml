@@ -7,8 +7,9 @@
 # Source: Allegro 4988-DS Rev. 8 (April 5, 2022). Pinout Diagram and Terminal List Table p.18, Absolute Maximum
 # Ratings p.2, Electrical Characteristics p.4, Thermal Characteristics p.5, Table 1 microstep truth table p.6.
 # The datasheet prints one package (ET, 28-contact QFN, ordering code A4988SETTR-T), so the bare name resolves here.
-# The motor outputs, the STEP translator, the VREF trip law and the chopping are NOT modelled: only the VBB
-# supply draw, the rails, the logic thresholds, the pin map and the printed ratings are.
+# The motor outputs, the STEP translator and the chopping are NOT modelled: only the VBB supply draw, the rails,
+# the logic thresholds, the pin map, the printed ratings and the full-scale current law (ITripMAX = VREF / (8 x RS),
+# p.9, as a static limit the checks hold to the output rating and the supply) are.
 [[models]]
 id = "a4988_et_qfn28"
 kind = "digital"
@@ -29,7 +30,7 @@ reason = "A4988 4988-DS Rev. 8 Electrical Characteristics: IBB prints maximum va
 [[models.source.uncertainty]]
 status = "unknown"
 parameter = "motor_drive"
-reason = "the DMOS full bridges, the fixed off-time chopping, the mixed-decay timing, the STEP translator and microstep tables, the VREF trip law (ITripMax = VREF / (8 x RS)), sleep, the overcurrent and thermal shutdown are not modelled; the Rds(on) of 320 mOhm typ / 430 mOhm max is not stamped"
+reason = "the DMOS full bridges, the fixed off-time chopping, the mixed-decay timing, the STEP translator and microstep tables, the DAC steps below ITripMAX (Table 2), sleep, the overcurrent and thermal shutdown are not modelled; the Rds(on) of 320 mOhm typ / 430 mOhm max is not stamped"
 
 [models.match]
 # A4988 and its ET ordering codes (A4988SETTR-T, A4988SET-T, A4988SETTR). The datasheet prints a single package.
@@ -83,6 +84,22 @@ vil = [[3.0, 0.9], [5.5, 1.65]]
 "27" = "sense2"
 "28" = "vbb2"
 "29" = "gnd_ep"
+
+# Winding current law, Allegro 4988-DS Rev. 8 PDF p.9 Functional Description, Internal PWM Current Control: "The maximum value
+# of current limiting is set by the selection of RSx and the voltage at the VREF pin ... ITripMAX (A), which is set by
+# ITripMAX = VREF / ( 8 x RS) where RS is the resistance of the sense resistor (ohm) and VREF is the input voltage on the REF pin (V)."
+# Both bridges share the one REF pin; SENSE1 and SENSE2 each take their own RS to ground. ITripMAX is the 100 % step of the
+# DAC table (Table 2); lower steps scale it down, so it is the most the winding is ever asked for. The REF input takes
+# IREF -3..+3 uA (Electrical Characteristics, PDF p.4), so nothing biases an open pin. It is a protection-style limit, never
+# a steady load. The output rating it is held to is ratings.max_current_a (IOUT +-2 A, Absolute Maximum Ratings p.2; "output
+# drive capacity of up to 35 V and +-2 A", p.1).
+[models.current_program]
+pin = "ref"
+semantics = "protection_limit"
+equation = "reference_over_sense"
+reference_roles = ["ref", "ref"]
+sense_roles = ["sense1", "sense2"]
+divisor = 8.0
 
 # Supply capacitance, Allegro 4988-DS Rev. 8 (https://www.allegromicro.com/-/media/files/datasheets/a4988-datasheet.pdf,
 # sha256 d1dfba3bb7be2cbf2b689f39424569fc78b1f4fd1f427648bbd8f291ebb933ea). The charge-pump capacitors (0.1 uF between CP1 and CP2,
@@ -167,7 +184,7 @@ b = "gnd"
 expr = "supply_current_a * min(1.0, max(0.0, v_vbb1 / supply_on_v))"
 
 [models.coverage]
-implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles"]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles", "programmed_current_limit"]
 missing = ["h_bridge_drive", "step_translator", "microstep_selection", "current_regulation", "decay_mode", "sleep_mode", "overcurrent_protection", "thermal_shutdown", "output_on_resistance", "timing_requirements"]
 
 
@@ -176,8 +193,9 @@ missing = ["h_bridge_drive", "step_translator", "microstep_selection", "current_
 # 7.3 Recommended Operating Conditions p.4, 7.4 Thermal Information p.5, 7.5 Electrical Characteristics p.6.
 # The datasheet prints one package (PWP, HTSSOP 28), so the bare name resolves. The PowerPAD is not numbered in the
 # pin table and the datasheet only says to connect it thermally to copper (11.3.2), so it is not mapped.
-# The outputs, the indexer, the decay modes and the VREF trip law are NOT modelled: only the VM supply draw, the rails,
-# the logic thresholds, the pin map and the printed ratings are.
+# The outputs, the indexer and the decay modes are NOT modelled: only the VM supply draw, the rails, the logic
+# thresholds, the pin map, the printed ratings and the full-scale current law (IFS = V(xREF) / (5 x RISENSE), PDF p.12
+# Equation 1, as a static limit the checks hold to the output rating and the supply) are.
 [[models]]
 id = "drv8825_pwp28"
 kind = "digital"
@@ -198,7 +216,7 @@ reason = "DRV8825 SLVSA73F 7.5: IVM 5 mA typ / 8 mA max at V(VMx) = 24 V; sleep 
 [[models.source.uncertainty]]
 status = "unknown"
 parameter = "motor_drive"
-reason = "the H-bridge outputs, the microstepping indexer (full to 1/32 step), the decay modes, the VREF trip law (VTRIP = 660 mV typ at VREF = 3.3 V, 100% current), the 3.3 V V3P3OUT regulator output, nFAULT and nHOME open-drain outputs, protection and timing are not modelled"
+reason = "the H-bridge outputs, the microstepping indexer (full to 1/32 step), the decay modes, the sub-100% current steps and the 660 mV typ trip voltage at VREF = 3.3 V (7.5), the 3.3 V V3P3OUT regulator output, nFAULT and nHOME open-drain outputs, protection and timing are not modelled"
 [[models.source.uncertainty]]
 status = "unknown"
 parameter = "logic_threshold_pins"
@@ -249,6 +267,24 @@ must_not_float_roles = "nsleep,nreset"
 "26" = "mode2"
 "27" = "nhome"
 "28" = "gnd"
+
+# Winding current law, TI DRV8825 SLVSA73F PDF p.12 8.3.2 Current Regulation: "The PWM chopping current is set by a comparator
+# which compares the voltage across a current sense resistor connected to the xISEN pins, multiplied by a factor of 5, with a
+# reference voltage. The reference voltage is input from the xVREF pins. The full-scale (100%) chopping current is calculated
+# in Equation 1": IFS = V(xREF) / (5 x RISENSE); PDF p.19 9.2.2.2 repeats it ("To achieve IFS = 1.25 A with RSENSE of 0.2 ohm,
+# xVREF should be 1.25 V"). Bridge A uses AVREF with the resistor on ISENA, bridge B BVREF with ISENB; the sense resistor runs to
+# ground (Pin Functions p.4: ISENA/ISENB "Bridge A/B ground / Isense"). AVREF and BVREF "Normally ... are connected to the same
+# voltage. Can be connected to V3P3OUT" (Pin Functions p.3); the xVREF input takes IREF -3..+3 uA (7.5, p.6), so nothing biases an
+# open pin. A reference pad on the same net as V3P3OUT is a source the check does not read, so it is not judged. It is a
+# protection-style limit, never a steady load. The output rating it is held to is ratings.max_current_a (continuous motor drive
+# output current 2.5 A, 7.1 p.4).
+[models.current_program]
+pin = "avref"
+semantics = "protection_limit"
+equation = "reference_over_sense"
+reference_roles = ["avref", "bvref"]
+sense_roles = ["isena", "isenb"]
+divisor = 5.0
 
 # nFAULT and nHOME are open-drain outputs. The datasheet draws a 10 k pull-up to V3P3OUT on each in the Typical Application
 # (PDF p.18) but no sentence says one is required, so no pin_bias row is stated.
@@ -342,7 +378,7 @@ b = "gnd"
 expr = "supply_current_a * min(1.0, max(0.0, v_vma / supply_on_v))"
 
 [models.coverage]
-implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles"]
+implements = ["supply_current", "supply_range", "logic_levels", "absolute_ratings", "float_tolerance", "pin_roles", "programmed_current_limit"]
 missing = ["h_bridge_drive", "microstep_indexer", "current_regulation", "decay_mode", "sleep_mode", "v3p3out_regulator", "fault_output", "home_output", "overcurrent_protection", "thermal_shutdown", "thermal_pad_pin", "timing_requirements"]
 
 

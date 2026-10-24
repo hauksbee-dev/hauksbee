@@ -34,6 +34,17 @@
 //!   that feeds the motor rail. The regulator's rating is held to it; the
 //!   draw is conditional on the motor loading the driver, so it is a Medium
 //!   finding that says so.
+//! - **Reference-programmed driver.** A driver whose card gives its winding
+//!   current as a reference voltage over a sense resistor
+//!   (`equation = "reference_over_sense"`: A4988, DRV8825) has that full scale
+//!   read from the board: the level on each reference pin, from a rail, a
+//!   regulator or a resistor divider off known rails, over the one sense
+//!   resistor to ground. A full scale over the part's output current rating, a
+//!   reference pin at 0 V (no winding current at all) and a reference pin with
+//!   nothing driving it (the trip level is then undefined) are findings; the
+//!   same full scale is held to the supply as above. A reference that comes
+//!   from a trimmer, a part, a pin of the driver itself or a filtered logic
+//!   pin, and a sense path that is not exactly one resistor, are not judged.
 //!
 //! ## What it never claims
 //!
@@ -51,7 +62,8 @@ use hauksbee_bind::binder::{is_ground, power_rail_voltage};
 use hauksbee_bind::program_resistor::ProgramReading;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, REMEDY_MARKER,
+    is_capacitor, is_test_point_or_hole, Component, ExtractedBoard, LintCheck, LintFinding,
+    NetLintReport, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::units::{format_amps, format_volts};
 use hauksbee_models::behavioral::LawKind;
@@ -59,6 +71,7 @@ use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::schema::{CurrentProgramEquation, CurrentProgramSemantics};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary, OperatingEnvelope};
 
+use super::ampacity::{adjacent_sense_resistor, ExpectedSenseFar};
 use super::envelope::{
     binding, role_net_id, series_feeds, tied_nets, RailRange, RailResolver, IC_SUPPLY_ROLES,
 };
@@ -66,7 +79,7 @@ use super::BoardStatics;
 
 /// Pad roles that put a motor supply on a driver (the rail its load current
 /// is drawn from).
-const MOTOR_SUPPLY_ROLES: [&str; 3] = ["vm", "vbb", "vmot"];
+const MOTOR_SUPPLY_ROLES: [&str; 7] = ["vm", "vbb", "vmot", "vbb1", "vbb2", "vma", "vmb"];
 
 /// Pad roles that can drive a rail, so a part with one on a rail is a source
 /// of it.
@@ -691,14 +704,26 @@ fn series_feed_finding(
     })
 }
 
+/// A motor driver's programmed full-scale current, the rail it draws it from
+/// and how the board programs it, for the message.
+struct Programmed {
+    amps: f64,
+    supply: i64,
+    /// What sets the figure: "its ILIM resistor, 30 kohm".
+    how: String,
+    /// What a fix turns: "raise the ILIM resistor".
+    lever: String,
+}
+
 /// The programmed full-scale current of a motor driver and the rail it draws
 /// it from, or `None` for a part that is not one, or whose resistor cannot be
 /// read.
 fn driver_full_scale(
-    board: &ExtractedBoard,
+    budget: &Budget<'_>,
     comp: &Component,
     model: &ModelEntry,
-) -> Option<(f64, i64, f64)> {
+) -> Option<Programmed> {
+    let board = budget.board;
     let program = model
         .current_program
         .as_ref()
@@ -712,6 +737,34 @@ fn driver_full_scale(
     let supply = MOTOR_SUPPLY_ROLES
         .iter()
         .find_map(|role| role_net_id(comp, model, role))?;
+    if matches!(
+        program.equation,
+        CurrentProgramEquation::ReferenceOverSense { .. }
+    ) {
+        // `max_by` keeps the last of equal windings; reverse so the first is named.
+        let top = windings(budget, comp, model)
+            .into_iter()
+            .rev()
+            .filter_map(|w| Some((w.trip()?, w)))
+            .max_by(|a, b| a.0.hi_a.total_cmp(&b.0.hi_a))?;
+        let (trip, w) = top;
+        return (trip.hi_a > 0.0).then(|| Programmed {
+            amps: trip.hi_a,
+            supply,
+            how: format!(
+                "its {} reference at up to {} over the {} ohm sense resistor {}",
+                w.reference_role.to_ascii_uppercase(),
+                format_volts(trip.hi_v),
+                super::device_decode::format_ohms(trip.sense_ohms),
+                trip.sense_ref,
+            ),
+            lever: format!(
+                "lower the {} reference voltage or raise the sense resistor {}",
+                w.reference_role.to_ascii_uppercase(),
+                trip.sense_ref,
+            ),
+        });
+    }
     let index = board
         .components
         .iter()
@@ -727,14 +780,29 @@ fn driver_full_scale(
         return None;
     }
     let amps = program.equation_current_a(ohms)?;
-    (amps.is_finite() && amps > 0.0).then_some((amps, supply, ohms))
+    (amps.is_finite() && amps > 0.0).then(|| Programmed {
+        amps,
+        supply,
+        how: format!(
+            "its {} resistor, {} ohm",
+            program.pin,
+            super::device_decode::format_ohms(ohms)
+        ),
+        lever: format!("raise the {} resistor", program.pin),
+    })
 }
 
 /// The motor-driver finding for `comp`, or `None`.
 fn motor_findings(budget: &Budget<'_>) -> Vec<LintFinding> {
     let mut found = Vec::new();
     for (comp, model) in &budget.parts {
-        let Some((full_scale, supply, ohms)) = driver_full_scale(budget.board, comp, model) else {
+        let Some(Programmed {
+            amps: full_scale,
+            supply,
+            how,
+            lever,
+        }) = driver_full_scale(budget, comp, model)
+        else {
             continue;
         };
         let Some((reg, rating)) = budget.sole_regulator(supply) else {
@@ -747,10 +815,6 @@ fn motor_findings(budget: &Budget<'_>) -> Vec<LintFinding> {
         }
         let rail = budget.net_name(supply);
         let alone = full_scale > rating * (1.0 + SLACK);
-        let program = model
-            .current_program
-            .as_ref()
-            .map_or("", |p| p.pin.as_str());
         let extra = if alone || others.items.is_empty() {
             String::new()
         } else {
@@ -770,16 +834,15 @@ fn motor_findings(budget: &Budget<'_>) -> Vec<LintFinding> {
                 Severity::Low
             },
             message: format!(
-                "{} programs its current limit to {} (its {program} resistor, {} ohm), and \
+                "{} programs its current limit to {} ({how}), and \
                  draws it from '{rail}' whenever the motor loads or stalls the driver, but \
                  {} feeding '{rail}' is rated for {} (card '{}').{extra} The draw is \
                  conditional on the motor, so this is the driver's full-scale current against \
                  the supply, not a measured load. {REMEDY_MARKER}Feed the motor rail from a \
-                 supply rated above the programmed current, or raise the {program} resistor to \
-                 lower the limit to what the supply gives.",
+                 supply rated above the programmed current, or {lever} so the limit falls to \
+                 what the supply gives.",
                 describe(comp),
                 format_amps(full_scale),
-                super::device_decode::format_ohms(ohms),
                 describe(reg.comp),
                 format_amps(rating),
                 reg.model.id,
@@ -789,6 +852,330 @@ fn motor_findings(budget: &Budget<'_>) -> Vec<LintFinding> {
         });
     }
     found
+}
+
+/// What drives the reference pin of a reference-programmed driver.
+enum Reference {
+    /// Nothing: no net, or a net that holds only the pin and capacitors.
+    Open,
+    /// A level the board gives it.
+    Level(Level),
+    /// Something the check does not read (a trimmer, a part, a pin of the
+    /// driver itself, a resistor to a net of unknown level).
+    Unread,
+}
+
+/// The level a reference pin sits at.
+struct Level {
+    range: RailRange,
+    /// True when the range is only the band a rail's NAME implies.
+    assumed: bool,
+    /// What sets it, for the message.
+    how: String,
+}
+
+/// One winding of a reference-programmed driver, as the board wires it.
+struct Winding {
+    reference_role: String,
+    reference: Reference,
+    /// The sense resistor to ground, as `(ohms, designator)`; `None` when the
+    /// path is not exactly one resistor.
+    sense: Option<(f64, String)>,
+    divisor: f64,
+}
+
+/// A winding's chopping current across the reference level it can see.
+struct Trip {
+    lo_a: f64,
+    hi_a: f64,
+    lo_v: f64,
+    hi_v: f64,
+    sense_ohms: f64,
+    sense_ref: String,
+    assumed: bool,
+    how: String,
+}
+
+impl Winding {
+    /// The current at the reference's lowest and highest level, when both the
+    /// level and the sense resistor are read.
+    fn trip(&self) -> Option<Trip> {
+        let Reference::Level(level) = &self.reference else {
+            return None;
+        };
+        let (sense_ohms, sense_ref) = self.sense.clone()?;
+        let at = |v: f64| v.max(0.0) / (self.divisor * sense_ohms);
+        Some(Trip {
+            lo_a: at(level.range.min_v),
+            hi_a: at(level.range.max_v),
+            lo_v: level.range.min_v,
+            hi_v: level.range.max_v,
+            sense_ohms,
+            sense_ref,
+            assumed: level.assumed,
+            how: level.how.clone(),
+        })
+    }
+}
+
+/// The reference-over-sense windings of `comp`, empty for a part whose card
+/// does not program its current that way.
+fn windings(budget: &Budget<'_>, comp: &Component, model: &ModelEntry) -> Vec<Winding> {
+    let Some(CurrentProgramEquation::ReferenceOverSense {
+        reference_roles,
+        sense_roles,
+        divisor,
+    }) = model.current_program.as_ref().map(|p| &p.equation)
+    else {
+        return Vec::new();
+    };
+    let board = budget.board;
+    let Some(index) = board.components.iter().position(|c| std::ptr::eq(c, comp)) else {
+        return Vec::new();
+    };
+    reference_roles
+        .iter()
+        .zip(sense_roles)
+        .map(|(reference_role, sense_role)| Winding {
+            reference_role: reference_role.clone(),
+            reference: reference_of(budget, comp, model, reference_role, reference_roles),
+            sense: role_net_id(comp, model, sense_role).and_then(|net| {
+                adjacent_sense_resistor(board, net, &ExpectedSenseFar::Ground, index)
+            }),
+            divisor: *divisor,
+        })
+        .collect()
+}
+
+/// What drives the `role` pin of `comp`: a rail or ground by name or by its
+/// regulator, a divider of resistors off such nets, or nothing.
+fn reference_of(
+    budget: &Budget<'_>,
+    comp: &Component,
+    model: &ModelEntry,
+    role: &str,
+    reference_roles: &[String],
+) -> Reference {
+    let board = budget.board;
+    let Some(net) = role_net_id(comp, model, role) else {
+        return Reference::Open;
+    };
+    let group = budget.group(net);
+    if let Some((range, assumed)) = group
+        .iter()
+        .find_map(|n| budget.resolver.declared_levels(*n))
+    {
+        return Reference::Level(Level {
+            range,
+            assumed,
+            how: format!("'{}'", budget.net_name(net)),
+        });
+    }
+    let is_reference_pad = |pad: &str| {
+        model.pins.get(pad).is_some_and(|r| {
+            reference_roles
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(r))
+        })
+    };
+    // Another pad of the driver on the net (a regulator output that feeds the
+    // reference) is a source this check does not know the level of.
+    if comp
+        .pins
+        .iter()
+        .any(|p| p.net.is_some_and(|n| group.contains(&n)) && !is_reference_pad(&p.number))
+    {
+        return Reference::Unread;
+    }
+    let others: Vec<_> = group
+        .iter()
+        .flat_map(|n| board.net_members(*n))
+        .filter(|(c, _)| {
+            c.reference != comp.reference
+                && !matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
+                && !is_capacitor(c)
+                && !is_test_point_or_hole(c)
+        })
+        .collect();
+    if others.is_empty() {
+        return Reference::Open;
+    }
+    // A resistor divider: every other member is a resistor to a net of known
+    // level, so the pin sits at the conductance-weighted mean of them.
+    let (mut weight, mut lo, mut hi, mut assumed) = (0.0, 0.0, 0.0, false);
+    let (mut refs, mut rails) = (Vec::new(), Vec::new());
+    for (c, p) in &others {
+        let Some(ohms) = super::bus_loading::resistor_ohms(c) else {
+            return Reference::Unread;
+        };
+        let far = c
+            .pins
+            .iter()
+            .find(|q| q.number != p.number)
+            .and_then(|q| q.net)
+            .filter(|n| !group.contains(n));
+        let Some((range, was_assumed)) = far.and_then(|n| budget.resolver.declared_levels(n))
+        else {
+            return Reference::Unread;
+        };
+        let g = ohms.recip();
+        weight += g;
+        lo += g * range.min_v;
+        hi += g * range.max_v;
+        assumed |= was_assumed;
+        refs.push(c.reference.clone());
+        rails.push(format!("'{}'", budget.net_name(far.unwrap_or(net))));
+    }
+    Reference::Level(Level {
+        range: RailRange {
+            min_v: lo / weight,
+            max_v: hi / weight,
+        },
+        assumed,
+        how: format!("{} from {}", refs.join(" and "), rails.join(" and ")),
+    })
+}
+
+/// The pad number a card gives `role`, for a message.
+fn pad_of(model: &ModelEntry, role: &str) -> String {
+    model
+        .pins
+        .iter()
+        .find(|(_, r)| r.eq_ignore_ascii_case(role))
+        .map_or_else(String::new, |(pad, _)| format!(" (pad {pad})"))
+}
+
+/// The findings on the reference pins and the full scale of the reference-
+/// programmed drivers (A4988, DRV8825): a reference nothing drives, a
+/// reference at 0 V, and a full scale over the part's output current rating.
+fn reference_findings(budget: &Budget<'_>) -> Vec<LintFinding> {
+    let mut found = Vec::new();
+    for (comp, model) in &budget.parts {
+        let windings = windings(budget, comp, model);
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for w in &windings {
+            let role = w.reference_role.to_ascii_uppercase();
+            if !seen.insert(role.clone()) {
+                continue;
+            }
+            let pad = pad_of(model, &w.reference_role);
+            match &w.reference {
+                Reference::Open => found.push(LintFinding {
+                    check: LintCheck::OperatingEnvelope,
+                    severity: Severity::Medium,
+                    message: format!(
+                        "{} programs its winding current from the voltage on its {role} pin{pad}, \
+                         but nothing drives that pin: it is a high-impedance analog input with no \
+                         bias of its own, so the current limit is undefined (it can sit at zero \
+                         and never move the motor, or float high and over-drive the windings). \
+                         {REMEDY_MARKER}Set {role} with a resistor divider from the logic supply \
+                         or a trimmer, to the voltage that gives the motor's rated current across \
+                         the sense resistor.",
+                        describe(comp),
+                    ),
+                    refs: vec![comp.reference.clone()],
+                    nets: Vec::new(),
+                }),
+                Reference::Level(level) if level.range.max_v.abs() < 1e-3 => {
+                    found.push(LintFinding {
+                        check: LintCheck::OperatingEnvelope,
+                        severity: capped(Severity::High, level.assumed),
+                        message: format!(
+                            "{} has its {role} pin{pad} at 0 V ({}): the chopping threshold is \
+                             the reference voltage over the sense resistor, so with the \
+                             reference at ground the driver regulates no winding current and \
+                             the motor does not turn. {REMEDY_MARKER}Drive {role} from a \
+                             divider or trimmer set to the voltage that gives the motor's rated \
+                             current across the sense resistor.",
+                            describe(comp),
+                            level.how,
+                        ),
+                        refs: vec![comp.reference.clone()],
+                        nets: Vec::new(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Some(f) = over_rating(budget, comp, model, &windings) {
+            found.push(f);
+        }
+    }
+    found
+}
+
+/// The finding that a reference-programmed driver's full scale is over the
+/// output current its card rates it for, naming every winding that is.
+fn over_rating(
+    budget: &Budget<'_>,
+    comp: &Component,
+    model: &ModelEntry,
+    windings: &[Winding],
+) -> Option<LintFinding> {
+    let rating = rated_current(model)?;
+    let over: Vec<(&Winding, Trip)> = windings
+        .iter()
+        .filter_map(|w| Some((w, w.trip()?)))
+        .filter(|(_, t)| t.hi_a > rating * (1.0 + SLACK))
+        .collect();
+    let (first, first_trip) = over.first()?;
+    let assumed = over.iter().all(|(_, t)| t.assumed);
+    let certain = over.iter().all(|(_, t)| t.lo_a > rating * (1.0 + SLACK));
+    let divisor = first.divisor;
+    let mut clauses = Vec::new();
+    for (w, t) in &over {
+        clauses.push(format!(
+            "{} at {} ({}) over {} ({} ohm) is {}",
+            w.reference_role.to_ascii_uppercase(),
+            if (t.hi_v - t.lo_v).abs() < 1e-9 {
+                format_volts(t.hi_v)
+            } else {
+                format!("{} to {}", format_volts(t.lo_v), format_volts(t.hi_v))
+            },
+            t.how,
+            t.sense_ref,
+            super::device_decode::format_ohms(t.sense_ohms),
+            format_amps(t.hi_a),
+        ));
+    }
+    let max_v = rating * divisor * first_trip.sense_ohms;
+    let min_ohms = first_trip.hi_v / (divisor * rating);
+    let nets = role_net_id(comp, model, first.reference_role.as_str())
+        .map(|n| budget.net_name(n))
+        .into_iter()
+        .collect();
+    let mut refs = vec![comp.reference.clone()];
+    refs.extend(over.iter().map(|(_, t)| t.sense_ref.clone()));
+    Some(LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: capped(
+            if certain {
+                Severity::High
+            } else {
+                Severity::Medium
+            },
+            assumed,
+        ),
+        message: format!(
+            "{} sets its full-scale winding current by I = VREF / ({} x RS), and here {}: over \
+             the {} output current its card rates the part for (card '{}'). The driver chops \
+             at that current whenever the microstep table reaches 100 %, so the motor winding \
+             and the driver are driven past the rating. {REMEDY_MARKER}Hold {} to at most {} \
+             for a {} ohm sense resistor, or raise {} to at least {} ohm at this reference.",
+            describe(comp),
+            divisor,
+            clauses.join("; "),
+            format_amps(rating),
+            model.id,
+            first.reference_role.to_ascii_uppercase(),
+            format_volts(max_v),
+            super::device_decode::format_ohms(first_trip.sense_ohms),
+            first_trip.sense_ref,
+            super::device_decode::format_ohms(min_ohms),
+        ),
+        refs,
+        nets,
+    })
 }
 
 /// Whether an `existing` finding already says what `f` is about, so the board
@@ -853,6 +1240,9 @@ pub(crate) fn regulator_budget_findings(
     }
     for f in motor_findings(&budget) {
         push(f, Kind::Rating);
+    }
+    for f in reference_findings(&budget) {
+        push(f, Kind::Headroom);
     }
     report
 }
@@ -1268,5 +1658,262 @@ unlocked_by = "validated behavior"
         assert_eq!(sum.len(), 1, "{sum:?}");
         assert_eq!(sum[0].severity, Severity::Low);
         assert!(of_motor(lint("motor_alone", &motor("68k", 0))).is_empty());
+    }
+
+    // ── Reference-programmed drivers (A4988: I = VREF / (8 x RS); DRV8825:
+    // I = V(xREF) / (5 x RISENSE)). The cards are the shipped ones.
+
+    /// The findings that are about the reference or the full scale (not the
+    /// supply budget) of the driver `U1`.
+    fn of_driver(found: Vec<LintFinding>) -> Vec<LintFinding> {
+        found
+            .into_iter()
+            .filter(|f| f.refs.first().is_some_and(|r| r == "U1"))
+            .collect()
+    }
+
+    /// An A4988 `U1` with `sense` ohms on both SENSE pins, and whatever
+    /// `reference` parts the caller puts on REF (net 4). Nets: 1 GND, 2 +5V,
+    /// 3 VMOT, 4 REF, 5 SENSE1, 6 SENSE2.
+    fn a4988(sense: &str, reference: Vec<Component>) -> ExtractedBoard {
+        let mut parts = vec![
+            part(
+                "U1",
+                "A4988",
+                &[
+                    ("3", 1),
+                    ("18", 1),
+                    ("17", 4),
+                    ("22", 3),
+                    ("28", 3),
+                    ("23", 5),
+                    ("27", 6),
+                ],
+            ),
+            part("R5", sense, &[("1", 5), ("2", 1)]),
+            part("R6", sense, &[("1", 6), ("2", 1)]),
+        ];
+        parts.extend(reference);
+        board(
+            &[
+                (1, "GND"),
+                (2, "+5V"),
+                (3, "VMOT"),
+                (4, "REF"),
+                (5, "SENSE1"),
+                (6, "SENSE2"),
+            ],
+            parts,
+        )
+    }
+
+    /// REF divided from +5V by `top` over `bottom`.
+    fn divider(top: &str, bottom: &str) -> Vec<Component> {
+        vec![
+            part("R1", top, &[("1", 2), ("2", 4)]),
+            part("R2", bottom, &[("1", 4), ("2", 1)]),
+        ]
+    }
+
+    /// 5 V over 10 k / 10 k is 2.5 V (2.375 to 2.625 V on the rail's band);
+    /// across 0.1 ohm that is 2.5 / (8 x 0.1) = 3.1 A, over the A4988's 2 A.
+    /// The same divider with a 0.5 ohm resistor is 0.63 A and silent.
+    #[test]
+    fn a_full_scale_over_the_drivers_output_rating_is_flagged() {
+        let found = of_driver(lint("a4988_over", &a4988("0.1", divider("10k", "10k"))));
+        assert_eq!(found.len(), 1, "{found:?}");
+        // The level is only the +5V name's band, so the verdict is capped.
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert_eq!(found[0].refs, ["U1", "R5", "R6"]);
+        says(
+            &found[0],
+            &[
+                "U1 (A4988) sets its full-scale winding current by I = VREF / (8 x RS)",
+                "REF at 2.375 V to 2.625 V (R1 and R2 from '+5V' and 'GND')",
+                "over R5 (0.100 ohm) is 3.281 A",
+                "over the 2 A output current its card rates the part for",
+                "at most 1.6 V for a 0.100 ohm sense resistor",
+            ],
+        );
+        assert!(
+            of_driver(lint("a4988_fine", &a4988("0.5", divider("10k", "10k")))).is_empty(),
+            "0.63 A is inside the rating"
+        );
+        // A real design: 0.1 ohm with about 0.9 V is 1.1 A.
+        assert!(of_driver(lint("a4988_real", &a4988("0.1", divider("47k", "10k")))).is_empty());
+    }
+
+    /// A reference tied straight to a named rail is the same arithmetic: +3V3
+    /// across 0.1 ohm is 4.1 A to 4.3 A, over the rating at every corner of
+    /// the band, so it is High once the rail is known and Medium when only
+    /// the name says what it is.
+    #[test]
+    fn a_reference_on_a_rail_is_read_from_the_rail() {
+        let mut b = a4988("0.1", vec![]);
+        b.nets[3].name = "+3V3".into();
+        let found = of_driver(lint("a4988_rail", &b));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, Severity::Medium);
+        says(&found[0], &["REF at 3.135 V to 3.465 V ('+3V3')"]);
+    }
+
+    /// A reference pin with nothing on it, or only a capacitor, leaves the trip
+    /// level undefined. The same board with a divider on REF is silent.
+    #[test]
+    fn a_reference_nothing_drives_is_flagged() {
+        let none = of_driver(lint("a4988_open", &a4988("0.1", vec![])));
+        assert_eq!(none.len(), 1, "{none:?}");
+        assert_eq!(none[0].severity, Severity::Medium);
+        says(
+            &none[0],
+            &[
+                "from the voltage on its REF pin (pad 17)",
+                "nothing drives that pin",
+                "current limit is undefined",
+            ],
+        );
+        let cap = vec![part("C9", "100n", &[("1", 4), ("2", 1)])];
+        let capped = of_driver(lint("a4988_cap", &a4988("0.1", cap)));
+        assert_eq!(capped.len(), 1, "{capped:?}");
+        says(&capped[0], &["nothing drives that pin"]);
+        // No net on the pad at all is the same fault.
+        let mut unwired = a4988("0.1", vec![]);
+        unwired.components[0].pins.retain(|p| p.number != "17");
+        assert_eq!(of_driver(lint("a4988_unwired", &unwired)).len(), 1);
+        assert!(of_driver(lint("a4988_driven", &a4988("0.1", divider("47k", "10k")))).is_empty());
+    }
+
+    /// A reference at ground gives a zero trip level: no winding current.
+    #[test]
+    fn a_reference_at_ground_is_flagged() {
+        let low = vec![part("R2", "10k", &[("1", 4), ("2", 1)])];
+        let found = of_driver(lint("a4988_gnd", &a4988("0.1", low)));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, Severity::High);
+        says(
+            &found[0],
+            &["REF pin (pad 17) at 0 V", "regulates no winding current"],
+        );
+    }
+
+    /// What the check cannot read it does not judge: a trimmer on REF, a
+    /// sense path of two parallel resistors.
+    #[test]
+    fn an_unreadable_reference_or_sense_path_is_not_judged() {
+        let trimmer = vec![
+            part("RV1", "10k", &[("1", 2), ("2", 4), ("3", 1)]),
+            part("R1", "1k", &[("1", 4), ("2", 1)]),
+        ];
+        assert!(of_driver(lint("a4988_trim", &a4988("0.1", trimmer))).is_empty());
+        let mut parallel = a4988("0.1", divider("10k", "10k"));
+        parallel
+            .components
+            .push(part("R7", "0.1", &[("1", 5), ("2", 1)]));
+        parallel
+            .components
+            .push(part("R8", "0.1", &[("1", 6), ("2", 1)]));
+        assert!(of_driver(lint("a4988_parallel", &parallel)).is_empty());
+    }
+
+    /// DRV8825 bridges are separate pads: AVREF/ISENA and BVREF/ISENB. Nets:
+    /// 1 GND, 2 +3V3, 3 VM, 4 AVREF, 5 BVREF, 6 ISENA, 7 ISENB.
+    fn drv8825(sense_a: &str, sense_b: &str, vref_a: &str, vref_b: &str) -> ExtractedBoard {
+        let mut b = board(
+            &[
+                (1, "GND"),
+                (2, "+3V3"),
+                (3, "VM"),
+                (4, "AVREF"),
+                (5, "BVREF"),
+                (6, "ISENA"),
+                (7, "ISENB"),
+            ],
+            vec![
+                part(
+                    "U1",
+                    "DRV8825",
+                    &[
+                        ("14", 1),
+                        ("28", 1),
+                        ("12", 4),
+                        ("13", 5),
+                        ("4", 3),
+                        ("11", 3),
+                        ("6", 6),
+                        ("9", 7),
+                    ],
+                ),
+                part("R5", sense_a, &[("1", 6), ("2", 1)]),
+                part("R6", sense_b, &[("1", 7), ("2", 1)]),
+            ],
+        );
+        for (i, (net, top, bottom)) in [(4, vref_a, "10k"), (5, vref_b, "10k")]
+            .into_iter()
+            .enumerate()
+        {
+            b.components
+                .push(part(&format!("R{}", 10 + i), top, &[("1", 2), ("2", net)]));
+            b.components.push(part(
+                &format!("R{}", 20 + i),
+                bottom,
+                &[("1", net), ("2", 1)],
+            ));
+        }
+        b
+    }
+
+    /// 3.3 V halved is 1.65 V: across 0.1 ohm the DRV8825 gives 1.65 / 0.5 =
+    /// 3.3 A on bridge A, over its 2.5 A; bridge B with 0.33 ohm is 1 A. Both
+    /// windings use their own pads, and only the one over is named.
+    #[test]
+    fn each_winding_of_a_drv8825_is_read_from_its_own_pads() {
+        let found = of_driver(lint("drv_over", &drv8825("0.1", "0.33", "10k", "10k")));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].refs, ["U1", "R5"]);
+        says(
+            &found[0],
+            &[
+                "U1 (DRV8825) sets its full-scale winding current by I = VREF / (5 x RS)",
+                "AVREF at 1.567 V to 1.732 V",
+                "over R5 (0.100 ohm)",
+                "over the 2.5 A output current",
+            ],
+        );
+        assert!(
+            !found[0].message.contains("BVREF at"),
+            "{}",
+            found[0].message
+        );
+        // 0.33 ohm on both is 1.0 A on both: silent.
+        assert!(of_driver(lint("drv_ok", &drv8825("0.33", "0.33", "10k", "10k"))).is_empty());
+    }
+
+    /// The full scale is also held to the regulator that feeds the motor rail.
+    /// 1.2 V (a 33 k / 10 k divider off +5V) across 0.1 ohm is 1.5 A from a
+    /// 1 A regulator; across 0.5 ohm it is 0.3 A and silent.
+    #[test]
+    fn a_reference_programmed_full_scale_is_held_to_the_motor_supply() {
+        let fed = |sense: &str| {
+            let mut b = a4988(sense, divider("33k", "10k"));
+            b.components
+                .push(part("U0", "BUD_LDO_9V", &[("1", 1), ("2", 3), ("3", 2)]));
+            b
+        };
+        let both = lint("a4988_supply", &fed("0.1"));
+        let found: Vec<_> = both.iter().filter(|f| f.refs == ["U0", "U1"]).collect();
+        assert_eq!(found.len(), 1, "{both:?}");
+        says(
+            found[0],
+            &[
+                "programs its current limit to 1.5",
+                "its REF reference at up to 1.2",
+                "over the 0.100 ohm sense resistor R5",
+                "rated for 1 A (card 'bud_ldo_9v')",
+                "lower the REF reference voltage or raise the sense resistor R5",
+            ],
+        );
+        assert!(lint("a4988_supply_ok", &fed("0.5"))
+            .iter()
+            .all(|f| f.refs != ["U0", "U1"]));
     }
 }

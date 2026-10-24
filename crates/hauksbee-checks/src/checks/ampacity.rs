@@ -157,7 +157,7 @@ pub(super) fn program_reading(
     )
 }
 
-enum ExpectedSenseFar {
+pub(super) enum ExpectedSenseFar {
     Ground,
     Net(i64),
 }
@@ -177,7 +177,7 @@ impl ExpectedSenseFar {
 /// connected to the model-declared far side. Extra conductive branches,
 /// unreadable/conflicting components, or a wrong reference net make the result
 /// undetermined rather than allowing a smallest-resistor guess.
-fn adjacent_sense_resistor(
+pub(super) fn adjacent_sense_resistor(
     board: &ExtractedBoard,
     sense_net: i64,
     expected_far: &ExpectedSenseFar,

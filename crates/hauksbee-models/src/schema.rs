@@ -1751,6 +1751,25 @@ pub enum CurrentProgramEquation {
         program_full_scale_v: f64,
         sense_full_scale_v: f64,
     },
+
+    /// A reference voltage on an analog pin sets the chopping threshold across
+    /// a sense resistor to ground, one winding per pair of roles:
+    ///
+    /// `I_trip(A) = V(reference) / (divisor * Rsense)`
+    ///
+    /// This is the A4988 (`divisor = 8`) and DRV8825 (`divisor = 5`) law: the
+    /// highest winding current the driver regulates, reached at the top
+    /// microstep. `reference_roles[i]` is the reference pin of the winding
+    /// whose sense resistor sits on `sense_roles[i]`; two windings sharing one
+    /// reference pin name it twice. The sense resistor runs from its pin to
+    /// ground, and the block's `pin` names the first reference role. The law
+    /// is a protection limit: it bounds the winding current and is never
+    /// charged to a rail as a steady load.
+    ReferenceOverSense {
+        reference_roles: Vec<String>,
+        sense_roles: Vec<String>,
+        divisor: f64,
+    },
 }
 
 impl CurrentProgram {
@@ -1807,14 +1826,31 @@ impl CurrentProgram {
                     *high_numerator_a / (resistance_ohms / *resistance_scale_ohms + *high_offset)
                 }
             }
-            CurrentProgramEquation::SenseScaledResistance { .. } => {
-                // This law requires the independent current-sense resistance;
-                // callers that have it use `equation_current_with_sense_a`.
-                return None;
-            }
+            // These laws need more than one programming resistance: the
+            // independent sense resistance (`equation_current_with_sense_a`),
+            // or a reference voltage and a sense resistor
+            // (`reference_trip_current_a`).
+            CurrentProgramEquation::SenseScaledResistance { .. }
+            | CurrentProgramEquation::ReferenceOverSense { .. } => return None,
         };
 
         positive_finite(current_a).then_some(current_a)
+    }
+
+    /// The chopping current of a reference-over-sense law at `reference_v`
+    /// volts on the reference pin and `sense_ohms` in the sense path. `None`
+    /// for any other equation, a negative or non-finite voltage, or a
+    /// non-positive resistance. A reference at 0 V is a valid zero current.
+    #[must_use]
+    pub fn reference_trip_current_a(&self, reference_v: f64, sense_ohms: f64) -> Option<f64> {
+        let CurrentProgramEquation::ReferenceOverSense { divisor, .. } = &self.equation else {
+            return None;
+        };
+        let valid = reference_v.is_finite()
+            && reference_v >= 0.0
+            && positive_finite(sense_ohms)
+            && positive_finite(*divisor);
+        valid.then(|| reference_v / (*divisor * sense_ohms))
     }
 
     /// Evaluate either a one-resistor law or a two-resistor sense-scaled law.
