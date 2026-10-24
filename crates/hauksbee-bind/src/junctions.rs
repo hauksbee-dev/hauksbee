@@ -112,8 +112,9 @@ const fn clamped_kind(kind: ComponentKind) -> bool {
 }
 
 /// The [`IcSite`] for a bound part, or `None` when it is not a clamped kind,
-/// has no supply or return pad on a net, or is a driver IC (see
-/// [`is_driver_role`]; a processor is never one).
+/// has no supply or return pad on a net, or is a driver IC (a part with a
+/// switch-node, motor-supply, boost or output role whose outputs swing past
+/// its logic supply; a processor is never one).
 #[must_use]
 pub fn ic_site(
     comp: &Component,
