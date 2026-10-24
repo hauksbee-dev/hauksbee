@@ -1,4 +1,4 @@
-//! A floating-node detector driven by the DC solve, in shadow beside the hand checks.
+//! A floating-node detector driven by the DC solve, beside the hand checks.
 //!
 //! Seven hand checks read "nothing sets this net's level" from topology:
 //! `floating_inputs`, `model_controls`, `node_drive` (a capacitor with no DC
@@ -42,9 +42,13 @@
 //! cluster, except that an enable whose open state is on is reported as
 //! switched on.
 //!
-//! Nothing here enters a verdict: [`float_ledger`] lays the findings beside
-//! the hand checks' in the same (check, part) ledger as
-//! [`super::sim_parity::parity_ledger`].
+//! [`float_ledger`] lays the findings beside the hand checks' in the same
+//! (check, part) ledger as [`super::sim_parity::parity_ledger`]. The ones no
+//! hand check made (the ledger's sim-only rows) also reach `check` and `run`:
+//! [`float_promoted`] turns each into a Medium finding under the lint check
+//! its target maps to, in plain words that name the reader, the pad, the
+//! window and the pull to add. The hand checks all stay; where one already
+//! reports the part on the net, the detector adds nothing.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -56,7 +60,7 @@ use hauksbee_bind::junctions::stamp_ic_junctions;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     is_connector_like, is_test_point_or_hole, Component, ExtractedBoard, LintCheck, LintFinding,
-    Pin, Severity,
+    Pin, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::evidence::{ModelSource, ModelUncertainty};
 use hauksbee_ir::{BOutput, Circuit, Device, NodeId, SourceKind};
@@ -68,6 +72,7 @@ use hauksbee_models::{
 use super::control_held_off::{control_of, Control, Kind};
 use super::floating_inputs::is_cmos_logic_value;
 use super::regulator_enable::OpenState;
+use super::signal_direction::untyped_symbol;
 use super::sim_parity::{settle, LedgerRow, Side, SimTarget, Solved};
 
 /// The leakage leg's conductance (S): 100 Mohm.
@@ -93,8 +98,12 @@ const LEAK: &str = "~leak";
 /// Name tag of a stamped reset-mode pull or drive (after the MCU reference).
 const RESET_MODE: &str = "#rst";
 /// Roles that name a part's logic supply, in order of preference.
+///
+/// A separate I/O supply comes first: it sets the levels a pad swings and a
+/// pull goes to (an RP2040's `iovdd`), where the core supply (`dvdd`, 1.1 V)
+/// sets neither.
 const SUPPLY_ROLES: &[&str] = &[
-    "vdd", "vcc", "dvdd", "vddio", "vdd_io", "iovdd", "vcc_io", "vio", "3v3", "avcc", "vin",
+    "vddio", "vdd_io", "iovdd", "vcc_io", "vio", "vdd", "vcc", "3v3", "dvdd", "avcc", "vin",
 ];
 /// Roles that are open-drain outputs on most cards.
 const OPEN_DRAIN_ROLES: &[&str] = &[
@@ -154,6 +163,11 @@ pub struct FloatFinding {
     /// The listener's level with leakage to ground and to the rail (V).
     pub levels: (f64, f64),
     pub message: String,
+    /// The MCU pads on the root cluster, as `U2 pad 14 (PB0)`.
+    pub pads: Vec<String>,
+    /// The finding as a user reads it: the reader, the pad, the window and
+    /// the fix, ending in the [`REMEDY_MARKER`] sentence.
+    pub plain: String,
 }
 
 /// What the detector found and where it could not speak.
@@ -661,17 +675,56 @@ fn cluster_nets(cluster: &BTreeSet<NodeId>, names: &HashMap<NodeId, Vec<&str>>) 
     nets
 }
 
+/// The listener as a reader names it: `U1 (74HC14) pin 1 (1a)`, or
+/// `U3 (TPS22918) enable pin 3` for a control.
+fn reader_of(l: &Listener<'_>) -> String {
+    let value = l.comp.value.trim();
+    let part = if value.is_empty() {
+        l.comp.reference.clone()
+    } else {
+        format!("{} ({value})", l.comp.reference)
+    };
+    match &l.listen {
+        Listen::Control(c) => format!("{part} {} pin {}", c.label, l.pin.number),
+        _ => format!("{part} pin {} ({})", l.pin.number, l.role),
+    }
+}
+
+/// The pull a listener on an undefined net needs, in words ending with a stop.
+///
+/// An enable rests off (a pull-down when it runs high, else a pull-up to its
+/// supply). Any other input rests at the level it should read, which only the
+/// design knows, so the advice names both rails.
+fn pull_fix(l: &Listener<'_>, net: &str, supply: &str, until_driven: bool) -> String {
+    let reader = reader_of(l);
+    let tail = if until_driven {
+        " until firmware drives it"
+    } else {
+        ""
+    };
+    match &l.listen {
+        Listen::Control(c) if c.kind == Kind::Enable && c.run_high => format!(
+            "Add a {PULL_ADVICE} pull-down from '{net}' to ground so {reader} rests off{tail}."
+        ),
+        Listen::Control(c) if c.kind == Kind::Enable => format!(
+            "Add a {PULL_ADVICE} pull-up from '{net}' to {supply} so {reader} rests off{tail}."
+        ),
+        _ => format!(
+            "Add a {PULL_ADVICE} pull resistor from '{net}' to ground or to {supply}, whichever level {reader} should read{tail}, so the net has a level."
+        ),
+    }
+}
+
 /// The enables a cluster held only by MCU reset-mode pulls or drives sets to
 /// their on level: the part is switched on while the MCU is in reset.
 fn pulled_on_in_reset(
     listeners: &[Listener<'_>],
-    supplies: &[Option<f64>],
-    nets: &[String],
-    mcu_pads: &[String],
+    supplies: &[(Option<f64>, String)],
+    (nets, mcu_pads, pad_labels): (&[String], &[String], &[String]),
     (lo, vhigh): (&Solved, f64),
     out: &mut FloatShadow,
 ) {
-    for (l, vcc) in listeners.iter().zip(supplies) {
+    for (l, (vcc, supply)) in listeners.iter().zip(supplies) {
         let Listen::Control(c) = &l.listen else {
             continue;
         };
@@ -689,6 +742,18 @@ fn pulled_on_in_reset(
         if !on {
             continue;
         }
+        let net = nets.first().map_or("", String::as_str);
+        let reader = reader_of(l);
+        let (way, level) = if c.run_high {
+            ("up", "high")
+        } else {
+            ("down", "low")
+        };
+        let plain = format!(
+            "{reader} (net '{net}') is driven only by {}. While the MCU is in reset its card says the pad is pulled or driven {way} ({level}), which is the pin's on level, and nothing else on the net sets it: the part is switched on while the MCU is in reset. {REMEDY_MARKER}Add a pull from '{net}' to {} stiff enough to beat the pad's internal pull (10 kOhm against a 30-50 kOhm pull), or move the pin to a pad that is high-impedance or pulled the other way in reset.",
+            pad_labels.join(", "),
+            if c.run_high { "ground" } else { supply.as_str() },
+        );
         out.findings.push(FloatFinding {
             target: SimTarget::ControlHeldOff,
             part: l.comp.reference.clone(),
@@ -696,6 +761,8 @@ fn pulled_on_in_reset(
             nets: nets.to_vec(),
             window: Window::Reset,
             levels: (v, v),
+            pads: pad_labels.to_vec(),
+            plain,
             message: format!(
                 "{} pin {} ({}) on net '{}' sits at {v:.2} V while the MCU is in reset: only MCU pads ({}) are on it and their card's reset modes pull or drive it there, which is the pin's on level, so the part is switched on while the MCU is in reset.",
                 l.comp.reference,
@@ -760,6 +827,7 @@ fn judge(
         let mut abstain: Vec<String> = Vec::new();
         let mut listeners: Vec<Listener<'_>> = Vec::new();
         let mut mcu_pads: Vec<String> = Vec::new();
+        let mut pad_labels: Vec<String> = Vec::new();
         let mut od_driver = false;
         let on_cluster: Vec<&str> = (bound.circuit.devices.iter())
             .filter(|d| !d.name().starts_with(LEAK))
@@ -785,6 +853,7 @@ fn judge(
                 let is_mcu = model.is_some_and(|m| m.kind == ComponentKind::Mcu);
                 if is_mcu {
                     mcu_pads.push(format!("{}.{}", comp.reference, pin.number));
+                    pad_labels.push(pad_label(comp, pin));
                 }
                 if let Some(listen) = listen(comp, model, pin, window) {
                     let role = (model.and_then(|m| m.pins.get(&pin.number)))
@@ -823,8 +892,11 @@ fn judge(
                     }
                     continue;
                 }
+                // A library that types every pin of a many-pin part `input`
+                // never said which pads drive, so such a pad may.
                 let modelled = on_cluster.iter().any(|d| of_part(d, &comp.reference));
-                if pin_can_drive(&pin.kind) && !modelled {
+                let may_drive = pin_can_drive(&pin.kind) || untyped_symbol(comp);
+                if may_drive && !modelled {
                     abstain.push(format!(
                         "{} pin {} may drive the net and has no model there",
                         comp.reference, pin.number
@@ -867,20 +939,29 @@ fn judge(
         if listeners.is_empty() && gates.is_empty() {
             continue;
         }
-        let supplies: Vec<Option<f64>> = (listeners.iter())
+        let supplies: Vec<(Option<f64>, String)> = (listeners.iter())
             .map(|l| {
-                ctx.supply(bound, l.comp, l.model, Some(&l.role))
-                    .map(|n| lo.v(n))
+                let node = ctx.supply(bound, l.comp, l.model, Some(&l.role));
+                let name = (node.and_then(|n| names.get(&n)))
+                    .and_then(|v| v.first())
+                    .map_or_else(|| "its supply".to_string(), |s| format!("'{s}'"));
+                (node.map(|n| lo.v(n)), name)
             })
             .collect();
-        let rail = (supplies.iter().flatten().copied())
+        let rail = (supplies.iter().filter_map(|(v, _)| *v))
             .filter(|v| *v >= LIVE_V)
             .reduce(f64::min)
             .unwrap_or(vhigh);
         let cluster_swing = cluster.iter().map(|&n| swing(n)).fold(0.0, f64::max);
         if cluster_swing <= RAIL_FRACTION * rail {
             if on_cluster.iter().any(|d| d.contains(RESET_MODE)) {
-                pulled_on_in_reset(&listeners, &supplies, &nets, &mcu_pads, (lo, vhigh), out);
+                pulled_on_in_reset(
+                    &listeners,
+                    &supplies,
+                    (&nets, &mcu_pads, &pad_labels),
+                    (lo, vhigh),
+                    out,
+                );
             }
             continue;
         }
@@ -898,8 +979,26 @@ fn judge(
         } else {
             format!("only MCU pads ({}) are on it", mcu_pads.join(", "))
         };
+        // The net as the reader's own pin sees it, for the plain text.
+        let net_at = |node: NodeId| -> String {
+            (names.get(&node).and_then(|v| v.first()))
+                .map_or_else(|| first_net.clone(), |n| (*n).to_string())
+        };
         let mut push =
-            |target: SimTarget, part: &str, pin: &str, levels: (f64, f64), message: String| {
+            |target: SimTarget,
+             part: &str,
+             pin: &str,
+             levels: (f64, f64),
+             message: String,
+             (reader, net, effect, fix): (&str, &str, &str, &str)| {
+                let plain = plain_message(&Plain {
+                    reader,
+                    net,
+                    pads: &pad_labels,
+                    window,
+                    effect,
+                    fix,
+                });
                 out.findings.push(FloatFinding {
                     target,
                     part: part.to_string(),
@@ -908,9 +1007,14 @@ fn judge(
                     window,
                     levels,
                     message,
+                    pads: pad_labels.clone(),
+                    plain,
                 });
             };
-        for (l, vcc) in listeners.iter().zip(&supplies) {
+        for (l, (vcc, supply)) in listeners.iter().zip(&supplies) {
+            let reader = reader_of(l);
+            let net_name = net_at(l.node);
+            let fix = pull_fix(l, &net_name, supply, !pad_labels.is_empty());
             let levels = (lo.v(l.node), hi.v(l.node));
             let target = match &l.listen {
                 Listen::Strap => SimTarget::Straps,
@@ -936,6 +1040,12 @@ fn judge(
                         l.pin.number,
                         l.role,
                         window.phrase()
+                    ),
+                    (
+                        &reader,
+                        &net_name,
+                        &format!("its card says an open pin turns the part on ({why}), so the part is switched on"),
+                        &fix,
                     ),
                 );
                 continue;
@@ -978,7 +1088,27 @@ fn judge(
                 message.push_str(" (0.3/0.7 of its supply, assumed: the card states no band)");
             }
             message.push('.');
-            push(target, &l.comp.reference, &l.pin.number, levels, message);
+            let effect = format!(
+                "{}it solves at {:.2} V with 100 MOhm leakage to ground and {:.2} V with leakage to the {vhigh:.1} V rail, against its input band {:.2}-{:.2} V{}, so the part reads it as undefined or as either level",
+                if od_driver {
+                    "the only driver on it is open-drain and cannot pull it high, so "
+                } else {
+                    ""
+                },
+                levels.0,
+                levels.1,
+                band.0,
+                band.1,
+                if assumed { " (0.3/0.7 of its supply, assumed: the card states no band)" } else { "" },
+            );
+            push(
+                target,
+                &l.comp.reference,
+                &l.pin.number,
+                levels,
+                message,
+                (&reader, &net_name, &effect, &fix),
+            );
         }
         if !pulls.is_empty() {
             continue;
@@ -992,6 +1122,37 @@ fn judge(
                 continue;
             }
             let reference = name.split(['.', ':', '#']).next().unwrap_or(name);
+            let value = (ctx.fitted.iter())
+                .find(|c| c.reference == reference)
+                .map_or("", |c| c.value.trim());
+            let reader = if value.is_empty() {
+                format!("{reference} gate")
+            } else {
+                format!("{reference} ({value}) gate")
+            };
+            let gate_net = net_at(g);
+            let state = |on: bool| if on { "on" } else { "off" };
+            let (at_lo, at_hi) = (on(lo), on(hi));
+            let effect = format!(
+                "the FET is {} with 100 MOhm leakage to ground ({:.2} V at the gate) and {} with leakage to the {vhigh:.1} V rail ({:.2} V), so it conducts or not on leakage alone",
+                state(at_lo),
+                lo.v(g),
+                state(at_hi),
+                hi.v(g),
+            );
+            let rests = if pmos {
+                let source = (names.get(&s).and_then(|v| v.first()))
+                    .map_or_else(|| "its source".to_string(), |n| format!("'{n}'"));
+                format!("pull-up from '{gate_net}' to {source}")
+            } else {
+                format!("pull-down from '{gate_net}' to ground")
+            };
+            let tail = if pad_labels.is_empty() {
+                ""
+            } else {
+                " until firmware drives it"
+            };
+            let fix = format!("Add a {PULL_ADVICE} {rests} so {reader} rests off{tail}.");
             push(
                 SimTarget::NodeDrive,
                 reference,
@@ -1001,9 +1162,64 @@ fn judge(
                     "{reference} gate on net '{first_net}' has no DC level {}: {held_by}, so the FET is off with leakage to ground and on with leakage to the {vhigh:.1} V rail.",
                     window.phrase()
                 ),
+                (&reader, &gate_net, &effect, &fix),
             );
         }
     }
+}
+
+/// The pull resistor a promoted finding asks for.
+const PULL_ADVICE: &str = "100k";
+
+/// A pad as a reader finds it on the schematic: `U2 pad 14 (PB0)`.
+fn pad_label(comp: &Component, pin: &Pin) -> String {
+    let function = pin.function.trim();
+    if function.is_empty() || function == pin.number {
+        format!("{} pad {}", comp.reference, pin.number)
+    } else {
+        format!("{} pad {} ({function})", comp.reference, pin.number)
+    }
+}
+
+/// What a plain finding says, before it is put into words.
+struct Plain<'a> {
+    /// The part and pin that reads the net.
+    reader: &'a str,
+    net: &'a str,
+    pads: &'a [String],
+    window: Window,
+    /// What the missing level does to the reader, ending without a stop.
+    effect: &'a str,
+    /// The fix, ending with a stop.
+    fix: &'a str,
+}
+
+/// The finding in the words a user is shown: who reads the net, which pad
+/// should drive it, which window it fails in and what to add.
+fn plain_message(p: &Plain<'_>) -> String {
+    let Plain {
+        reader,
+        net,
+        pads,
+        window,
+        effect,
+        fix,
+    } = p;
+    let feed = if pads.is_empty() {
+        format!("{reader} sits on net '{net}', which nothing drives or pulls.")
+    } else {
+        format!(
+            "{reader} (net '{net}') is driven only by {}.",
+            pads.join(", ")
+        )
+    };
+    let when = match (window, pads.len()) {
+        (Window::Reset, 0) => "While the MCU is in reset nothing holds the net".to_string(),
+        (Window::Reset, 1) => "While the MCU is in reset its pad is high-impedance and nothing else on the net holds it".to_string(),
+        (Window::Reset, _) => "While the MCU is in reset its pads are high-impedance and nothing else on the net holds it".to_string(),
+        (Window::Rest, _) => "Even with firmware running nothing holds the net".to_string(),
+    };
+    format!("{feed} {when}, so it has no DC level: {effect}. {REMEDY_MARKER}{fix}")
 }
 
 /// Run the detector in both windows.
@@ -1014,6 +1230,77 @@ pub fn float_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> FloatShadow
     run_window(&ctx, Window::Rest, &mut out);
     if !out.unjudged {
         run_window(&ctx, Window::Reset, &mut out);
+    }
+    out
+}
+
+/// The lint check a detector target reports under, where it has one.
+#[must_use]
+pub const fn lint_check(target: SimTarget) -> Option<LintCheck> {
+    match target {
+        SimTarget::FloatingInputs => Some(LintCheck::FloatingInput),
+        SimTarget::ModelControls => Some(LintCheck::FloatingControlPin),
+        SimTarget::NodeDrive => Some(LintCheck::FloatingGate),
+        SimTarget::OpenDrainPullup => Some(LintCheck::MissingOpenDrainPullup),
+        SimTarget::PinBias => Some(LintCheck::RequiredPinBias),
+        SimTarget::ControlHeldOff => Some(LintCheck::ControlHeldOff),
+        SimTarget::Straps => Some(LintCheck::StrapPin),
+        SimTarget::FetOrientation | SimTarget::BackPower | SimTarget::PowerStates => None,
+    }
+}
+
+/// The checks whose findings say "nothing sets this net's level".
+const FLOAT_CHECKS: &[LintCheck] = &[
+    LintCheck::FloatingInput,
+    LintCheck::FloatingControlPin,
+    LintCheck::CapNoDcPath,
+    LintCheck::FloatingGate,
+    LintCheck::MissingOpenDrainPullup,
+    LintCheck::RequiredPinBias,
+    LintCheck::ControlHeldOff,
+    LintCheck::StrapPin,
+    LintCheck::RegulatorHeldOff,
+];
+
+/// The detector's findings the hand checks did not make, as lint findings.
+///
+/// Each is Medium and routed through the lint check its target maps to
+/// ([`lint_check`]). A detector finding is dropped where a hand finding of
+/// a float-shaped check, of any severity, already names the same part on a
+/// net of the same cluster: the hand finding stays, so nothing is reported
+/// twice. A part and pin the detector found in both windows is reported once,
+/// in the first.
+#[must_use]
+pub fn float_promoted(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    hand: &[LintFinding],
+) -> Vec<LintFinding> {
+    promote(&float_findings(board, lib), hand)
+}
+
+fn promote(shadow: &FloatShadow, hand: &[LintFinding]) -> Vec<LintFinding> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut out = Vec::new();
+    for f in &shadow.findings {
+        let Some(check) = lint_check(f.target) else {
+            continue;
+        };
+        let covered = hand.iter().any(|h| {
+            FLOAT_CHECKS.contains(&h.check)
+                && h.refs.contains(&f.part)
+                && h.nets.iter().any(|n| f.nets.contains(n))
+        });
+        if covered || !seen.insert((f.part.clone(), f.pin.clone())) {
+            continue;
+        }
+        out.push(LintFinding {
+            check,
+            severity: Severity::Medium,
+            message: f.plain.clone(),
+            refs: vec![f.part.clone()],
+            nets: f.nets.clone(),
+        });
     }
     out
 }
@@ -1506,5 +1793,231 @@ mod tests {
             weak_pull(&hc, source.as_ref(), true),
             (CLASS_WEAK_PULL_OHMS, true)
         );
+    }
+
+    /// An N-channel FET on `gate`, source to ground, drain on a load net.
+    fn nmos(gate: i64) -> Component {
+        let mut q = part("Q2", "2N7002", &[("G", gate), ("S", GND), ("D", 9)]);
+        q.lib_id = "Device:Q_NMOS".into();
+        q.footprint = "X".into();
+        q
+    }
+
+    /// DIP-28 `ATmega328P` with PD0 (pad 2) on `net`.
+    fn avr(net: i64) -> Component {
+        let mut u = part("U2", "ATmega328P", &[("2", net), ("7", V5), ("8", GND)]);
+        u.lib_id = "MCU:ATmega328P".into();
+        u.footprint = "Package_DIP:DIP-28_W7.62mm".into();
+        u.pins[0].function = "PD0".into();
+        u
+    }
+
+    /// The pad reaches the gate through a 1k series resistor, as a gate
+    /// drive usually does: the hand floating-gate check reads the resistor
+    /// as a defined load and says nothing.
+    fn gate_board(extra: Vec<Component>) -> ExtractedBoard {
+        let mut all = vec![
+            nmos(10),
+            avr(SIG),
+            part("R2", "1k", &[("1", SIG), ("2", 10)]),
+        ];
+        all.extend(extra);
+        board(
+            &[
+                (GND, "GND"),
+                (V5, "+5V"),
+                (SIG, "DRIVE"),
+                (9, "LOAD"),
+                (10, "GATE"),
+            ],
+            all,
+        )
+    }
+
+    /// A FET gate fed only by an MCU pad that is high-impedance in reset is
+    /// promoted: Medium, under `floating_gate`, naming the FET, the pad, the
+    /// reset window and the pull-down; a pull-down on the gate is silent.
+    #[test]
+    fn a_fet_gate_on_a_hiz_mcu_pad_is_promoted_with_its_pad_window_and_fix() {
+        let lib = ModelLibrary::builtin();
+        let shadow = float_findings(&gate_board(vec![]), &lib);
+        let found = promote(&shadow, &[]);
+        assert_eq!(found.len(), 1, "{shadow:#?}");
+        let f = &found[0];
+        assert_eq!(f.check, LintCheck::FloatingGate);
+        assert_eq!(f.severity, Severity::Medium);
+        assert_eq!(f.refs, ["Q2"]);
+        assert_eq!(f.nets, ["DRIVE", "GATE"]);
+        for want in [
+            "Q2 (2N7002) gate (net 'GATE') is driven only by U2 pad 2 (PD0)",
+            "While the MCU is in reset its pad is high-impedance",
+            "conducts or not on leakage alone",
+            "Remedy: Add a 100k pull-down from 'GATE' to ground",
+        ] {
+            assert!(f.message.contains(want), "{want}: {}", f.message);
+        }
+        assert_eq!(
+            f.own_remedy().map(|r| r.starts_with("Add a 100k")),
+            Some(true)
+        );
+
+        let pulled = float_findings(
+            &gate_board(vec![part("R1", "100k", &[("1", 10), ("2", GND)])]),
+            &lib,
+        );
+        assert!(promote(&pulled, &[]).is_empty(), "{pulled:#?}");
+    }
+
+    /// An input nothing drives is promoted at rest without a pad, and a
+    /// hand finding of a float-shaped check on the same part and net, of any
+    /// severity, keeps the report to one finding; another part, another net
+    /// or another kind of check does not hide it.
+    #[test]
+    fn a_hand_finding_on_the_same_part_and_net_leaves_nothing_to_add() {
+        let lib = ModelLibrary::builtin();
+        let shadow = float_findings(&board(NETS, vec![schmitt(SIG)]), &lib);
+        let found = promote(&shadow, &[]);
+        assert_eq!(found.len(), 1, "{shadow:#?}");
+        assert_eq!(found[0].check, LintCheck::FloatingInput);
+        assert!(
+            found[0].message.contains("which nothing drives or pulls"),
+            "{}",
+            found[0].message
+        );
+        assert!(found[0].message.contains("Even with firmware running"));
+        let hand = |severity| LintFinding {
+            check: LintCheck::FloatingInput,
+            severity,
+            message: "hand".into(),
+            refs: vec!["U1".into()],
+            nets: vec!["SIG".into()],
+        };
+        for severity in [Severity::Low, Severity::Medium, Severity::High] {
+            assert!(
+                promote(&shadow, &[hand(severity)]).is_empty(),
+                "{severity:?}"
+            );
+        }
+        let other_part = LintFinding {
+            refs: vec!["U9".into()],
+            ..hand(Severity::High)
+        };
+        assert_eq!(promote(&shadow, &[other_part]).len(), 1);
+        let other_check = LintFinding {
+            check: LintCheck::RailConflict,
+            ..hand(Severity::High)
+        };
+        assert_eq!(promote(&shadow, &[other_check]).len(), 1);
+        let other_net = LintFinding {
+            nets: vec!["OTHER".into()],
+            ..hand(Severity::High)
+        };
+        assert_eq!(promote(&shadow, &[other_net]).len(), 1);
+    }
+
+    /// `check` carries the promoted finding: the whole lint on the gate
+    /// fixture holds the detector's Medium finding, and none once the gate
+    /// has a pull-down.
+    #[test]
+    fn the_engine_lint_reports_the_promoted_gate() {
+        let lib = ModelLibrary::builtin();
+        let report = crate::checks::engine_lint(&gate_board(vec![]), &lib);
+        let gates: Vec<_> = (report.findings.iter())
+            .filter(|f| f.check == LintCheck::FloatingGate && f.refs == ["Q2"])
+            .collect();
+        assert!(
+            gates
+                .iter()
+                .any(|f| f.severity == Severity::Medium && f.message.contains("U2 pad 2 (PD0)")),
+            "{gates:#?}"
+        );
+        let pulled = crate::checks::engine_lint(
+            &gate_board(vec![part("R1", "100k", &[("1", 10), ("2", GND)])]),
+            &lib,
+        );
+        assert!(
+            (pulled.findings.iter()).all(|f| f.check != LintCheck::FloatingGate),
+            "{:#?}",
+            pulled.findings
+        );
+    }
+
+    /// An MCU with a core supply and an I/O supply pulls its pad up to the
+    /// I/O supply: a pull-up toward an active-high enable's on level switches
+    /// it on even though the core rail (1.1 V) is the first supply pin.
+    #[test]
+    fn a_reset_pull_goes_to_the_io_supply_not_the_core_supply() {
+        let card = "[[models]]\nid = \"float_sw4\"\nkind = \"analog_switch\"\n\
+             description = \"enable fixture\"\n[models.match]\n\
+             value_re = \"^FLOATSW4$\"\n[models.params]\nron = 0.04\nroff = 5.0e7\n\
+             vth = 1.2\nen_on_level = \"high\"\n\
+             [models.pins]\n\"1\" = \"in_out_a\"\n\"2\" = \"vss\"\n\"3\" = \"ctrl\"\n\
+             \"4\" = \"in_out_b\"\n\"5\" = \"vdd\"\n\
+             [[models]]\nid = \"float_mcu4\"\nkind = \"mcu\"\n\
+             description = \"core and io supply fixture\"\n[models.match]\n\
+             value_re = \"^FLOATMCU4$\"\n[models.pins]\n\"1\" = \"dvdd\"\n\
+             \"2\" = \"gnd\"\n\"3\" = \"gpio_b\"\n\"4\" = \"iovdd\"\n\
+             [models.pin_capability.reset_mode]\nbasis = \"fixture\"\n\
+             [models.pin_capability.reset_mode.pads]\n\"3\" = \"pull_up\"\n";
+        let dir = hauksbee_testkit::fresh_scratch_dir("float_parity", "iosupply");
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{errors:?}");
+        let core = 7;
+        let nets = &[(GND, "GND"), (V3, "+3V3"), (SIG, "SIG"), (core, "+1V1")];
+        let found = float_findings(
+            &board(
+                nets,
+                vec![
+                    part(
+                        "U1",
+                        "FLOATSW4",
+                        &[("1", V3), ("2", GND), ("3", SIG), ("5", V3)],
+                    ),
+                    part(
+                        "U2",
+                        "FLOATMCU4",
+                        &[("1", core), ("2", GND), ("3", SIG), ("4", V3)],
+                    ),
+                ],
+            ),
+            &lib,
+        );
+        assert!(
+            of(&found, "U1").iter().any(|f| f.window == Window::Reset
+                && f.message.contains("switched on while the MCU is in reset")),
+            "{found:#?}"
+        );
+    }
+
+    /// A library that types every pin of a big part `input` has not said
+    /// which pads drive, so a gate on such a pad abstains; a small symbol
+    /// typed `input` reads the net and drives nothing, so the gate is judged.
+    #[test]
+    fn a_pad_of_an_all_input_symbol_may_drive_and_the_net_abstains() {
+        let all_input = |n: usize| {
+            let mut u = part("U7", "BIGCHIP", &[]);
+            u.pins = (1..=n)
+                .map(|i| {
+                    let mut p =
+                        crate::test_support::pin(&i.to_string(), if i == 1 { SIG } else { GND });
+                    p.kind = "input".into();
+                    p
+                })
+                .collect();
+            u
+        };
+        let lib = ModelLibrary::builtin();
+        let nets = &[(GND, "GND"), (V5, "+5V"), (SIG, "GATE"), (9, "LOAD")];
+        let found = float_findings(&board(nets, vec![nmos(SIG), all_input(24)]), &lib);
+        assert!(of(&found, "Q2").is_empty(), "{found:#?}");
+        assert!(
+            (found.why_not.get("GATE")).is_some_and(|w| w.contains("U7 pin 1")),
+            "{:#?}",
+            found.why_not
+        );
+        let found = float_findings(&board(nets, vec![nmos(SIG), all_input(2)]), &lib);
+        assert!(!of(&found, "Q2").is_empty(), "{found:#?}");
     }
 }

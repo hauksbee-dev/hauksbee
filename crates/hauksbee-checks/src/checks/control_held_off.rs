@@ -144,7 +144,7 @@ enum InternalPull {
 pub(super) struct Control {
     pub(super) kind: Kind,
     /// The pin's name for the finding.
-    label: String,
+    pub(super) label: String,
     /// The card's role for the pad, lower case.
     pub(super) role: Option<String>,
     /// Whether the part runs with the pin at its HIGH level. An active-high
