@@ -151,6 +151,12 @@ struct Tap {
 /// pad's net with the other pad on ground (a ground-referenced one). A voltage
 /// monitor tapping a rail that happens to pass through a resistor is neither.
 pub fn kelvin_sense(board: &ExtractedBoard, text: &str, out: &mut Vec<LintFinding>) {
+    // Most boards have no milliohm resistor at all: skip reading every part.
+    let low_value =
+        |c: &Component| parse_ohms(&c.value).is_some_and(|r| r > 0.0 && r <= MAX_SHUNT_OHMS);
+    if !board.components.iter().any(low_value) {
+        return;
+    }
     let parts: Vec<Part> = board
         .components
         .iter()
