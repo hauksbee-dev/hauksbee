@@ -220,7 +220,7 @@ fn esp8266ex_qfn32_pad_map_follows_table_2_1() {
     assert_eq!(m.pins.len(), 33);
     assert_pins(
         &m,
-        &pins("1=vdda 6=tout 7=en 11=vdd 14=gpio2 15=gpio0 13=gpio15 17=vdd2 26=gpio1_u0txd 27=xtal_out 28=xtal_in 29=vddd 30=vdda2 32=reset 33=gnd"),
+        &pins("1=vdda 6=tout 7=en 11=vdd 14=gpio2 15=gpio0 13=gpio15_mtdo 17=vdd2 26=gpio1_u0txd 27=xtal_out 28=xtal_in 29=vddd 30=vdda2 32=reset 33=gnd"),
     );
     assert_eq!(m.params.get_str("backend"), Some("none:esp8266"));
 }
