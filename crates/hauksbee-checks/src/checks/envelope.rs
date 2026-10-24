@@ -12,7 +12,6 @@
 //! across a series feed resistor is reported once, as a starved rail naming
 //! the resistor, the feed and the drop, in place of one finding per part.
 //!
-//! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

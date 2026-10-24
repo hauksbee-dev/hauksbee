@@ -237,21 +237,6 @@ fn a_dot_board_file_is_refused_like_any_unrecognised_format() {
     );
 }
 
-#[test]
-fn boot_coverage_requires_net_min_and_deadline() {
-    let board = support::repo("testdata/tarski_brownout_cell.net");
-    // Missing deadline_ms.
-    let p = support::write_tmp(
-        "bootcov_bad.toml",
-        &format!(
-            "board={}\nduration_ms=1\n[[assert]]\nkind=\"boot-coverage\"\nnet=\"FOO\"\nmin=3.0\n",
-            support::toml_path(&board)
-        ),
-    );
-    let err = run(&support::run_config(p)).unwrap_err();
-    assert!(err.to_string().contains("deadline_ms"), "got: {err}");
-}
-
 const BOOT_COVERAGE: &str =
     "[[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\n";
 

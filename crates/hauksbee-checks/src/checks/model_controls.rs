@@ -23,7 +23,6 @@
 //! same topology there is a note citing `params.float_tolerated_basis`: a
 //! floating CMOS input is still poor practice, but not a functional fault.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use std::collections::HashMap;
 

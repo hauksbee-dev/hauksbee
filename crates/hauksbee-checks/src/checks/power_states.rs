@@ -1,6 +1,5 @@
 //! Power-state checks: what a board does when one of its rails is switched off
 //! while another stays on.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The other power checks judge the board in its fully-on state. A board that
 //! gates a rail from a microcontroller (a regulator whose enable pin is a GPIO,

@@ -34,8 +34,6 @@
 //!   completeness gate that decides whether a decomposition may be trusted
 //!   at all.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 pub mod conduction;
 pub mod drivers;

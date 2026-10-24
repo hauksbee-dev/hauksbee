@@ -10,7 +10,7 @@ import { timingEvidence, timingRefusal } from './timing-fixture'
 
 // The real frontdoor report lives in the repository's demo/ tree; a checkout
 // without it skips the tests that need it rather than failing on a missing file.
-const FRONTDOOR_REPORT = new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url)
+const FRONTDOOR_REPORT = new URL('./fixtures-blinky-report-nominal.json', import.meta.url)
 const hasFrontdoorReport = existsSync(FRONTDOOR_REPORT)
 
 // Cold browser and first-page setup do not belong in the 5s DOM assertion budget.

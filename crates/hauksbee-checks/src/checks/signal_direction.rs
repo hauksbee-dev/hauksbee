@@ -1,5 +1,4 @@
 //! A signal net wired against its pins' directions.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A signal wire carries a level from a pin that drives it to the pins that
 //! listen. Two kinds of net cannot do that, whatever the signal is called:

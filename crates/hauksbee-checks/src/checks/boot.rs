@@ -2,7 +2,6 @@
 //!
 //! It is kept in the library so the CLI, the TUI and the web front door all
 //! derive the same advisory from the same call rather than each re-deriving it.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Two things are computed from a finished co-sim's firmware drive sets and the
 //! board's topology:

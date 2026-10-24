@@ -1,5 +1,4 @@
 //! What the firmware means to use, against what the board connects.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A firmware image says which hardware it uses before it runs: the interrupt
 //! vector table of an AVR names every interrupt the program handles. A handler

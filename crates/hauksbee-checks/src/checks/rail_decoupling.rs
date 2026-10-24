@@ -1,6 +1,5 @@
 //! Rail decoupling ratio: supply rails whose ICs are short of local
 //! decoupling capacitance.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Every IC draws its supply current in edges: each output transition and each
 //! clock pulls a burst of charge in nanoseconds, far faster than a regulator

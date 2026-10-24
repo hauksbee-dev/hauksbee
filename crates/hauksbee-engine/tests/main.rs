@@ -45,8 +45,6 @@ mod bom_identity;
 mod bom_placement_cli;
 #[path = "boot_straps_cosim.rs"]
 mod boot_straps_cosim;
-#[path = "bug_hunt_physics.rs"]
-mod bug_hunt_physics;
 #[path = "bundled_sensor_catalog.rs"]
 mod bundled_sensor_catalog;
 #[path = "card_physical_ranges.rs"]
@@ -148,8 +146,6 @@ mod generic_mosfet_corner_check;
 mod gerber_determinism;
 #[path = "ground_names.rs"]
 mod ground_names;
-#[path = "hardware_history.rs"]
-mod hardware_history;
 #[path = "host_serial_cosim.rs"]
 mod host_serial_cosim;
 #[path = "i2c_address_corpus.rs"]
@@ -162,8 +158,6 @@ mod i2c_sensor_cosim_qemu;
 mod i2c_sensor_cosim_renode;
 #[path = "indicator_not_judged.rs"]
 mod indicator_not_judged;
-#[path = "inhibitory_miswire.rs"]
-mod inhibitory_miswire;
 #[path = "input_order_stable.rs"]
 mod input_order_stable;
 #[path = "interactive_coverage_parity.rs"]
@@ -190,12 +184,8 @@ mod models_resolve_layers;
 mod module_cosim_binding;
 #[path = "multi_spi_dispatch.rs"]
 mod multi_spi_dispatch;
-#[path = "nep_private_acceptance.rs"]
-mod nep_private_acceptance;
 #[path = "netlist_drc_honesty.rs"]
 mod netlist_drc_honesty;
-#[path = "netlist_edit_miswire.rs"]
-mod netlist_edit_miswire;
 #[path = "no_firmware_no_avr.rs"]
 mod no_firmware_no_avr;
 #[path = "open_load_qualifiers.rs"]
@@ -276,8 +266,6 @@ mod supply_chain_scope;
 mod supply_path_reset_cosim;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
-#[path = "tarski_stretcher_transient.rs"]
-mod tarski_stretcher_transient;
 #[path = "thermal.rs"]
 mod thermal;
 #[path = "usb_c_double_termination.rs"]

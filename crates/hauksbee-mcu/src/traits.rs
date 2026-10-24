@@ -14,7 +14,6 @@
 //! types the coupling speaks in: [`PinId`], [`McuState`], and the intercepted
 //! bus events [`I2cEvent`]/[`SpiEvent`].
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/traits.md.
 
 use anyhow::{bail, Result};
 use std::path::Path;

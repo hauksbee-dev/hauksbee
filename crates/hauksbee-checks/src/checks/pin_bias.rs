@@ -1,6 +1,5 @@
 //! Required pin bias: the pull-up, pull-down or defined idle level a card says
 //! a (non-strap) pin needs.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Some pins are only specified with a bias on them. An open-drain flag or
 //! interface output pulls low and cannot pull high, so without a pull-up it

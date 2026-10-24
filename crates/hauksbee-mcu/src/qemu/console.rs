@@ -8,7 +8,6 @@
 //! running, and reads the console for the ESP-IDF panic handler's lines and
 //! for the ROM's reset banner, which reports every reboot after the first.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use std::collections::BTreeMap;
 

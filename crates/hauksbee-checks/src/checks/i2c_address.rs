@@ -1,5 +1,4 @@
 //! Two I2C targets on one bus that answer at the same 7-bit address.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Both parts acknowledge the same address byte, so a read returns the wired-AND
 //! of two replies and a write reaches both. Nothing about the supply, the

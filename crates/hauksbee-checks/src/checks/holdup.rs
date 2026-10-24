@@ -1,6 +1,5 @@
 //! Bulk hold-up: the ripple valley on a rectifier's bulk capacitor against the
 //! minimum input of the regulator it feeds.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A mains transformer and bridge (or a single diode) feed a bulk capacitor
 //! that is topped up twice per mains cycle (once for a half-wave rectifier) and

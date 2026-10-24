@@ -6,7 +6,7 @@ Hand Hauksbee the artifacts you already produce: the layout, schematic, fab arch
 
 A design-rule checker checks geometry against rules. A schematic simulator executes the circuit it was given. Hauksbee's different job is to execute and cross-check the evidence that will become the product: native design files, manufacturing output, assembled-part identity, and firmware.
 
-**New here?** Start with [START_HERE](docs/START_HERE.md). If you are testing a pre-1.0 build, read the [beta contract](BETA.md) too. The authoritative scope and backend matrix live in [CAPABILITIES](docs/about/CAPABILITIES.md) and [LIMITATIONS](docs/about/LIMITATIONS.md).
+**New here?** Start with [START_HERE](docs/START_HERE.md). The authoritative scope and backend matrix live in [CAPABILITIES](docs/about/CAPABILITIES.md) and [LIMITATIONS](docs/about/LIMITATIONS.md).
 
 ![A board live in 2D with net activity](frontend/screenshots/beauty/2d-live.png)
 

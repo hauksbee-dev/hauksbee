@@ -44,7 +44,6 @@
 //! the person to download it). Nothing here answers a CAPTCHA, hides what the
 //! client is, or works around bot protection: a site that asks for a person gets
 //! one, via `--datasheet`. The alternative clients that were measured and not
-//! adopted are in `docs/how-and-why/hauksbee-models/datasheet-fetch.md`.
 //!
 //! The transport is the [`Http`] trait so every rule above is tested without a
 //! network; [`CurlHttp`] is the one real implementation (`curl`, and `node`

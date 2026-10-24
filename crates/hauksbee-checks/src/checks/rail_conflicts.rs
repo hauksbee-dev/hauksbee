@@ -7,7 +7,6 @@
 //! board runs, but the sources fight, so this static surface says so before
 //! any number from that rail is trusted.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use hauksbee_bind::bind_report::BindReport;
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};

@@ -1,5 +1,4 @@
 //! The co-simulation scheduler.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/scheduler.md.
 //!
 //! Generalizes an earlier board-specific emulator's lockstep pattern. Each call to
 //! [`Scheduler::step`] advances wall-clock `dt` in fixed sub-chunks (default
@@ -10061,8 +10060,6 @@ missing = ["measurement_registers"]
             &pulled(('C', 1))
         ));
     }
-
-
 
     /// The G4/F7/L0 platforms stand for a named set of dies: a covered part
     /// (with any package suffix) is the modelled core, a same-family part off

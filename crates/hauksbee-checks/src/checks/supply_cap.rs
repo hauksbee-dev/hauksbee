@@ -1,6 +1,5 @@
 //! Minimum capacitance on a supply input or output pin, from the card's
 //! `[[models.supply_cap]]` rows.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A motor driver wants a bulk capacitor on its supply to absorb the energy the
 //! motor pumps back; a load switch wants an input capacitor so the rail does not

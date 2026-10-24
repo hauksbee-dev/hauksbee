@@ -51,9 +51,7 @@
 //! (source pins and torn rails), never another island's owned node, so the
 //! Jacobi sweep computes bit-for-bit what a Gauss-Seidel sweep would.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies; shared with `partition.rs`, whose analysis this executes):
-//! docs/how-and-why/hauksbee-solve/partition.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use rayon::prelude::*;

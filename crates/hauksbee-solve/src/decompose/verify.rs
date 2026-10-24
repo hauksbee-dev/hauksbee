@@ -23,8 +23,6 @@
 //! `tear_matches_monolith_*` suite; this module owns what can be proven from
 //! topology and stamps alone.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::{Circuit, NodeId};
 

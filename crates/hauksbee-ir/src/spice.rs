@@ -1,5 +1,4 @@
 //! SPICE netlist loader for the `.cir` subset hauksbee simulates.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/spice.md.
 //!
 //! Elements `R C L V I D Q M S E G F H B K A` and `X` subcircuit calls; `.model`
 //! cards for `D`, `NPN`/`PNP`, `NMOS`/`PMOS` (level 1), `SW` and `OPAMP`;

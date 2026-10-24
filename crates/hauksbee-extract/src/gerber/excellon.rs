@@ -15,7 +15,6 @@
 //! filename by the caller. Plated through-holes stitch copper layers and form
 //! pads; non-plated holes are mechanical and ignored for connectivity.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 /// One drilled hit: a round hole, or a slot when `to` is set.
 #[derive(Debug, Clone)]

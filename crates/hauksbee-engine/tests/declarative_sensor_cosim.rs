@@ -2,7 +2,7 @@
 //! interpreter (`RegisterMapSensor`).
 //!
 //! These tests are written against the *design contract* defined in
-//! `docs/hunts/DECLARATIVE_SENSOR_DESIGN.md`; the interpreter does NOT exist
+//!; the interpreter does NOT exist
 //! yet.  Every test here is intentionally RED: it will compile cleanly and fail
 //! at runtime (with an explicit "unimplemented" panic) until a real
 //! `RegisterMapSensor` is shipped that implements the specified API.

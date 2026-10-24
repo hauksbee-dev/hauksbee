@@ -1,5 +1,4 @@
 //! The DC resistance a programming pin sees to ground, read off the board.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/binder.md.
 //!
 //! A linear charger's PROG resistor (or any resistor-programmed limit) is a
 //! network, not always one part: parallel trims, a series jumper, a solder

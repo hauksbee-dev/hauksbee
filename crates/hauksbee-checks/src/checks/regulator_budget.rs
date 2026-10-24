@@ -54,7 +54,6 @@
 //! its physical range is read as unstated. A regulator whose card is a stand-in
 //! for the part is not judged on its rating.
 //!
-//! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

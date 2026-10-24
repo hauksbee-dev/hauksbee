@@ -1,5 +1,4 @@
 //! Digital-audio bus wiring (I2S, left-justified, TDM) read from pad roles.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! An audio bus has a fixed anatomy: a bit clock (BCLK), a frame clock (LRCLK or
 //! WS), data lines, and for many codecs a master clock (MCLK). Exactly one part

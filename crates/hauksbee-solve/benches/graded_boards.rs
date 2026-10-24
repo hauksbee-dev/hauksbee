@@ -1,5 +1,4 @@
-//! S2 graded-board benchmark harness (`docs/dev-plans/03-solver-performance.md`
-//! §9). Criterion micro/meso benchmarks over a ladder of board-shaped fixtures,
+//! S2 graded-board benchmark harness. Criterion micro/meso benchmarks over a ladder of board-shaped fixtures,
 //! from a trivial linear RC ladder up to the 240-block shunt-fed mirror array.
 //!
 //! Two things every benchmark here does, on purpose:

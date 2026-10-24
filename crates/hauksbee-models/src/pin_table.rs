@@ -12,7 +12,6 @@
 //!
 //! The reuse decision (poppler's word boxes over pdfplumber, camelot or a Rust
 //! PDF crate) and the measured accuracy are in
-//! `docs/how-and-why/hauksbee-models/datasheet-toolkit.md`.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};

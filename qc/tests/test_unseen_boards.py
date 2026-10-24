@@ -1563,11 +1563,11 @@ class CommandTests(ContainsTestCase):
             )
         self.assertEqual(0, code)
         self.assertEqual(
-            repository / "qc/evidence/unseen-external-history.jsonl",
+            repository / "qc/results/unseen-external-history.jsonl",
             external.call_args.kwargs["history_path"],
         )
         self.assertEqual(
-            repository / "qc/evidence/runs", external.call_args.kwargs["evidence_dir"]
+            repository / "qc/results/evidence-runs", external.call_args.kwargs["evidence_dir"]
         )
 
         with (

@@ -24,8 +24,6 @@
 //!   driver groups by copying, and fill the certificate's capture-grid
 //!   tolerance with the grid actually used.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 pub mod balance;
 pub mod capture;

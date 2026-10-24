@@ -1,5 +1,4 @@
 //! A programming or serial header whose pin order is not the standard one.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A header meant for a programmer or a USB-to-serial cable mates with an
 //! adapter whose connector fixes every pin. A header wired in another order does

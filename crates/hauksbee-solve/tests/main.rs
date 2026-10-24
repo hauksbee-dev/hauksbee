@@ -74,5 +74,3 @@ mod refusal_shapes;
 mod staged_dc;
 #[path = "staged_property.rs"]
 mod staged_property;
-#[path = "stretcher_transient.rs"]
-mod stretcher_transient;

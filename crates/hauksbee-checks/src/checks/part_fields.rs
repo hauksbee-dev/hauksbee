@@ -1,6 +1,5 @@
 //! A passive whose own fields disagree about which part it is.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The assembler buys by the manufacturer part number and places on the
 //! footprint; the schematic's Value field and symbol are what every other

@@ -6,7 +6,7 @@
 //! are the major ones (Murata GRM/GCM family, Samsung CL, Yageo CC and RC, TDK
 //! C, KEMET C, Vishay CRCW, Panasonic ERJ); anything else is `None`, never a
 //! guess. Each table cites the vendor's own part-numbering page; the
-//! adopt/borrow decision is in `docs/dev-plans/mpn-decoder.md`.
+//! adopt/borrow decision is in.
 
 use std::sync::LazyLock;
 

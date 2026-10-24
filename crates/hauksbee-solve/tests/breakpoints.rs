@@ -6,7 +6,7 @@
 //! (during which dt grew) produces no curvature signal and is silently
 //! aliased away. The co-sim face of the same failure is covered by the
 //! co-simulation scheduler tests; this is the analog face, and the
-//! PWL edge drive of `docs/dev-plans/05-cosim-fidelity.md` section 1.3 relies
+//! PWL edge drive of section 1.3 relies
 //! on it being fixed.
 
 use crate::shared::{add_capacitor, add_resistor};

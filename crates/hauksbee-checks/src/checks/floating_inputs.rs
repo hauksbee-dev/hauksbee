@@ -1,6 +1,5 @@
 //! Floating CMOS inputs: a logic input on no net, or on a net with no driver,
 //! no pull resistor and no other connection.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A CMOS input is a gate capacitor with no DC path of its own. Left open it
 //! charges to whatever leakage and coupling put on it: the part reads random

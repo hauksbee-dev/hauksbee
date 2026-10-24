@@ -37,7 +37,6 @@
 //! This is the one LED-current rule: the connectivity lint's old fixed-Vf
 //! estimate is retired in its favour.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use std::collections::BTreeMap;
 

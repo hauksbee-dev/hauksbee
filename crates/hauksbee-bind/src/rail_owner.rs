@@ -1,6 +1,5 @@
 //! Rail ownership: which supply nets may take an ideal source, decided from
 //! the bound circuit rather than from part kinds.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/binder.md.
 //!
 //! Nets that a series conductor joins are one rail at DC: a resistor of at
 //! most [`SERIES_OHMS`] (a sense resistor, a ferrite's DCR, a 0 Ω jumper), an

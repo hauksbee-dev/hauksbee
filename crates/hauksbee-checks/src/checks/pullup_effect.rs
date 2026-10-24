@@ -1,5 +1,4 @@
 //! Pull-ups that are present and cannot do their job.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A pull-up resistor exists to hold a line at a valid HIGH while nothing
 //! drives it. Whether it does is a question about three numbers the board

@@ -28,8 +28,6 @@
 //!   edition `.json` PCB document or a Pro edition `.epcb` / `.epro`. See
 //!   [`easyeda`] for what it reads and what it names as unsupported.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
-//! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
 //! canonical form defined here).
 
 pub mod altium;

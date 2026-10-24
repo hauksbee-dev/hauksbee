@@ -20,7 +20,6 @@
 //! battery or a power-output pin, then a connector, then (only when neither
 //! side shows one) the one on a named rail. When the two sides show equal
 //! evidence (a power-path FET between two sources, an ideal diode) the check
-//! abstains. Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use std::collections::BTreeSet;
 

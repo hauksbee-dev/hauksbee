@@ -22,7 +22,6 @@
 //! what was not judged ([`rating_basis::not_judged`]): never silence, never a
 //! pass, and never a figure the circuit does not give.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use std::collections::{BTreeMap, HashMap};
 

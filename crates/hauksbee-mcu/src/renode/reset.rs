@@ -1,7 +1,6 @@
 //! Rebooting a Renode core, and counting the reboots the firmware did not ask
 //! the host for.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 //!
 //! # Why a macro
 //!

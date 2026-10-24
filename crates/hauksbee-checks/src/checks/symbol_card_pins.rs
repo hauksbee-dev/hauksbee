@@ -1,5 +1,4 @@
 //! A schematic symbol and the part's card that disagree about a pin.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The schematic names a part's pins (`XTAL1`, `VDD`, `~{RESET}`) and the
 //! part's card names the same pads in its own words. Both are meant to be the

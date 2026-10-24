@@ -11,14 +11,6 @@
     "docs/PROJECT_LAYOUT.md": "/docs/project_layout",
     "docs/STYLE.md": "/docs/style"
   },
-  "excludedPrefixes": [
-    "docs/dev-plans",
-    "docs/how-and-why",
-    "docs/hunts",
-    "docs/learn",
-    "docs/record",
-    "docs/teach"
-  ],
   "assetRule": "route = \"/static/\" + repoRelativePath, case preserved",
   "directoryRedirects": {
     "/docs/evidence": "/docs/evidence/readme",
@@ -51,9 +43,6 @@
     "docs/cosim/PERIPHERALS.md": "/docs/cosim/peripherals",
     "docs/cosim/SIMULATORS.md": "/docs/cosim/simulators",
     "docs/DOCS_MAP.md": "/docs/docs_map",
-    "docs/evidence/BUG_HUNT.md": "/docs/evidence/bug_hunt",
-    "docs/evidence/FAMOUS_SWEEP.md": "/docs/evidence/famous_sweep",
-    "docs/evidence/KNOWN_FAULTS_VALIDATION.md": "/docs/evidence/known_faults_validation",
     "docs/evidence/README.md": "/docs/evidence/readme",
     "docs/extending/add-a-board-format.md": "/docs/extending/add-a-board-format",
     "docs/extending/add-a-hardware-trace.md": "/docs/extending/add-a-hardware-trace",
@@ -77,6 +66,7 @@
     "docs/spice-compat/results.md": "/docs/spice-compat/results",
     "docs/START_HERE.md": "/docs/start_here",
     "docs/STYLE.md": "/docs/style",
-    "README.md": "/"
+    "README.md": "/",
+    "docs/evidence/CORPUS.md": "/docs/evidence/corpus"
   }
 }

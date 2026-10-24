@@ -3,20 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import pkg from './package.json' with { type: 'json' }
 
-// The one-line installer, written once. The demo's install call-to-action reads
-// it as a build-time literal (see src/vite-env.d.ts); it is the same command the
-// README and docs/START_HERE.md print, so change them together.
-const INSTALL_COMMAND =
-  'curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash'
-
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // Build-time constant, not an import.meta.env lookup: only a literal is
-  // constant-folded, which is what removes the demo shell from the live
-  // bundle and the upload/live machinery from the demo bundle.
+  // Build-time constants, not import.meta.env lookups: only a literal is
+  // constant-folded.
   define: {
-    __INSTALL_COMMAND__: JSON.stringify(INSTALL_COMMAND),
-    __DEMO__: JSON.stringify(process.env.VITE_DEMO === '1'),
     // The version the app reports (and pins the published GitHub action to),
     // read from package.json here so no source file carries a copy of it.
     __APP_VERSION__: JSON.stringify(pkg.version),

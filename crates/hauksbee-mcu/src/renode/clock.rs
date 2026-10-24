@@ -26,7 +26,6 @@
 //! No register layout lives here. Every offset, mask and delay is descriptor
 //! data, so the same code serves the F1, F4, G4, L0, F0 and RP2040.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use super::{Monitor, RenodeBackend, RenodeConfig};
 use crate::periph_snapshot::{

@@ -31,7 +31,6 @@
 //! it says so in the not-judged vocabulary and the verdict reads PARTLY
 //! JUDGED, never a bare pass.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use hauksbee_bind::binder::BoundBoard;
 use hauksbee_bind::rail_basis::{rail_bases, BareRail, RailBases, RailBasis, Unfitted};

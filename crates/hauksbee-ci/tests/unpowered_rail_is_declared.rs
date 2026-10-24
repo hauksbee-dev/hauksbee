@@ -20,7 +20,7 @@
 //! of parts is powered by nothing, every surface says so, and says so before
 //! the results it undermines.
 
-use crate::support::{self, repo_root};
+use crate::support;
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -257,8 +257,6 @@ fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
         );
     }
 }
-
-
 
 /// `two_rail_board` plus a resistor `RFEED` from `powered` (pin 1) to
 /// `fed` (pin 2): the board itself feeds `fed` from a powered rail.

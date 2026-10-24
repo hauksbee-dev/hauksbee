@@ -1,6 +1,5 @@
 //! Sibling-topology diff: one instance of a repeated cell wired differently
 //! from its twins.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A board that stamps the same subcircuit many times (a mirror cell, an LED
 //! driver channel, a sensor tile) has one right wiring and many copies of it.

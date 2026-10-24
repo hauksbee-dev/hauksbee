@@ -8,8 +8,6 @@ mod support;
 mod avr_execution_probe;
 #[path = "avr_hex_flash_bounds.rs"]
 mod avr_hex_flash_bounds;
-#[path = "avr_mcu_tests.rs"]
-mod avr_mcu_tests;
 #[path = "avr_new_parts.rs"]
 mod avr_new_parts;
 #[path = "avr_peripheral_snapshot.rs"]

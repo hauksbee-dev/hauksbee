@@ -1,5 +1,4 @@
 //! A part's `Datasheet` field that names a different device.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The field is copied from a symbol, a sibling part or a search result and is
 //! often left pointing at the part it came from. Nothing else reads it back, so

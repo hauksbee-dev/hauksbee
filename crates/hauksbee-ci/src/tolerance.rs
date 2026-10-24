@@ -1,6 +1,5 @@
 //! Component-tolerance ensembles: Monte-Carlo sampling and deterministic
 //! corner enumeration over the spec's `[[tolerance]]` rules.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ci/tolerance.md.
 //!
 //! Real analog circuits are built from ±1% / ±5% / ±10% parts. A board that
 //! only meets its assertions at *nominal* component values is a latent defect:

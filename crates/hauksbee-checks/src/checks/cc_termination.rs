@@ -1,6 +1,5 @@
 //! A USB-C receptacle whose CC pull resistors are the wrong value or the wrong
 //! kind for the port's role.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A sink announces itself with a 5.1 kΩ pull-down (Rd) on each CC pin; a
 //! source advertises its current with a pull-up (Rp) to the CC pin. The values

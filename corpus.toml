@@ -64,7 +64,7 @@
 #                      that MCU so the image must be identified and the reason
 #                      named. Only meaningful with `firmware`. Both are read by
 #                      qc/unseen_boards.py, not by the fetch; see
-#                      docs/ci/RELEASE_BOARD_GATES.md.
+#                      the private release-gate notes.
 #   license_confirmed  optional: false keeps the board out of the default fetch.
 #   license_note       optional: how the licence was established, when the SPDX
 #                      id alone does not say.
@@ -551,7 +551,7 @@ expect = ["control-pcb/BMS-5s.kicad_pcb", "power-pcb/Switch-N-Sense.kicad_pcb"]
 # gerbers too, including Eagle ones (the SparkFun Pro Micro panel's `.GTL` sits
 # beside its `.brd` and has 240 poured regions); what is particular here is that
 # the fill in question is the subject of an adjudicated finding. See the emonTx row
-# in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`, and the two-sided test it drives
+# in `docs/evidence/CORPUS.md`, and the two-sided test it drives
 # in `crates/hauksbee-extract/tests/known_faults.rs`.
 [[board]]
 id = "emontx3"
@@ -613,7 +613,7 @@ that layer. The bottom-layer finding is real. This revision is also the reason a
 proposed narrowing of the rule was reverted: a near-zero isolate is necessary but \
 not sufficient for two pours to merge, and V3.4.0 is the proof. Kept in the corpus \
 because a measured false positive is worth more to the next reader than a clean \
-story: see the emonTx section of docs/evidence/KNOWN_FAULTS_VALIDATION.md and \
+story: see the emonTx section of docs/evidence/CORPUS.md and \
 docs/about/LIMITATIONS.md.
 """
 expect = [
@@ -736,9 +736,9 @@ expect = [
 # clock IC, an EFM32PG22 MCU, a TCXO, an external reference input, Laird shield
 # cans, and 373 footprints on four layers. It reached the corpus
 # the way the ODrive attempt layout did, by being flagged: the external-pool
-# iteration `qc/evidence/runs/2026-08-09-external-01.json` drew it, hauksbee
+# iteration drew it, hauksbee
 # reported six copper shorts, and the adjudication (see the gold row in
-# `docs/evidence/KNOWN_FAULTS_VALIDATION.md`) found all six real. It is pinned
+# `docs/evidence/CORPUS.md`) found all six real. It is pinned
 # here so the row is reproducible from this repository.
 [[board]]
 id = "mwgen_g1"

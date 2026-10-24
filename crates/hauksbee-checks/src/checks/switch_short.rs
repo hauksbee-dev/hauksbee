@@ -1,5 +1,4 @@
 //! A switch or push button that shorts a supply when pressed.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A two-position switch with nothing in series, closed between two nets that
 //! each hold a level of their own, is a dead short while it is closed: two

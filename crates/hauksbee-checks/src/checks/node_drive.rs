@@ -1,5 +1,4 @@
 //! Node-drive checks: three DC faults read from topology and pin roles.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! - **Unlimited base drive** ([`LintCheck::UnlimitedBaseDrive`]): a BJT whose
 //!   base sits on the same node as a low-impedance driver (a supply rail, an

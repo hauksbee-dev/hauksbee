@@ -11,7 +11,7 @@ live in `ci/` in a hardware repo; `run` also accepts several specs at once and
 writes one merged JUnit file, exiting with the worst code of the set), then
 publishes the JUnit XML so the assertions show up as test results.
 
-The private beta publishes no container image, so there is nothing to pull
+This pre-1.0 beta publishes no public container image, so there is nothing to pull
 anonymously: build one with the manual `docker.yml` dispatch, push it to a
 registry you control, and add that registry credential through the CI
 system's protected secret store. Replace `REPLACE_WITH_SLIM_DIGEST` with the

@@ -1,5 +1,5 @@
 //! Behavioral B-source: the per-touchpoint gates from
-//! `docs/dev-plans/04-spice-compat.md` §1 and §2.5.
+//! §1 and §2.5.
 //!
 //! The B-source is the maximal-coupling device: its expression may read node
 //! voltages (`V(node)`, sense edges, like an E/G control pair), branch

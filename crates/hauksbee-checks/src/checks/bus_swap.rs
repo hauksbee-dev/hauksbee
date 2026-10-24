@@ -1,5 +1,4 @@
 //! A two-wire bus crossed between a standard connector and the part behind it.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A USB receptacle and a Qwiic, STEMMA QT or Grove port fix which pin carries
 //! which line of a pair (`D+`/`D-`, `SDA`/`SCL`). A board that lands the

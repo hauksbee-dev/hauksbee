@@ -1,5 +1,4 @@
 //! A peripheral bus wired to MCU pins that cannot carry it.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A microcontroller's hardware SPI, I2C, UART and PWM outputs reach fixed pads:
 //! an `ATmega328P`'s TWI data line is pad 27 and nothing else, its SPI clock is
