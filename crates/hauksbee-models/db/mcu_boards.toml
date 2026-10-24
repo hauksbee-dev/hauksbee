@@ -88,12 +88,12 @@ module_flash = "4/8/16 MB SPI flash inside the module, ESP32-WROOM-32E datasheet
 # J3 (user guide Header Block J3; schematic p.1)
 "IO23" = "gpio23"
 "IO22" = "gpio22"
-"TX" = "gpio1"
-"TXD0" = "gpio1"
-"IO1" = "gpio1"
-"RX" = "gpio3"
-"RXD0" = "gpio3"
-"IO3" = "gpio3"
+"TX" = "p01_txd"
+"TXD0" = "p01_txd"
+"IO1" = "p01_txd"
+"RX" = "p03_rxd"
+"RXD0" = "p03_rxd"
+"IO3" = "p03_rxd"
 "IO21" = "gpio21"
 "IO19" = "gpio19"
 "IO18" = "gpio18"
@@ -124,8 +124,8 @@ module_flash = "4/8/16 MB SPI flash inside the module, ESP32-WROOM-32E datasheet
 "GPIO13" = "gpio13"
 "GPIO23" = "gpio23"
 "GPIO22" = "gpio22"
-"GPIO1" = "gpio1"
-"GPIO3" = "gpio3"
+"GPIO1" = "p01_txd"
+"GPIO3" = "p03_rxd"
 "GPIO21" = "gpio21"
 "GPIO19" = "gpio19"
 "GPIO18" = "gpio18"
@@ -207,12 +207,12 @@ module_flash = "2 MB, U3 GD25Q16CEIG, XIAO RP2040 schematic v1.3 p.1"
 "D5" = "gpio7"
 "SCL" = "gpio7"
 "GPIO7" = "gpio7"
-"D6" = "gpio0"
-"TX" = "gpio0"
-"GPIO0" = "gpio0"
-"D7" = "gpio1"
-"RX" = "gpio1"
-"GPIO1" = "gpio1"
+"D6" = "gpio0_txd"
+"TX" = "gpio0_txd"
+"GPIO0" = "gpio0_txd"
+"D7" = "gpio1_rxd"
+"RX" = "gpio1_rxd"
+"GPIO1" = "gpio1_rxd"
 "D8" = "gpio2"
 "SCK" = "gpio2"
 "GPIO2" = "gpio2"
@@ -287,12 +287,12 @@ module_flash = "4 MB inside the ESP32-C3FN4 (the FN4 ordering code), XIAO ESP32C
 "D5" = "gpio7"
 "SCL" = "gpio7"
 "GPIO7" = "gpio7"
-"D6" = "gpio21"
-"TX" = "gpio21"
-"GPIO21" = "gpio21"
-"D7" = "gpio20"
-"RX" = "gpio20"
-"GPIO20" = "gpio20"
+"D6" = "gpio21_txd0"
+"TX" = "gpio21_txd0"
+"GPIO21" = "gpio21_txd0"
+"D7" = "gpio20_rxd0"
+"RX" = "gpio20_rxd0"
+"GPIO20" = "gpio20_rxd0"
 "D8" = "gpio8"
 "SCK" = "gpio8"
 "GPIO8" = "gpio8"
@@ -367,12 +367,12 @@ module_flash = "8 MB GD25Q64ENIGR, XIAO ESP32S3 schematic v1.2 p.1"
 "A5" = "gpio6"
 "SCL" = "gpio6"
 "GPIO6" = "gpio6"
-"D6" = "gpio43"
-"TX" = "gpio43"
-"GPIO43" = "gpio43"
-"D7" = "gpio44"
-"RX" = "gpio44"
-"GPIO44" = "gpio44"
+"D6" = "gpio43_txd0"
+"TX" = "gpio43_txd0"
+"GPIO43" = "gpio43_txd0"
+"D7" = "gpio44_rxd0"
+"RX" = "gpio44_rxd0"
+"GPIO44" = "gpio44_rxd0"
 "D8" = "gpio7"
 "A8" = "gpio7"
 "SCK" = "gpio7"
@@ -429,7 +429,7 @@ basis = "XIAO ESP32S3 schematic v1.2 p.1: VCC_3V3 = U3 SGM6029 buck, MODE R13 24
 #   7bf736651854a04ea2d7293e124e2be86c66ef70c1f0fc3ab47c08c8f07c279b) p.1;
 # - the learn guide adafruit-huzzah32-esp32-feather.pdf (sha256
 #   cb04c0aacd1c702cc1dbd7e795c5b7272ccc5485f655bd3273c11a90bbd5d080) pp.10-13.
-# RX/TX are GPIO16/17 (guide p.10: "not connected to the USB/Serial converter").
+# RX/TX are GPIO16/17 (guide p.11: "not connected to the USB/Serial converter").
 [[models]]
 id = "adafruit_feather_huzzah32"
 kind = "mcu"
@@ -457,8 +457,8 @@ module_clock_source = "ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal in
 "11" = "gpio5"        # SCK
 "12" = "gpio18"       # MOSI
 "13" = "gpio19"       # MISO
-"14" = "gpio16"       # RX
-"15" = "gpio17"       # TX
+"14" = "gpio16_rxd"       # RX
+"15" = "gpio17_txd"       # TX
 "16" = "gpio21"
 "17" = "gpio23"       # SDA
 "18" = "gpio22"       # SCL
@@ -493,8 +493,8 @@ module_clock_source = "ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal in
 "SCK" = "gpio5"
 "MOSI" = "gpio18"
 "MISO" = "gpio19"
-"RX" = "gpio16"
-"TX" = "gpio17"
+"RX" = "gpio16_rxd"
+"TX" = "gpio17_txd"
 "SDA" = "gpio23"
 "SCL" = "gpio22"
 "A6" = "gpio14"
@@ -515,8 +515,8 @@ module_clock_source = "ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal in
 "IO13" = "gpio13"
 "IO14" = "gpio14"
 "IO15" = "gpio15"
-"IO16" = "gpio16"
-"IO17" = "gpio17"
+"IO16" = "gpio16_rxd"
+"IO17" = "gpio17_txd"
 "IO18" = "gpio18"
 "IO19" = "gpio19"
 "IO21" = "gpio21"
@@ -536,8 +536,8 @@ module_clock_source = "ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal in
 "GPIO13" = "gpio13"
 "GPIO14" = "gpio14"
 "GPIO15" = "gpio15"
-"GPIO16" = "gpio16"
-"GPIO17" = "gpio17"
+"GPIO16" = "gpio16_rxd"
+"GPIO17" = "gpio17_txd"
 "GPIO18" = "gpio18"
 "GPIO19" = "gpio19"
 "GPIO21" = "gpio21"
@@ -681,6 +681,17 @@ module_clock_source = "Feather 32u4 Basic schematic: Y1 RESONATOR '8MHz' on XTAL
 "BAT" = "vbat"
 "VBAT" = "vbat"
 
+[models.ratings]
+# Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (sha256
+# 8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a),
+# section 29.1 Absolute Maximum Ratings (PDF page = printed page 383): Maximum
+# Operating Voltage 6.0 V, DC Current per I/O Pin 40.0 mA, DC Current VCC and
+# GND Pins 200.0 mA (as on the atmega32u4 card). The recommended VCC range is
+# 2.7-5.5 V (Table 29-1, p.383); 6.0 V is the abs max row, not that ceiling.
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
 # 3V on the header is U2 SPX3819-3.3's output from VBUS (schematic netlist).
 # SPX3819 datasheet (maxlinear.com/ds/spx3819.pdf Rev. 2.0.5, sha256
 # 43b63129331150a20339623920ea9f7be758d93e700a3459beb190d483ad35a2) p.2,
@@ -787,8 +798,8 @@ module_clock_source = "Feather RP2040 schematic: Y1 '12MHz/12pF' on XIN/XOUT; le
 "11" = "gpio18"       # SCK
 "12" = "gpio19"       # MOSI
 "13" = "gpio20"       # MISO
-"14" = "gpio1"        # RX
-"15" = "gpio0"        # TX
+"14" = "gpio1_rxd"        # RX
+"15" = "gpio0_txd"        # TX
 "16" = "gpio6"        # D4
 "17" = "gpio2"        # SDA
 "18" = "gpio3"        # SCL
@@ -819,8 +830,8 @@ module_clock_source = "Feather RP2040 schematic: Y1 '12MHz/12pF' on XIN/XOUT; le
 "SCK" = "gpio18"
 "MOSI" = "gpio19"
 "MISO" = "gpio20"
-"RX" = "gpio1"
-"TX" = "gpio0"
+"RX" = "gpio1_rxd"
+"TX" = "gpio0_txd"
 "D4" = "gpio6"
 "SDA" = "gpio2"
 "SCL" = "gpio3"
@@ -955,4 +966,4 @@ basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 
 "24" = "PWM6 A (F4) (GPIO12)"
 "25" = "PWM6 B (F4) (GPIO13)"
 [models.pin_capability.timer_capture]
-basis = "Raspberry Pi RP2040 Datasheet (build-date 2025-02-20): the system timer (section 4.6.1 Overview, printed p.534) has one 64-bit counter and four match alarms and no input-capture channel; no pad latches a timer count on an edge (Table 2 GPIO Bank 0 Functions, section 1.4.3, printed pp.12-13, lists no capture function). PWM B-pin input mode (section 4.5.2.5, printed p.527) gates or counts edges but does not latch a timestamp, and PIO is not a fixed-function peripheral, so the package has no timer-capture pads."
+basis = "Raspberry Pi RP2040 Datasheet (build-date 2025-02-20): the system timer (section 4.6.1 Overview, printed p.534) has one 64-bit counter and four match alarms and no input-capture channel; no pad latches a timer count on an edge (Table 2 GPIO Bank 0 Functions, section 1.4.3, printed pp.12-13, lists no capture function). PWM B-pin input mode (section 4.5.2.5, printed p.526) gates or counts edges but does not latch a timestamp, and PIO is not a fixed-function peripheral, so the package has no timer-capture pads."

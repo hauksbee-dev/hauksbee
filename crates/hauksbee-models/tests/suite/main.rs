@@ -25,6 +25,7 @@ mod corpus_batch_resolve;
 mod corpus_coverage_ratchet;
 mod corpus_gap_cards;
 mod declared_coverage;
+mod dev_board_uart_labels;
 mod digital_pin_maps;
 mod diode_1n4148_packages;
 mod docs_generated;

@@ -99,7 +99,11 @@ fn an_esp32_devkitc_binds_by_header_label_whatever_the_pad_numbers() {
     assert_eq!(backend, "qemu:esp32");
     assert_eq!(hz, Some(40_000_000));
     assert_eq!(role(&roles, "J2-15"), "gpio13");
-    assert_eq!(role(&roles, "J3-4"), "gpio1", "TX is U0TXD = GPIO1");
+    assert_eq!(
+        role(&roles, "J3-4"),
+        "p01_txd",
+        "TX is U0TXD = GPIO1, named as the chip card names it"
+    );
     assert_eq!(role(&roles, "J2-2"), "en");
     assert_eq!(
         role(&roles, "J2-19"),
@@ -126,7 +130,7 @@ fn a_xiao_rp2040_binds_by_value_with_its_header_map_and_crystal() {
     assert_eq!(backend, "renode:rp2040");
     assert_eq!(hz, Some(12_000_000));
     assert_eq!(role(&roles, "1"), "gpio26_adc0");
-    assert_eq!(role(&roles, "7"), "gpio0");
+    assert_eq!(role(&roles, "7"), "gpio0_txd", "TX / D6 is UART0 TX");
     assert_eq!(role(&roles, "11"), "gpio3", "D10 / MOSI is GPIO3");
 }
 
@@ -154,11 +158,14 @@ fn each_xiao_esp32_binds_its_own_chip_family() {
     assert_eq!((backend.as_str(), hz), ("qemu:esp32c3", Some(40_000_000)));
     assert_eq!(
         (role(&roles, "7"), role(&roles, "11")),
-        ("gpio21", "gpio10")
+        ("gpio21_txd0", "gpio10")
     );
     let (backend, hz, roles) = bound(comp("XIAO-ESP32S3-DIP", "", "", pins));
     assert_eq!((backend.as_str(), hz), ("qemu:esp32s3", Some(40_000_000)));
-    assert_eq!((role(&roles, "7"), role(&roles, "11")), ("gpio43", "gpio9"));
+    assert_eq!(
+        (role(&roles, "7"), role(&roles, "11")),
+        ("gpio43_txd0", "gpio9")
+    );
 }
 
 #[test]
