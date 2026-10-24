@@ -18,8 +18,9 @@
 //!   the switch's job.
 //!
 //! Which nets a switch touches is decided from its pins' nets after the usual
-//! reading of a 4-pin tactile switch (two pins to a side), so a part that
-//! reaches three or more nets (a selector, a slide switch with a common
+//! reading of a 4-pin tactile switch (two pins to a side). A spare pad on its
+//! own net, or on a `KiCad` `unconnected-` placeholder net, touches nothing and
+//! is left out. A part that reaches three or more nets (a selector, a slide switch with a common
 //! terminal, a DIP bank) is never judged; neither is a net the switch reaches
 //! through a resistor, because net extraction never merges across a resistor
 //! and the resistor is the series resistance this check asks for.
@@ -220,7 +221,7 @@ fn bond_finding(board: &ExtractedBoard, sw: &Component) -> Option<LintFinding> {
     }
     let (pairs, source) = bond_pairs(sw)?;
     let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
-    let net = |i: usize| sw.pins[i].net.filter(|id| *id != 0);
+    let net = |i: usize| super::shared_net(board, &sw.pins[i]);
     let pad = |i: usize| sw.pins[i].number.trim().to_string();
     let how = match source {
         BondSource::Geometry => {
@@ -293,7 +294,7 @@ pub fn switch_short_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
         let nets: BTreeSet<i64> = sw
             .pins
             .iter()
-            .filter_map(|p| p.net.filter(|id| *id != 0))
+            .filter_map(|p| super::shared_net(board, p))
             .collect();
         let [a, b] = nets.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
@@ -359,6 +360,8 @@ mod tests {
     const SIG: i64 = 4;
     const SWITCHED: i64 = 5;
     const V3B: i64 = 6;
+    const UNCONN: i64 = 7;
+    const LONELY: i64 = 8;
 
     const NETS: [(i64, &str); 6] = [
         (V5, "+5V"),
@@ -382,8 +385,20 @@ mod tests {
         }
     }
 
-    fn run(parts: Vec<Component>) -> Vec<LintFinding> {
-        switch_short_lint(&board(&NETS, parts), &ModelLibrary::builtin()).findings
+    /// Run the check with a keeper part holding every named net: a real net
+    /// has a second pin, and a pin alone on its net is not judged.
+    fn run(mut parts: Vec<Component>) -> Vec<LintFinding> {
+        let pads: Vec<(String, i64)> = NETS
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (format!("{}", i + 1), *id))
+            .collect();
+        let pads: Vec<(&str, i64)> = pads.iter().map(|(n, id)| (n.as_str(), *id)).collect();
+        parts.push(part("KEEP1", "keeper", &pads));
+        let mut nets = NETS.to_vec();
+        nets.push((UNCONN, "unconnected-(SW1-Pad3)"));
+        nets.push((LONELY, "SPARE_PAD"));
+        switch_short_lint(&board(&nets, parts), &ModelLibrary::builtin()).findings
     }
 
     #[test]
@@ -643,5 +658,45 @@ mod tests {
         // Not connected at all: nothing to say.
         let found = run(vec![tact("SW_Tactile_6x6mm", [0, 0, 0, 0], None)]);
         assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// A spare pad on a `KiCad` `unconnected-` net, or alone on a net of its
+    /// own, connects to nothing: it is no third net of a selector and no side
+    /// of a bonded pair.
+    #[test]
+    fn a_spare_pad_on_an_unconnected_or_lone_net_is_ignored() {
+        for spare in [UNCONN, LONELY] {
+            // A clean button (rail to signal) with the spare pad bonded to the
+            // rail pad: no always-closed finding.
+            for nets in [[V3, spare, SIG, SIG], [V3, V3, SIG, spare]] {
+                for (footprint, place) in [
+                    ("SW_Tactile_6x6mm", None),
+                    ("Vendor_Button", Some(ROWS_6X6)),
+                ] {
+                    let found = run(vec![source_on(V3, "U1"), tact(footprint, nets, place)]);
+                    assert!(found.is_empty(), "{spare} {nets:?} {footprint}: {found:#?}");
+                }
+            }
+            // The spare pad does not hide a real short: rail, ground and a
+            // spare pad is still a rail shorted to ground.
+            let found = run(vec![
+                source_on(V3, "U1"),
+                switch("SW1", &[("1", V3), ("2", GND), ("3", spare)]),
+            ]);
+            assert_eq!(found.len(), 1, "{spare}: {found:#?}");
+            assert_eq!(found[0].nets, ["+3V3", "GND"]);
+        }
+    }
+
+    /// The control: the same wiring with the spare pad on a net that other
+    /// pads share is still judged.
+    #[test]
+    fn a_bonded_pad_on_a_shared_net_is_still_an_always_closed_switch() {
+        let found = run(vec![
+            source_on(V3, "U1"),
+            tact("SW_Tactile_6x6mm", [V3, SIG, GND, GND], None),
+        ]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(found[0].message.contains("always closed"));
     }
 }

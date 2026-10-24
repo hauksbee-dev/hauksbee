@@ -31,6 +31,14 @@
 //! drives the bus (its `SCK` or `MOSI` typed an output, its `MISO` an input)
 //! makes the MCU the slave, and that pad then counts as unlisted.
 //!
+//! `SDA` and `SCL` are also what the SPI display controllers (ST7735, ST7789,
+//! ILI9341 class) call their data input and clock, so the label alone is not
+//! an I2C bus. Such a line is read as SPI when the pad the MCU wires it to is an
+//! SPI data (`MOSI`) or clock (`SCK`) pad of the card and no I2C pad, or when the
+//! partner is a display controller by its pins (a data/command pin beside a
+//! chip select), which no I2C part has. A real I2C `SDA` on a pad with neither
+//! function is still reported.
+//!
 //! The table covers the hardware peripheral. A software (bit-banged) bus can
 //! use any pad, so a finding names the pads that could carry the function and
 //! leaves the choice to the firmware author. A PWM name alone is weaker evidence
@@ -83,6 +91,43 @@ fn bus_function(card_role: Option<&str>, symbol: &str) -> Option<PeripheralFunct
         }
     };
     card_role.and_then(from).or_else(|| from(symbol))
+}
+
+/// Whether `part` is an SPI display controller by its pins: a data/command
+/// select (`DC`, `D/C`, `A0`, `RS`) beside a chip select (`CS`, `CSX`, `SS`).
+///
+/// ST7735, ST7789, ILI9341 and the like name their SPI data input `SDA` and
+/// clock `SCL`; no I2C part has a data/command pin and a chip select.
+fn is_spi_display(part: &Component, card: Option<&ModelEntry>) -> bool {
+    let names: Vec<String> = part
+        .pins
+        .iter()
+        .flat_map(|p| {
+            [
+                Some(p.function.clone()),
+                card.and_then(|m| m.pins.get(&p.number).cloned()),
+            ]
+        })
+        .flatten()
+        .map(|n| n.to_ascii_lowercase())
+        .collect();
+    let has = |wanted: &[&str]| {
+        names.iter().any(|n| {
+            wanted.contains(&n.replace('/', "").as_str())
+                || n.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|w| wanted.contains(&w))
+        })
+    };
+    has(&["dc", "dcx", "a0", "rs"]) && has(&["cs", "csx", "ss"])
+}
+
+/// The SPI function an `SDA` or `SCL` label means on an SPI display.
+const fn spi_reading(f: PeripheralFunction) -> Option<PeripheralFunction> {
+    match f {
+        F::I2cSda => Some(F::SpiMosi),
+        F::I2cScl => Some(F::SpiSck),
+        _ => None,
+    }
 }
 
 /// What the parts on the nets around a pad say the line is.
@@ -160,6 +205,10 @@ fn evidence(board: &ExtractedBoard, lib: &ModelLibrary, mcu: &Component, net: i6
             let at = format!("{} pin {} ({})", part.reference, pin.number, pin.function);
             if let Some(f) = bus_function(role, &pin.function) {
                 let kind = pin.kind.trim().to_ascii_lowercase();
+                // An SPI display's `SDA`/`SCL` are its SPI data and clock.
+                let f = spi_reading(f)
+                    .filter(|_| is_spi_display(part, model.as_ref()))
+                    .unwrap_or(f);
                 e.mcu_is_slave |= match f {
                     F::SpiSck | F::SpiMosi => kind == "output",
                     F::SpiMiso => kind == "input",
@@ -302,6 +351,26 @@ fn alternatives(model: &ModelEntry, functions: &[PeripheralFunction], slave: boo
     }
 }
 
+/// Whether the I2C line asked for sits on a pad the card gives a serial-block
+/// signal of the right slot (`PAD[0]` for data, `PAD[1]` for clock) in another
+/// serial table, though its I2C table omits the pad.
+///
+/// The hardware can drive such a pad as I2C, but the datasheet's I2C pin table
+/// does not rate it (SAM D21 Table 7-5 leaves `PA00` and `PA01` out). That is a
+/// weaker statement than "the pad has no I2C function at all".
+fn serial_block_pad(model: &ModelEntry, tables: &[PeripheralFunction], pad: &str) -> bool {
+    let slot = match tables {
+        [F::I2cSda] => "PAD[0]",
+        [F::I2cScl] => "PAD[1]",
+        _ => return false,
+    };
+    [F::UartTx, F::UartRx, F::SpiSck, F::SpiMosi, F::SpiMiso]
+        .iter()
+        .filter_map(|f| model.pin_capability.table(*f))
+        .filter_map(|t| t.pads.get(pad))
+        .any(|signal| signal.to_ascii_uppercase().contains(slot))
+}
+
 /// What else the card says `pad` is, when it is the pad of another peripheral
 /// function than the ones asked for (`" (that pad is this part's I2C data (SDA))"`).
 fn also_text(model: &ModelEntry, asked: &[PeripheralFunction], pad: &str) -> String {
@@ -428,6 +497,17 @@ pub fn pin_mux_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport
             {
                 continue;
             }
+            // `SDA` or `SCL` on a pad the card lists for SPI data or clock (and
+            // not for I2C, or it would be carried above) is an SPI display's label.
+            if !serial_block_pad(&model, &tables, &pin.number)
+                && tables.iter().any(|f| {
+                    spi_reading(*f)
+                        .and_then(|spi| model.pin_capability.table(spi))
+                        .is_some_and(|t| t.pads.contains_key(&pin.number))
+                })
+            {
+                continue;
+            }
             // A pad listed only for the bus master, with a partner that is the master.
             let master_only = tables.iter().any(|f| {
                 model
@@ -438,19 +518,33 @@ pub fn pin_mux_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport
             let net_name = board.net(net).map_or_else(String::new, |n| n.name.clone());
             let directed = tables.len() == 1 && matches!(tables[0], F::UartRx | F::UartTx);
             let evidence_text = evidence_text(&ev, directed, &net_name);
+            let unrated = serial_block_pad(&model, &tables, &pin.number);
             let listed = if master_only {
                 "that pad for it only as a bus master (a USART's SPI mode has no slave \
                  role), but the partner here drives the bus, so this part is the slave"
+            } else if unrated {
+                "that pad in its serial-block tables but not in its I2C pin table"
             } else {
                 "no such function on that pad"
             };
-            let also = also_text(&model, &tables, &pin.number);
+            let also = if unrated {
+                String::new()
+            } else {
+                also_text(&model, &tables, &pin.number)
+            };
+            let tail = if unrated {
+                "The datasheet does not rate this pad for I2C (it is not in the I2C pin \
+                 table): the serial block can drive it, so it may work, but it is outside \
+                 spec. The rated I2C pads are"
+            } else {
+                "A hardware peripheral can reach only"
+            };
             report.findings.push(LintFinding {
                 check: LintCheck::PinMuxCapability,
-                severity: strength,
+                severity: if unrated { Severity::Low } else { strength },
                 message: format!(
                     "{} ({}) pad {} ({}) is wired as {wanted}, but the card '{}' lists {listed}{also}: \
-                     {evidence_text}. A hardware peripheral can reach only {}. Move the line to one of those pads; if the firmware will \
+                     {evidence_text}. {tail} {}. Move the line to one of those pads; if the firmware will \
                      bit-bang it in software this does not apply, but the hardware peripheral \
                      is then unavailable",
                     mcu.reference,
@@ -816,5 +910,173 @@ mod tests {
         assert!(found[0].message.contains("pad 13"), "{}", found[0].message);
         // The control: the same part, the clock on pad 13.
         assert!(on("13").is_empty());
+    }
+
+    /// A made-up serial-block MCU: pads 1 and 2 carry SERCOM `PAD[0]` and
+    /// `PAD[1]` for UART but the datasheet's I2C pin tables omit them (the
+    /// shape of SAM D21 Table 7-5); pads 3 and 5 are the rated I2C data and
+    /// clock pads; pad 4 has no serial function.
+    fn sercom_library() -> ModelLibrary {
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-pinmux-sercom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut card = String::from(
+            "[[models]]\nid = \"synth_sercom_mcu\"\nkind = \"mcu\"\n\
+             [models.match]\nvalue_re = \"(?i)^SYNTHSERCOM\"\n\
+             [models.pins]\n\"1\" = \"pa00\"\n\"2\" = \"pa01\"\n\"3\" = \"pa08\"\n\
+             \"4\" = \"pb06\"\n\"5\" = \"pa09\"\n",
+        );
+        let table = |key: &str, pads: &str| {
+            format!(
+                "[models.pin_capability.{key}]\nbasis = \"synthetic card, table 7-1 p.1\"\n\
+                 [models.pin_capability.{key}.pads]\n{pads}\n"
+            )
+        };
+        card += &table("i2c_sda", "\"3\" = \"SERCOM0 PAD[0] (PA08)\"");
+        card += &table("i2c_scl", "\"5\" = \"SERCOM0 PAD[1] (PA09)\"");
+        card += &table(
+            "uart_rx",
+            "\"1\" = \"SERCOM1 PAD[0] (PA00)\"\n\"2\" = \"SERCOM1 PAD[1] (PA01)\"",
+        );
+        for key in [
+            "spi_sck",
+            "spi_mosi",
+            "spi_miso",
+            "uart_tx",
+            "pwm",
+            "timer_capture",
+        ] {
+            card += &table(key, "");
+        }
+        std::fs::write(dir.join("sercom.toml"), card).expect("write card");
+        ModelLibrary::builtin()
+            .with_user_dir(&dir)
+            .expect("synthetic card loads")
+    }
+
+    #[test]
+    fn an_i2c_pad_the_datasheet_does_not_rate_is_a_low_note_and_a_pad_with_no_i2c_stays_medium() {
+        let lib = sercom_library();
+        let nets = [(GND, "GND"), (A, "SDA"), (B, "SCL")];
+        let on = |sda: &str, scl: &str| {
+            pin_mux_lint(
+                &board(
+                    &nets,
+                    vec![
+                        part("U1", "SYNTHSERCOM", &[(sda, A), (scl, B)]),
+                        sensor(&[("1", "SDA", A), ("2", "SCL", B)]),
+                    ],
+                ),
+                &lib,
+            )
+            .findings
+        };
+        // The rated pads: silent.
+        assert!(on("3", "5").is_empty());
+        // SERCOM PAD[0] / PAD[1] on pads 1 and 2: the block can drive I2C but
+        // the datasheet does not rate it; a lower-severity, distinct finding.
+        let found = on("1", "2");
+        assert_eq!(found.len(), 2, "{found:#?}");
+        for f in &found {
+            assert_eq!(f.severity, Severity::Low, "{}", f.message);
+            assert!(
+                f.message.contains("does not rate this pad for I2C")
+                    && f.message.contains("outside spec"),
+                "{}",
+                f.message
+            );
+        }
+        // A pad with no I2C function at all (pad 4), and the wrong slot (SDA
+        // on a PAD[1] pad), stay the Medium finding.
+        for (sda, scl) in [("4", "5"), ("2", "5")] {
+            let found = on(sda, scl);
+            assert_eq!(found.len(), 1, "{sda}: {found:#?}");
+            assert_eq!(found[0].severity, Severity::Medium);
+            assert!(found[0].message.contains("no such function on that pad"));
+        }
+    }
+
+    /// An SPI display controller (ST7735, ST7789, ILI9341 class): `SDA` and
+    /// `SCL` are its SPI data and clock, beside a chip select and a
+    /// data/command pin.
+    fn spi_display(sda: i64, scl: i64) -> Component {
+        let mut u = sensor(&[
+            ("1", "SDA", sda),
+            ("2", "SCL", scl),
+            ("3", "DC", 4),
+            ("4", "CS", 5),
+        ]);
+        u.reference = "U3".into();
+        u
+    }
+
+    #[test]
+    fn sda_and_scl_on_the_spi_pads_of_the_card_are_an_spi_display_not_an_i2c_bus() {
+        let nets = [
+            (GND, "GND"),
+            (A, "SDA"),
+            (B, "SCL"),
+            (4, "LCD_DC"),
+            (5, "LCD_CS"),
+        ];
+        // The labels alone: PB3 (pad 17, MOSI) and PB5 (pad 19, SCK) carry SPI
+        // and no I2C, so the partner pins are the SPI display's, even with a
+        // part that shows nothing else about itself.
+        let plain = sensor(&[("1", "SDA", A), ("2", "SCL", B)]);
+        let found = run(&nets, vec![mcu(&[("17", A), ("19", B)]), plain]);
+        assert!(found.is_empty(), "{found:#?}");
+        // The same through a display with its DC and CS pins.
+        let found = run(&nets, vec![mcu(&[("17", A), ("19", B)]), spi_display(A, B)]);
+        assert!(found.is_empty(), "{found:#?}");
+        // The control: a real I2C bus on pads with neither function is reported.
+        let found = run(
+            &nets,
+            vec![mcu(&[("4", A), ("5", B)]), spi_display_free(A, B)],
+        );
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(
+            found[0].message.contains("I2C data (SDA)"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    /// A part with the I2C pins `SDA` and `SCL` only: no data/command pin, no
+    /// chip select.
+    fn spi_display_free(sda: i64, scl: i64) -> Component {
+        sensor(&[("1", "SDA", sda), ("2", "SCL", scl)])
+    }
+
+    #[test]
+    fn a_display_controllers_sda_is_read_as_spi_data_wherever_it_is_wired() {
+        // Net names that say nothing, a display on pads without hardware SPI
+        // (PB0, PD2): reported as SPI, never as an I2C bus.
+        let nets = [
+            (GND, "GND"),
+            (A, "LCD_DIN"),
+            (B, "LCD_CLK"),
+            (4, "LCD_DC"),
+            (5, "LCD_CS"),
+        ];
+        let found = run(&nets, vec![mcu(&[("14", A), ("4", B)]), spi_display(A, B)]);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        for f in &found {
+            assert!(
+                !f.message.contains("I2C") && f.message.contains("SPI"),
+                "{}",
+                f.message
+            );
+        }
+        // On the SPI pads it is silent.
+        let found = run(&nets, vec![mcu(&[("17", A), ("19", B)]), spi_display(A, B)]);
+        assert!(found.is_empty(), "{found:#?}");
+        // Control: the same wiring with a part that has no DC and CS pins is an
+        // I2C bus by its pins and is reported as one.
+        let found = run(
+            &nets,
+            vec![mcu(&[("14", A), ("4", B)]), spi_display_free(A, B)],
+        );
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found[0].message.contains("I2C"), "{}", found[0].message);
     }
 }
