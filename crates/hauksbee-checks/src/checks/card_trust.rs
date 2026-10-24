@@ -78,6 +78,7 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::PolarisedCapReversed
         | LintCheck::RailUnpowered
         | LintCheck::DatasheetMismatch
+        | LintCheck::PartFieldMismatch
         | LintCheck::SignalDirection
         | LintCheck::DebugHeaderPinout
         | LintCheck::SwitchShort => None,

@@ -3952,6 +3952,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::DatasheetMismatch => {
             "Replace the Datasheet field with the datasheet for this part's own part number."
         }
+        LintCheck::PartFieldMismatch => {
+            "Make the part number, value, footprint and symbol name one part: order the part the board needs, or correct the field that is wrong."
+        }
         LintCheck::PlaceholderValue => {
             "Replace the placeholder with the actual passive value before ordering or trusting simulation."
         }
