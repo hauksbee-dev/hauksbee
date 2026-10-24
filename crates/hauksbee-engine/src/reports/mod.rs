@@ -113,7 +113,7 @@ pub fn kicad_pro_clearance_rules(
     board_path: &Path,
     board: &ExtractedBoard,
 ) -> Option<hauksbee_extract::ClearanceRules> {
-    let text = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok()?;
+    let text = crate::board_input::sibling_text(board_path, "kicad_pro")?.ok()?;
     // A syntactically valid project with no usable class still leaves the DRC
     // on the extractor fallback. Do not let `Some(defaults)` promote that to
     // project-backed evidence.
@@ -165,7 +165,7 @@ pub fn kicad_pro_clearance_rule_provenance(
     } else {
         crate::result::ClearanceRuleProvenance::defaulted(
             value_mm,
-            board_path.with_extension("kicad_pro").is_file(),
+            crate::board_input::sibling_text(board_path, "kicad_pro").is_some(),
         )
     }
 }
@@ -193,49 +193,50 @@ impl KicadClearanceInput {
         let project_rules_read = rules.is_some();
         let project_value_mm = rules.as_ref().map(|rules| rules.default_clearance_mm);
         let custom_path = board_path.with_extension("kicad_dru");
-        let (custom_global_mm, custom_coverage) = if custom_path.is_file() {
-            let text = std::fs::read_to_string(&custom_path).with_context(|| {
-                format!("failed to read custom rules file {}", custom_path.display())
-            })?;
-            let file_name = custom_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("sibling .kicad_dru")
-                .to_string();
-            // A file or rule this reader cannot interpret never stops the run:
-            // it is disclosed as a rule that was not checked.
-            match hauksbee_extract::parse_kicad_dru(&text) {
-                Ok(parsed) => {
-                    let coverage =
-                        crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
-                    let global = parsed.global_clearance_mm();
-                    // Every clearance rule the file sets governs the pairs its
-                    // condition and layer select, last matching rule first;
-                    // the unconditional one is also the report-wide value.
-                    let custom = parsed.clearance_rules();
-                    if !custom.is_empty() {
-                        rules
-                            .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
-                            .set_custom_rules(custom);
+        let (custom_global_mm, custom_coverage) =
+            if let Some(read) = crate::board_input::sibling_text(board_path, "kicad_dru") {
+                let text = read.with_context(|| {
+                    format!("failed to read custom rules file {}", custom_path.display())
+                })?;
+                let file_name = custom_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("sibling .kicad_dru")
+                    .to_string();
+                // A file or rule this reader cannot interpret never stops the run:
+                // it is disclosed as a rule that was not checked.
+                match hauksbee_extract::parse_kicad_dru(&text) {
+                    Ok(parsed) => {
+                        let coverage =
+                            crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
+                        let global = parsed.global_clearance_mm();
+                        // Every clearance rule the file sets governs the pairs its
+                        // condition and layer select, last matching rule first;
+                        // the unconditional one is also the report-wide value.
+                        let custom = parsed.clearance_rules();
+                        if !custom.is_empty() {
+                            rules
+                                .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
+                                .set_custom_rules(custom);
+                        }
+                        if let Some(clearance_mm) = global {
+                            rules
+                                .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
+                                .apply_global_clearance_override(clearance_mm);
+                        }
+                        (global, Some(coverage))
                     }
-                    if let Some(clearance_mm) = global {
-                        rules
-                            .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
-                            .apply_global_clearance_override(clearance_mm);
-                    }
-                    (global, Some(coverage))
+                    Err(error) => (
+                        None,
+                        Some(crate::result::CustomRulesCoverage::unreadable(
+                            file_name,
+                            error.to_string(),
+                        )),
+                    ),
                 }
-                Err(error) => (
-                    None,
-                    Some(crate::result::CustomRulesCoverage::unreadable(
-                        file_name,
-                        error.to_string(),
-                    )),
-                ),
-            }
-        } else {
-            (None, None)
-        };
+            } else {
+                (None, None)
+            };
         Ok(Self {
             rules,
             project_rules_read,
@@ -366,7 +367,7 @@ pub(crate) fn run_drc(
         )?
     };
     if !altium_present {
-        let pro = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok();
+        let pro = crate::board_input::sibling_text(board_path, "kicad_pro").and_then(Result::ok);
         let exclusions: Vec<String> = pro
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
             .and_then(|value| {

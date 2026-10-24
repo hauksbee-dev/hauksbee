@@ -741,11 +741,23 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     // A `.zip` is a fab archive, the same form the web drop zone accepts.
     // Within it, prefer its own IPC-D-356 connectivity before falling back to
     // gerber reconstruction.
-    let is_zip = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    let is_zip = crate::zip_project::is_zip_path(path);
     if is_zip {
+        // A zip that carries a KiCad project is that project, read as if it had
+        // been unpacked into a directory. Checked first: a project zip often
+        // also holds fab output, and the source says more than the artwork.
+        if let Some(unpacked) =
+            crate::zip_project::unpack(std::io::Cursor::new(raw.as_slice()), &file_name)?
+        {
+            // Said on stderr, as for a directory holding one board file: a reader
+            // note would mark the whole input as degraded, which it is not.
+            eprintln!(
+                "note: '{}' is a zip holding a KiCad project; using its design: {}",
+                path.display(),
+                unpacked.member
+            );
+            return from_path(&unpacked.design);
+        }
         if let Some(norm) = ipc356_from_fab_zip(&file_name, &raw)? {
             return Ok(with_name_fallback(norm, path));
         }
@@ -754,7 +766,14 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
             // a FIRMWARE project zipped by mistake; say where firmware goes
             // instead of only rejecting.
             zip_firmware_marker(&raw).map_or_else(
-                || BoardInputError::Gerber(gerber_path_message(path, &e.to_string())),
+                || {
+                    BoardInputError::Gerber(format!(
+                        "{} A zip holding a KiCad project (.kicad_pro, .kicad_sch or \
+                         .kicad_pcb) is read as that project; this one has none, so a \
+                         schematic or PCB source is needed unless the gerber set is complete.",
+                        gerber_path_message(path, &e.to_string())
+                    ))
+                },
                 |marker| BoardInputError::Zip(firmware_zip_message(&file_name, marker)),
             )
         })?;
@@ -863,6 +882,24 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         InputKind::Text,
         notes,
     ))
+}
+
+/// The text of the project file beside a board (`<stem>.<ext>`, for example
+/// `kicad_pro` or `kicad_dru`), or `None` when there is none.
+///
+/// For a zip the file is read from inside the archive, from the project
+/// [`from_path`] reads, so settings that travel with a zipped `KiCad` project
+/// reach the checks exactly as they do beside an unpacked one. Every other
+/// board path reads the sibling on disk.
+#[must_use]
+pub fn sibling_text(board_path: &Path, ext: &str) -> Option<std::io::Result<String>> {
+    if crate::zip_project::is_zip_path(board_path) && board_path.is_file() {
+        return crate::zip_project::sibling_text(board_path, ext);
+    }
+    let sibling = board_path.with_extension(ext);
+    sibling
+        .is_file()
+        .then(|| hauksbee_extract::read_regular_string(&sibling))
 }
 
 /// An EasyEDA board or project archive in `raw`, or `None` when it is neither.

@@ -4243,6 +4243,45 @@ mod tests {
     }
 
     #[test]
+    fn load_board_accepts_a_zip_holding_a_kicad_project() {
+        use std::io::Write;
+        // A spec may point at a project zip: the same board as the loose file.
+        let dir = std::env::temp_dir().join(format!("hauksbee-ci-zproj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("design.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        for (name, bytes) in [
+            ("proj/cell.kicad_pro", b"{}".as_slice()),
+            ("proj/cell.kicad_pcb", PLACED_BOARD),
+        ] {
+            w.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap();
+        let board = load_board(&zip_path).expect("a project zip must load in CI");
+        assert_eq!(board.components.len(), 1);
+        assert!(board.nets.iter().any(|n| n.name == "A"));
+
+        // A zip holding two projects names both instead of choosing one.
+        let two = dir.join("two.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&two).unwrap());
+        for name in ["a/x.kicad_pcb", "b/y.kicad_pcb"] {
+            w.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(PLACED_BOARD).unwrap();
+        }
+        w.finish().unwrap();
+        let err = load_board(&two).expect_err("two projects must not be guessed between");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("a/x.kicad_pcb") && msg.contains("b/y.kicad_pcb"),
+            "{msg}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_board_missing_file_names_the_spec_key() {
         // The spec-relative wording must survive the normalizer delegation.
         let err = load_board(std::path::Path::new("/definitely/not/here.kicad_pcb"))
