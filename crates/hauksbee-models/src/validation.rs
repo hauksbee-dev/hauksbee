@@ -2900,6 +2900,242 @@ pub fn draft_pin_map_problems(entry: &ModelEntry) -> Vec<String> {
     (!unread.is_empty()).then_some(why).into_iter().collect()
 }
 
+// ── Per-pin absolute maxima ───────────────────────────────────────────────────
+
+/// What the extraction prompt says of a pin's own absolute maximum.
+///
+/// A `[[models.source.characteristic]]` row is provenance only and no check reads it, so a
+/// per-pin figure printed in the Absolute Maximum Ratings table is carried by an envelope row
+/// ([`pin_abs_max_problems`] holds a draft to that).
+pub const PIN_ABS_MAX_RULES: &str = r#"PER-PIN ABSOLUTE MAXIMA: go through every row of Absolute Maximum Ratings that names a
+signal pin, a pin group or a pin's function (a VBUS-sense pin, an oscillator input, a
+"5-V tolerant" I/O) with its own ground-referenced maximum. Each such pin gets an
+input_tolerance row naming its role in `pins`, with `max_v` its recommended maximum (the
+absolute maximum itself when the sheet prints only that) and `abs_max_v` the absolute
+maximum, and `basis`/`abs_max_basis` naming the table and row. A characteristic row alone
+is provenance and no check reads it: a pin printed as 1.4 V maximum, or as 5-V tolerant,
+that is left to a characteristic row is judged as if it took the supply. Only a pin the
+sheet rates by its supply (VCC + 0.3 V) or only against another pin, and a pin the part
+drives, takes no row; say so for a named pin with a [[models.source.uncertainty]] status =
+"unknown", parameter = the pin's role, reason naming the table checked."#;
+
+/// A pin's own ground-referenced absolute maximum, as a characteristic row prints it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinAbsMax {
+    /// The `[models.pins]` role the row names.
+    pub role: String,
+    /// The printed maximum, V.
+    pub max_v: f64,
+    /// The row's `parameter`, as printed.
+    pub parameter: String,
+}
+
+/// Whether `role` names a pin that senses a bus voltage above the part's supply by design
+/// (`usb_vbus`, `vbus_sense`, `vbus_det`).
+///
+/// The bare `vbus` role is a regulator or monitor feed, rated through its supply row. A sense pin
+/// is the card's to rate: its `input_tolerance` row says how much it takes.
+#[must_use]
+pub fn is_vbus_sense_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    r.contains("vbus") && r != "vbus"
+}
+
+/// Whether `text` words an absolute maximum.
+fn says_absolute_maximum(text: &str) -> bool {
+    let squashed = text.to_ascii_lowercase().replace(['-', '_', '.'], " ");
+    squashed.contains("absolute max") || squashed.contains("abs max")
+}
+
+/// Letters and digits of `name` alone, lower-cased: `USB_VBUS` and `usb vbus` read alike.
+fn folded(name: &str) -> String {
+    name.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether a signal pin of this role takes a ground-referenced rating of its own.
+///
+/// A supply, return, switch node, boot pin or regulator output is rated by its supply or output
+/// row, and a driven logic output by VCC + 0.5 V.
+fn takes_pin_rating(entry: &ModelEntry, role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    let rail = [
+        "vcc", "vdd", "vss", "gnd", "vcap", "vout", "vbat", "vsys", "vmot", "boot",
+    ]
+    .iter()
+    .any(|k| r.contains(k));
+    let feed = matches!(
+        r.as_str(),
+        "in" | "vin" | "pvin" | "avin" | "vm" | "out" | "nc" | "ep"
+    );
+    !(rail
+        || feed
+        || r.starts_with("bst")
+        || crate::pin_roles::power_pin(&r, entry.kind).is_some()
+        || crate::pin_roles::is_switch_node_role(&r)
+        || entry
+            .logic
+            .outputs
+            .iter()
+            .any(|o| o.eq_ignore_ascii_case(&r))
+        || entry
+            .supply_outputs
+            .iter()
+            .any(|o| o.role.eq_ignore_ascii_case(&r)))
+}
+
+/// The roles of `entry` that `row`'s text names as the pins it rates (before any `to <reference>`).
+///
+/// A row rated against another pin that is no ground (`BST to SW`) names none.
+fn rated_roles(entry: &ModelEntry, row: &Characteristic) -> Vec<String> {
+    let lower = row.parameter.to_ascii_lowercase();
+    if lower.contains("differential") {
+        return Vec::new();
+    }
+    let (subject, reference) = lower.split_once(" to ").unwrap_or((lower.as_str(), ""));
+    // A rating between two of the card's own pins (`gate-source`, `between XI and XO`) is no
+    // ground-referenced figure for either.
+    let is_role = |name: &str| entry.pins.values().any(|role| folded(role) == folded(name));
+    let pin_pair = subject.split_whitespace().any(|token| {
+        let parts: Vec<&str> = token
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+            .collect();
+        parts.len() >= 2 && parts.iter().all(|p| is_role(p))
+    });
+    if pin_pair || subject.contains(" between ") {
+        return Vec::new();
+    }
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| !w.is_empty())
+            .map(folded)
+            .collect()
+    };
+    let (subject, reference) = (words(subject), words(reference));
+    let against_a_pin = reference.iter().any(|w| {
+        entry.pins.values().any(|role| {
+            folded(role) == *w
+                && crate::pin_roles::power_pin(role, entry.kind)
+                    .is_none_or(|p| p.kind != crate::pin_roles::PowerKind::Return)
+        })
+    });
+    if against_a_pin {
+        return Vec::new();
+    }
+    let mut roles: Vec<String> = entry
+        .pins
+        .values()
+        .map(|r| r.to_ascii_lowercase())
+        .filter(|r| {
+            subject.contains(&folded(r)) || row.pins.iter().any(|p| p.eq_ignore_ascii_case(r))
+        })
+        .filter(|r| takes_pin_rating(entry, r))
+        .collect();
+    roles.sort();
+    roles.dedup();
+    roles
+}
+
+/// Every per-pin absolute maximum the characteristic rows of `entry` print.
+///
+/// Each is a volt row worded as an absolute maximum with a finite `max` that names a signal pin of
+/// the card, or lists it in its `pins`.
+#[must_use]
+pub fn pin_abs_max_rows(entry: &ModelEntry) -> Vec<PinAbsMax> {
+    let Some(source) = entry.source.as_ref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in &source.characteristic {
+        let volts = row.unit.trim().eq_ignore_ascii_case("v");
+        let Some(max_v) = row.max.filter(|m| m.is_finite() && *m > 0.0 && volts) else {
+            continue;
+        };
+        if !says_absolute_maximum(&row.parameter) {
+            continue;
+        }
+        for role in rated_roles(entry, row) {
+            out.push(PinAbsMax {
+                role,
+                max_v,
+                parameter: row.parameter.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Whether an uncertainty record of `entry` names `role` as a pin with no ground-referenced rating.
+fn uncertainty_names(entry: &ModelEntry, role: &str) -> bool {
+    let key = folded(role);
+    entry.source.as_ref().is_some_and(|s| {
+        s.uncertainty.iter().any(|u| {
+            let (ModelUncertainty::Interval { parameter, .. }
+            | ModelUncertainty::Unknown { parameter, .. }) = u;
+            parameter
+                .to_ascii_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .any(|w| folded(w) == key)
+        })
+    })
+}
+
+/// The per-pin absolute maxima of `entry` no envelope row carries.
+///
+/// A role is carried by an `input_tolerance` row, a `supply_range` on a pin that is no sense input
+/// ([`crate::declared_pin_ceiling_v`]), or an uncertainty record naming it.
+#[must_use]
+pub fn unrated_pin_abs_max(entry: &ModelEntry) -> Vec<PinAbsMax> {
+    pin_abs_max_rows(entry)
+        .into_iter()
+        .filter(|row| {
+            crate::declared_pin_ceiling_v(&entry.envelope, &row.role).is_none()
+                && !uncertainty_names(entry, &row.role)
+        })
+        .collect()
+}
+
+/// What a machine draft must carry for each pin's own absolute maximum, beyond [`validate`].
+///
+/// A characteristic row that prints a pin's ground-referenced maximum is provenance, which no
+/// check reads: the pin is then judged as if its supply rated it. So a named pin has an envelope
+/// row ([`unrated_pin_abs_max`]), and no row rates a pin for more than its own row prints.
+#[must_use]
+pub fn pin_abs_max_problems(entry: &ModelEntry) -> Vec<String> {
+    let mut out: Vec<String> = unrated_pin_abs_max(entry)
+        .iter()
+        .map(|row| {
+            format!(
+                "[[models.source.characteristic]] '{}' prints a {} V absolute maximum for pin \
+                 '{}', and no check reads a characteristic row: add [[models.envelope]] kind = \
+                 \"input_tolerance\", pins = [\"{}\"], max_v (its recommended maximum, else the \
+                 same figure), abs_max_v = {}, basis and abs_max_basis naming the tables. A pin \
+                 the sheet rates only by its supply, or against another pin, is instead named \
+                 by a [[models.source.uncertainty]] status = \"unknown\" with parameter = \
+                 \"{}\" and a reason naming the table checked",
+                row.parameter, row.max_v, row.role, row.role, row.max_v, row.role
+            )
+        })
+        .collect();
+    for row in pin_abs_max_rows(entry) {
+        let declared = crate::declared_pin_ceiling_v(&entry.envelope, &row.role);
+        if let Some(ceiling) = declared.filter(|c| *c > row.max_v + 1e-9) {
+            out.push(format!(
+                "pin '{}' is rated {ceiling} V by its envelope row, but its \
+                 [[models.source.characteristic]] '{}' prints an absolute maximum of {} V: the \
+                 envelope row's abs_max_v is that figure",
+                row.role, row.parameter, row.max_v
+            ));
+        }
+    }
+    out.dedup();
+    out
+}
+
 // ── Kind vocabulary help ──────────────────────────────────────────────────────
 
 /// Every TOML spelling [`ComponentKind`] accepts, in declaration order. Kept
@@ -3832,6 +4068,130 @@ mod tests {
             "abs_max_basis",
         );
         rejects(&fixture("pins = [\"a\"]\nmax_v = 5.5"), "basis");
+    }
+
+    /// A hub-like card whose Absolute Maximum Ratings print a per-pin maximum
+    /// for a VBUS-sense pin and a clock input, as `[[models.source.characteristic]]`
+    /// rows; `rest` is appended (envelope rows, uncertainty records).
+    fn hub_with_pin_rows(rest: &str) -> ModelEntry {
+        toml::from_str(&format!(
+            "id = \"hub\"\nkind = \"digital\"\n[pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n\
+             \"3\" = \"usb_vbus\"\n\"4\" = \"xi\"\n\"5\" = \"gpio\"\n\
+             [params]\nidentity_only = true\nwarning = \"identity only\"\n\
+             unlocked_by = \"validated behavior\"\n\
+             [source]\ntier = \"datasheet-derived\"\n\
+             [[source.characteristic]]\nparameter = \"USB_VBUS pin, absolute maximum\"\n\
+             max = 1.4\nunit = \"V\"\nconditions = \"\"\nbasis = \"Table 5-1\"\n\
+             [[source.characteristic]]\nparameter = \"XI pins, absolute maximum\"\n\
+             max = 2.45\nunit = \"V\"\nconditions = \"\"\nbasis = \"Table 5-1\"\n\
+             [[source.characteristic]]\nparameter = \"VDD supply voltage, absolute maximum\"\n\
+             max = 4.0\nunit = \"V\"\nconditions = \"\"\nbasis = \"Table 5-1\"\n{rest}"
+        ))
+        .unwrap()
+    }
+
+    fn tolerance_row(role: &str, abs_max_v: f64) -> String {
+        format!(
+            "[[envelope]]\nkind = \"input_tolerance\"\npins = [\"{role}\"]\nmax_v = {abs_max_v}\n\
+             abs_max_v = {abs_max_v}\nbasis = \"Table 5-3\"\nabs_max_basis = \"Table 5-1\"\n"
+        )
+    }
+
+    /// A per-pin absolute maximum left as a characteristic row (provenance no
+    /// check reads) is a problem for each named signal pin; the supply row is
+    /// not, and an `input_tolerance` row (or an uncertainty record naming the
+    /// pin) clears it. A row that rates the pin above its own printed maximum
+    /// is a problem too.
+    #[test]
+    fn a_pin_absolute_maximum_left_as_a_characteristic_row_is_a_draft_problem() {
+        let bare = hub_with_pin_rows("");
+        let rows = pin_abs_max_rows(&bare);
+        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(
+            roles,
+            ["usb_vbus", "xi"],
+            "{rows:?}: the supply row names no signal pin"
+        );
+        let problems = pin_abs_max_problems(&bare);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].contains("usb_vbus") && problems[0].contains("input_tolerance"));
+
+        let both = format!(
+            "{}{}",
+            tolerance_row("usb_vbus", 1.4),
+            tolerance_row("xi", 2.45)
+        );
+        assert!(pin_abs_max_problems(&hub_with_pin_rows(&both)).is_empty());
+        accepts(&hub_with_pin_rows(&both));
+
+        // One pin rated: only the other is reported.
+        let one = pin_abs_max_problems(&hub_with_pin_rows(&tolerance_row("xi", 2.45)));
+        assert_eq!(one.len(), 1, "{one:?}");
+        assert!(one[0].contains("usb_vbus"));
+
+        // Recorded as unrated by a named uncertainty record.
+        let recorded = "[[source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"usb_vbus\"\n\
+                        reason = \"rated against VDD only (Table 5-1 note 2)\"\n";
+        let cleared = pin_abs_max_problems(&hub_with_pin_rows(&format!(
+            "{recorded}{}",
+            tolerance_row("xi", 2.45)
+        )));
+        assert!(cleared.is_empty(), "{cleared:?}");
+
+        // A row rating the pin above the figure its own row prints is refused.
+        let over = pin_abs_max_problems(&hub_with_pin_rows(&format!(
+            "{}{}",
+            tolerance_row("usb_vbus", 6.5),
+            tolerance_row("xi", 2.45)
+        )));
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert!(
+            over[0].contains("usb_vbus") && over[0].contains("1.4"),
+            "{over:?}"
+        );
+    }
+
+    /// Rows that rate no single signal pin to ground raise nothing: a pin pair,
+    /// a differential input, a pin rated against another pin, a driven output
+    /// and a supply.
+    #[test]
+    fn rows_that_rate_no_signal_pin_to_ground_raise_no_problem() {
+        let row = |parameter: &str| {
+            let mut e = hub_with_pin_rows("");
+            let source = e.source.as_mut().unwrap();
+            source
+                .characteristic
+                .retain(|c| c.parameter.contains("VDD"));
+            let mut extra = source.characteristic[0].clone();
+            extra.parameter = parameter.into();
+            extra.max = Some(6.0);
+            source.characteristic.push(extra);
+            e.pins.insert("6".into(), "sw".into());
+            e.pins.insert("7".into(), "bst".into());
+            e.pins.insert("8".into(), "q".into());
+            e.logic.outputs.push("q".into());
+            pin_abs_max_rows(&e)
+        };
+        assert!(row("XI differential voltage, absolute maximum").is_empty());
+        assert!(row("BST to SW absolute maximum").is_empty());
+        assert!(
+            row("Q pin voltage, absolute maximum").is_empty(),
+            "a driven output"
+        );
+        assert!(
+            row("SW to GND absolute maximum").is_empty(),
+            "a switch node"
+        );
+        assert!(row("VDD to GND absolute maximum").is_empty(), "a supply");
+        assert!(row("Lead temperature").is_empty(), "no maximum worded");
+        assert!(
+            row("XI-GPIO voltage absolute maximum").is_empty(),
+            "a pin pair"
+        );
+        assert!(row("Voltage between XI and GPIO, absolute maximum").is_empty());
+        // Controls: the same wording on a signal pin, and a ground-referenced pair.
+        assert_eq!(row("XI to GND absolute maximum").len(), 1);
+        assert_eq!(row("XI, GPIO to GND absolute maximum").len(), 2);
     }
 
     #[test]

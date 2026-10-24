@@ -159,3 +159,37 @@ fn a_supply_pin_with_its_own_absolute_maximum_row_enforces_it() {
         offenders.join("\n  ")
     );
 }
+
+/// A signal pin whose own ground-referenced absolute maximum a card prints as a
+/// characteristic row (provenance no check reads) carries it as an
+/// `input_tolerance` row, or names the pin in an uncertainty record. Otherwise
+/// the pin is judged as if its supply rated it: a 1.4 V sense pin fed from 5 V
+/// goes unreported, and a 5 V-tolerant pin pulled up to 5 V is called
+/// back-powering.
+#[test]
+fn every_shipped_pin_absolute_maximum_is_carried_by_an_envelope_row() {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+    let (mut offenders, mut rows) = (Vec::new(), 0);
+    for path in std::fs::read_dir(db)
+        .expect("db dir")
+        .flatten()
+        .map(|f| f.path())
+    {
+        let text = std::fs::read_to_string(&path).expect("db file");
+        let Ok(file) = toml::from_str::<DbFile>(&text) else {
+            continue;
+        };
+        for entry in &file.models {
+            rows += hauksbee_models::validation::pin_abs_max_rows(entry).len();
+            for problem in hauksbee_models::validation::pin_abs_max_problems(entry) {
+                offenders.push(format!("{}: {problem}", entry.id));
+            }
+        }
+    }
+    assert!(rows > 5, "only {rows} per-pin absolute maxima were seen");
+    assert!(
+        offenders.is_empty(),
+        "per-pin absolute maxima no envelope row carries:\n  {}",
+        offenders.join("\n  ")
+    );
+}

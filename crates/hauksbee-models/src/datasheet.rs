@@ -2416,6 +2416,8 @@ For kind="{entry_kind}", the required params are:
 
 {envelope_rules}
 
+{pin_abs_max_rules}
+
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
 - Absolute Maximum Ratings is a separate stress table and does not promise
@@ -2459,6 +2461,7 @@ WHERE TO LOOK AND HOW TO READ IT:
         pin_role_guidance = PIN_ROLE_GUIDANCE,
         ratings_rules = RATINGS_RULES,
         envelope_rules = ENVELOPE_RULES,
+        pin_abs_max_rules = crate::validation::PIN_ABS_MAX_RULES,
         pin_numbering = pin_numbering(),
         extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
@@ -6610,6 +6613,10 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     let problems = crate::validation::draft_pin_map_problems(entry);
     if !problems.is_empty() {
         bail!("pin map: {}", problems.join("; "));
+    }
+    let unrated = crate::validation::pin_abs_max_problems(entry);
+    if !unrated.is_empty() {
+        bail!("pin absolute maxima: {}", unrated.join("; "));
     }
     if let Some(problem) = crate::validation::adjustable_seed_problem(entry) {
         bail!("{problem}");
