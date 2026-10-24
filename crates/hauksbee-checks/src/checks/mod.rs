@@ -742,9 +742,14 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     // where it is tied to a named rail (3.3 V into a 5 V CMOS input). The ADC
     // source-impedance half is pure topology and runs either way.
     lint_tick(12);
-    report.findings.extend(judged.analog);
+    let analog = judged.analog;
+    drop_back_power_read_as_divider(&mut report, &analog);
+    report.findings.extend(analog);
     lint_tick(10);
-    report.findings.extend(judged.logic);
+    // An input driven past its supply is the back-power check's finding too
+    // when the same part and net are already reported there.
+    let logic = without_back_power_overlap(&report, judged.logic);
+    report.findings.extend(logic);
     lint_tick(12);
     for finding in model_controls::model_control_lint(board, lib).findings {
         // Schematic/netlist extraction can already carry the pin function and
@@ -766,6 +771,39 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     // shared SPI MISO line) takes the pin-type contention finding away.
     output_release::drop_released_contention(&mut report, board, lib);
     report
+}
+
+/// Drops the back-power check's reading of a pad as a pull-up to the full rail
+/// where the ADC judge read the same pad through its divider ratio, which is the
+/// more exact statement of the same fault.
+fn drop_back_power_read_as_divider(report: &mut NetLintReport, analog: &[LintFinding]) {
+    let taps: Vec<_> = analog
+        .iter()
+        .filter(|f| f.message.starts_with(analog_inputs::ADC_RANGE_LEAD))
+        .collect();
+    report.findings.retain(|r| {
+        let superseded = |a: &&LintFinding| {
+            r.refs.first() == a.refs.first() && r.nets.iter().all(|n| a.nets.contains(n))
+        };
+        r.check != LintCheck::BackPower || !taps.iter().any(superseded)
+    });
+}
+
+/// `logic` less the overdrive findings the back-power check already reports.
+fn without_back_power_overlap(report: &NetLintReport, logic: Vec<LintFinding>) -> Vec<LintFinding> {
+    let overlaps = |f: &LintFinding| {
+        f.message.starts_with(logic_levels::OVERDRIVE_LEAD) && back_power_reports(report, f)
+    };
+    logic.into_iter().filter(|f| !overlaps(f)).collect()
+}
+
+/// Whether `report` holds a back-power finding on the first part and a net of `finding`.
+fn back_power_reports(report: &NetLintReport, finding: &LintFinding) -> bool {
+    report.findings.iter().any(|r| {
+        r.check == LintCheck::BackPower
+            && r.refs.first() == finding.refs.first()
+            && r.nets.iter().any(|n| finding.nets.contains(n))
+    })
 }
 
 /// Layout wiring checks on a `KiCad` layout (empty for anything else).

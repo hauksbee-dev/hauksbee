@@ -845,6 +845,15 @@ impl<'a> RailResolver<'a> {
         corners
     }
 
+    /// The span `net_id` is known to cover (a solve, or what its regulator,
+    /// battery or name states), `None` when nothing states one.
+    pub(crate) fn known_range(&self, net_id: i64) -> Option<RailRange> {
+        match self.range(net_id) {
+            RailKnowledge::Known(range) => Some(range),
+            _ => None,
+        }
+    }
+
     fn range(&self, net_id: i64) -> RailKnowledge {
         if let Some(declared) = self.agreeing_declared(net_id) {
             return RailKnowledge::Known(declared);
