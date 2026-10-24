@@ -97,7 +97,7 @@ fn boot_state_fuzz(
     );
     let result = run_body(&format!("{case}.toml"), &body);
     if !static_flaws.is_empty() {
-        assert_red_on_static_flaws(&result, static_flaws, case);
+        assert_red_on_static_flaws(&result, static_flaws, !open_gap.is_empty(), case);
     } else if open_gap.is_empty() {
         support::assert_green(
             &result,
@@ -141,11 +141,31 @@ fn boot_state_fuzz(
 
 /// Assert a fuzz whose own numeric judgement holds is RED because the board's
 /// static check fails it on real flaws, each failing static row naming one of
-/// the `nets`, and every net named by a failing row.
-fn assert_red_on_static_flaws(result: &hauksbee_ci::CiResult, nets: &[&str], case: &str) {
+/// the `nets`, and every net named by a failing row. When the board also has
+/// parts with no model (`open_parts`), the incomplete evidence outranks the
+/// failure in the exit code (INVALID, 3), as it does for any CI run.
+fn assert_red_on_static_flaws(
+    result: &hauksbee_ci::CiResult,
+    nets: &[&str],
+    open_parts: bool,
+    case: &str,
+) {
     use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
     let report = result.render_human();
-    assert_eq!(result.exit_code(), 1, "{case}: expected RED\n{report}");
+    let expected = if open_parts {
+        hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
+    } else {
+        1
+    };
+    assert_eq!(
+        result.exit_code(),
+        expected,
+        "{case}: expected RED (INVALID with open parts)\n{report}"
+    );
+    assert!(
+        !result.passed(),
+        "{case}: the static flaws must fail the run\n{report}"
+    );
     assert!(
         result
             .results
