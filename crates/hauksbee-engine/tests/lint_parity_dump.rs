@@ -47,10 +47,8 @@ fn lint_parity_dump() {
     };
     let mut boards: Vec<(PathBuf, PathBuf)> = Vec::new();
     for root in std::env::split_paths(&roots) {
-        let found = hauksbee_testkit::walk_files_with_ext(
-            &root,
-            &["kicad_pcb", "kicad_sch", "net", "brd"],
-        );
+        let found =
+            hauksbee_testkit::walk_files_with_ext(&root, &["kicad_pcb", "kicad_sch", "net", "brd"]);
         boards.extend(found.into_iter().map(|p| (root.clone(), p)));
     }
     boards.sort();
@@ -73,17 +71,19 @@ fn lint_parity_dump() {
                     .unwrap_or(path)
                     .to_string_lossy()
                     .into_owned();
-                let name = format!("{}/{name}", root.file_name().unwrap_or_default().to_string_lossy());
+                let name = format!(
+                    "{}/{name}",
+                    root.file_name().unwrap_or_default().to_string_lossy()
+                );
                 let mut mine = Vec::new();
                 match load(path) {
                     Err(error) => {
                         mine.push(serde_json::json!({"board": name, "error": error}).to_string());
                     }
                     Ok(board) => {
-                        let ran =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                engine_lint(&board, &lib)
-                            }));
+                        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            engine_lint(&board, &lib)
+                        }));
                         match ran {
                             Err(_) => mine.push(
                                 serde_json::json!({"board": name, "panicked": true}).to_string(),
@@ -116,5 +116,9 @@ fn lint_parity_dump() {
     for line in &lines {
         writeln!(file, "{line}").unwrap();
     }
-    eprintln!("lint_parity_dump: {} boards, {} lines", boards.len(), lines.len());
+    eprintln!(
+        "lint_parity_dump: {} boards, {} lines",
+        boards.len(),
+        lines.len()
+    );
 }

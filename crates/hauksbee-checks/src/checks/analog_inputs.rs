@@ -184,9 +184,18 @@ pub fn analog_input_lint(
     volts: &dyn Fn(&str) -> Option<f64>,
 ) -> NetLintReport {
     let st = super::BoardStatics::of(board, lib);
-    let findings = flags(board, &st, volts, None).into_iter().map(|(f, _)| f);
+    analog_input_lint_in(board, &st, volts)
+}
+
+/// [`analog_input_lint`] over statics the caller already holds.
+pub fn analog_input_lint_in(
+    board: &ExtractedBoard,
+    st: &super::BoardStatics<'_>,
+    volts: &dyn Fn(&str) -> Option<f64>,
+) -> NetLintReport {
+    let findings = flags(board, st, volts, None).into_iter().map(|(f, _)| f);
     let mut findings: Vec<LintFinding> = findings.collect();
-    findings.extend(adc_capability_flags(board, &st, volts));
+    findings.extend(adc_capability_flags(board, st, volts));
     NetLintReport { findings }
 }
 

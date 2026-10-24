@@ -230,6 +230,8 @@ mod shorts;
 mod si_ampacity_ripple;
 #[path = "soft_i2c_cosim.rs"]
 mod soft_i2c_cosim;
+#[path = "solved_levels_check.rs"]
+mod solved_levels_check;
 #[path = "spi_sensor_cosim_qemu.rs"]
 mod spi_sensor_cosim_qemu;
 #[path = "spi_sensor_cosim_renode.rs"]

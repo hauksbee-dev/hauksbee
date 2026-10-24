@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use hauksbee_ir::{Device, DeviceId, NodeId};
+use hauksbee_ir::{BOutput, Device, DeviceId, NodeId};
 
 use crate::bind_report::PartPin;
 use crate::binder::BoundBoard;
@@ -92,14 +92,15 @@ fn of_part(name: &str, reference: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '.', '_', '#']))
 }
 
-/// The MOSFETs on `bound` whose gate level nothing in its DC netlist sets
-/// while a fitted part's pin that could drive it lands on the gate's cluster.
-#[must_use]
-pub fn undetermined_gates(bound: &BoundBoard) -> Vec<UndeterminedGate> {
-    let devices = &bound.circuit.devices;
-    // Nodes something other than a resistor or inductor holds or loads at DC.
+/// The nodes something other than a resistor or inductor holds or loads at
+/// DC, and each node's resistive links.
+fn dc_graph(
+    devices: &[Device],
+) -> (
+    HashSet<NodeId>,
+    std::collections::HashMap<NodeId, Vec<NodeId>>,
+) {
     let mut set: HashSet<NodeId> = HashSet::new();
-    // node -> the resistive links out of it.
     let mut links: std::collections::HashMap<NodeId, Vec<NodeId>> =
         std::collections::HashMap::new();
     for dev in devices {
@@ -111,6 +112,67 @@ pub fn undetermined_gates(bound: &BoundBoard) -> Vec<UndeterminedGate> {
             other => set.extend(dc_terminals(other)),
         }
     }
+    (set, links)
+}
+
+/// The nodes of `bound` whose DC level the netlist holds.
+///
+/// Ground, or a node whose resistive cluster (every node a resistor, inductor
+/// or switch joins it to) holds ground or a source, an amplifier or comparator
+/// output, or a controlled voltage. The solver puts every other node wherever
+/// gmin and leakage leave it, which is a level the board never chose: a judge
+/// that reads such a node must abstain, never take the solved figure as a
+/// measurement.
+///
+/// A source of current (an `Isource`, a current-output behavioural pass
+/// element) holds no level either: it only forces a current into whatever the
+/// node is wired to.
+///
+/// A junction (a diode, a transistor's channel or base) does not hold a level
+/// on its own: a diode from a rail into a node with no load leaves the node
+/// wherever its tiny forward current balances gmin, not at the rail less a
+/// drop, so a junction neither sets a node nor joins two clusters here.
+#[must_use]
+pub fn dc_determined_nodes(bound: &BoundBoard) -> HashSet<NodeId> {
+    let mut set: HashSet<NodeId> = HashSet::new();
+    let mut links: std::collections::HashMap<NodeId, Vec<NodeId>> =
+        std::collections::HashMap::new();
+    for dev in &bound.circuit.devices {
+        match dev {
+            Device::Resistor { a, b, .. }
+            | Device::Inductor { a, b, .. }
+            | Device::VSwitch { a, b, .. } => {
+                links.entry(*a).or_default().push(*b);
+                links.entry(*b).or_default().push(*a);
+            }
+            Device::Vsource { p, n, .. }
+            | Device::Vcvs { p, n, .. }
+            | Device::Behavioral {
+                p,
+                n,
+                output: BOutput::Voltage,
+                ..
+            } => set.extend([*p, *n]),
+            Device::OpAmp { out, .. } | Device::Comparator { out, .. } => {
+                set.insert(*out);
+            }
+            _ => {}
+        }
+    }
+    bound
+        .net_nodes
+        .values()
+        .copied()
+        .filter(|&node| floating_cluster(node, &set, &links).is_none())
+        .collect()
+}
+
+/// The MOSFETs on `bound` whose gate level nothing in its DC netlist sets
+/// while a fitted part's pin that could drive it lands on the gate's cluster.
+#[must_use]
+pub fn undetermined_gates(bound: &BoundBoard) -> Vec<UndeterminedGate> {
+    let devices = &bound.circuit.devices;
+    let (set, links) = dc_graph(devices);
     let mut found = Vec::new();
     for (i, dev) in devices.iter().enumerate() {
         let Device::Mosfet { name, g, .. } = dev else {

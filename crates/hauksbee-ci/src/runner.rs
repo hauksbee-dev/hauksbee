@@ -1809,40 +1809,34 @@ fn production_assumptions(
         spec.asserts.iter().filter(feeds).map(scope).collect()
     };
     production_assumptions.extend(engine.scheduler().stress.inferred_theta_ja(thermal_claims));
-    // Analog inputs outside the window their card guarantees: a comparator
-    // channel with every input above its common-mode ceiling (MEASURED, so it
-    // undermines), an ADC pin behind too high a source impedance (qualifies).
+    // Analog inputs outside the window their card guarantees, logic inputs
+    // between VIL and VIH, and supply and rail-order envelopes, all judged by
+    // the one implementation the static check also runs (`SolvedLevels`) on
+    // the levels this run solved: the span each net covered (a sag that
+    // recovers is still a violation), or its final level.
     let solved = |net: &str| engine.scheduler().net_voltage(net);
     let stress = &engine.scheduler().stress;
     let ambient = (stress.ambient_c, stress.ambient_given);
-    let analog =
-        hauksbee_engine::checks::analog_inputs::run_assumptions(board, statics, &solved, ambient);
-    production_assumptions.extend(analog);
-    // Supply and rail-order envelopes, on the span each net covered in the run
-    // (a sag that recovers is still a violation), or its final level.
-    let levels = board.nets.iter().filter_map(|n| {
-        let span = engine.scheduler().net_range(&n.name);
-        let (min_v, max_v) = span.or_else(|| solved(&n.name).map(|v| (v, v)))?;
-        Some((
-            n.name.clone(),
-            hauksbee_engine::checks::envelope::RailRange { min_v, max_v },
-        ))
-    });
-    let levels: std::collections::BTreeMap<_, _> = levels.collect();
-    // A logic input whose span sat, or peaked, between its VCC-scaled VIL and
-    // VIH: the datasheet guarantees no state there (MEASURED, so it undermines).
-    let span = |net: &str| levels.get(net).copied();
-    let undefined = hauksbee_engine::checks::logic_levels::run_assumptions(board, statics, &span);
-    production_assumptions.extend(undefined);
+    let mut span = std::collections::BTreeMap::new();
+    let mut point = std::collections::BTreeMap::new();
+    for n in &board.nets {
+        let at_end = solved(&n.name);
+        if let Some(v) = at_end {
+            point.insert(n.name.clone(), v);
+        }
+        let range = engine.scheduler().net_range(&n.name);
+        if let Some((min_v, max_v)) = range.or_else(|| at_end.map(|v| (v, v))) {
+            let range = hauksbee_engine::checks::envelope::RailRange { min_v, max_v };
+            span.insert(n.name.clone(), range);
+        }
+    }
     let opts = engine.scheduler().opts;
-    let supply = hauksbee_engine::checks::envelope::run_assumptions(
-        board,
-        statics,
-        &levels,
+    let levels = hauksbee_engine::checks::solved_levels::SolvedLevels::new(
+        span,
+        point,
         (opts.reltol, opts.vntol),
-        ambient,
     );
-    production_assumptions.extend(supply);
+    production_assumptions.extend(levels.run_assumptions(board, statics, ambient));
     let all_nets: Vec<&str> = board
         .nets
         .iter()

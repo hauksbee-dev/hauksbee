@@ -30,7 +30,7 @@ use hauksbee_bind::binder::{
     bind_board, held_off_rails, is_ground, power_rail_voltage, BoundBoard,
 };
 use hauksbee_bind::control_inputs::{
-    hold_off, undetermined_gate_note, undetermined_gates, UndeterminedGate,
+    dc_determined_nodes, hold_off, undetermined_gate_note, undetermined_gates, UndeterminedGate,
 };
 use hauksbee_bind::stress::{
     bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, unbounded_note, FaultEvent,
@@ -45,6 +45,7 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 use super::rest_supply;
+use super::solved_levels::SolvedLevels;
 use hauksbee_ir::units::format_volts;
 
 /// Bind `board`, solve its DC operating point, and report every part held
@@ -52,7 +53,17 @@ use hauksbee_ir::units::format_volts;
 #[must_use]
 pub fn dc_stress_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let bound = bind_board(board, lib);
-    dc_stress_at_corners(board, lib, bound)
+    dc_stress_at_corners(board, lib, bound).report
+}
+
+/// What the DC stress pass found, and the levels it solved to find it.
+#[derive(Debug, Clone)]
+pub struct DcStress {
+    /// Every part held past a rating, and what was not judged.
+    pub report: NetLintReport,
+    /// The levels the stand-in pass's settled states gave, for the judges that
+    /// read a net's level ([`SolvedLevels`]). Empty when no state solved.
+    pub levels: SolvedLevels,
 }
 
 /// [`dc_stress_findings`] at every ASSUMED corner of the class-only parts.
@@ -73,7 +84,7 @@ pub fn dc_stress_at_corners(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     stand_in: BoundBoard,
-) -> NetLintReport {
+) -> DcStress {
     use hauksbee_models::variants::SWEEP_PROPERTY;
     // (reference, member ids) of every undetermined corner set.
     let sets: Vec<(String, Vec<String>)> = (stand_in.report.selections.iter())
@@ -87,14 +98,19 @@ pub fn dc_stress_at_corners(
     let corners = sets.iter().map(|(_, ids)| ids.len()).max().unwrap_or(1);
     let qualified = super::open_paths::open_path_qualifiers(board, &stand_in);
     if corners < 2 {
-        return with_qualifiers(dc_stress_findings(stand_in).findings, qualified);
+        let (report, levels) = dc_stress_pass(stand_in);
+        return DcStress {
+            report: with_qualifiers(report.findings, qualified),
+            levels,
+        };
     }
     let pick = |k: usize| -> Vec<(&str, &str)> {
         (sets.iter())
             .map(|(r, ids)| (r.as_str(), ids[k.min(ids.len() - 1)].as_str()))
             .collect()
     };
-    let mut passes = vec![dc_stress_findings(stand_in).findings];
+    let (stand_in_report, levels) = dc_stress_pass(stand_in);
+    let mut passes = vec![stand_in_report.findings];
     for k in 1..corners {
         let mut swept = board.clone();
         for (reference, id) in pick(k) {
@@ -154,7 +170,10 @@ pub fn dc_stress_at_corners(
         })
         .collect();
     findings.extend(notes);
-    with_qualifiers(findings, qualified)
+    DcStress {
+        report: with_qualifiers(findings, qualified),
+        levels,
+    }
 }
 
 /// `findings` plus each open-path abstention for a part they do not already
@@ -307,14 +326,24 @@ fn note_under_driven(
 
 /// [`dc_stress_lint`] over an already bound board.
 #[must_use]
-pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
+pub fn dc_stress_findings(bound: BoundBoard) -> NetLintReport {
+    dc_stress_pass(bound).0
+}
+
+/// [`dc_stress_findings`], and the levels the settled states solved to.
+fn dc_stress_pass(mut bound: BoundBoard) -> (NetLintReport, SolvedLevels) {
+    let mut levels = static_levels();
+    // The nodes the netlist sets, before the hold below ties an undetermined
+    // gate to its source: a level the solver gives a node nothing sets is its
+    // gmin 0 V, never a measurement.
+    let determined = dc_determined_nodes(&bound);
     // A FET whose gate only a pin with no DC behaviour drives is held off and
     // not judged: its gate level is the board's, not the solver's 0 V.
     let held = undetermined_gates(&bound);
     hold_off(&mut bound, &held);
     let held: Vec<LintFinding> = held.iter().map(undetermined_gate_finding).collect();
     if bound.device_meta.is_empty() {
-        return NetLintReport { findings: held };
+        return (NetLintReport { findings: held }, levels);
     }
     // part -> (state labels, clauses); one finding per physical part.
     let mut by_part: BTreeMap<String, PartFaults> = BTreeMap::new();
@@ -348,6 +377,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             }
         };
         let here = dead_rails(state, &x);
+        record_levels(&mut levels, state, &x, &determined, &here);
         dead.get_or_insert_with(|| here.clone())
             .retain(|net, _| here.contains_key(net));
         let (overstressed, under_driven, absurd, stand_in) = judge(state, &x);
@@ -421,10 +451,44 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         &only_ideal,
         held_unsolved,
     ));
-    findings.extend(abstained_note(&unsolved));
-    findings.extend(held);
+    findings.extend(abstained_note(&unsolved).into_iter().chain(held));
     findings.extend((dead.filter(|d| !d.is_empty())).map(|d| dead_rail_note(d, &overloaded)));
-    NetLintReport { findings }
+    (NetLintReport { findings }, levels.without_dark_nets())
+}
+
+/// No levels yet, to the tolerance the static solves run at.
+fn static_levels() -> SolvedLevels {
+    let opts = SolverOptions::default();
+    SolvedLevels::empty((opts.reltol, opts.vntol))
+}
+
+/// Record the levels the settled state `solved` gave into `levels`: the nets
+/// the netlist sets, less the named rails the state left dead (`dead`: down
+/// below [`DEAD_RAIL_SHARE`] of their name, or held off by the board). A dead
+/// rail's parts are unpowered, not out of range, and the dead-rail note
+/// already says it; the judges fall back to what the board states of it.
+fn record_levels(
+    levels: &mut SolvedLevels,
+    bound: &BoundBoard,
+    solved: &(Workspace, Vec<f64>),
+    determined: &std::collections::HashSet<NodeId>,
+    dead: &BTreeMap<String, (f64, f64)>,
+) {
+    let held: Vec<String> = held_off_rails(bound).into_iter().map(|(n, _)| n).collect();
+    let (ws, x) = solved;
+    for (name, &node) in &bound.net_nodes {
+        if is_ground(name) || !determined.contains(&node) {
+            continue;
+        }
+        let Some(v) = ws.layout.node(node).and_then(|i| x.get(i).copied()) else {
+            continue;
+        };
+        if dead.contains_key(name) || (held.contains(name) && power_rail_voltage(name).is_some()) {
+            levels.forget(name);
+            continue;
+        }
+        levels.observe(name, v);
+    }
 }
 
 /// The note that the check abstained in the `unsolved` states, each with
