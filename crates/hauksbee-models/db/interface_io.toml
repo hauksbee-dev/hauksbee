@@ -32,6 +32,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # SSOP-8 (DCT) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -143,6 +147,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # VSSOP-8 (DCU) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -254,6 +262,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # X1SON-8 (DTT) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -365,6 +377,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # X2SON-8 (DQE) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -476,6 +492,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # X2SON-8 (DQM) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -587,6 +607,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Table 4-1 Pin Functions (PDF p.3) types A1, A2, B1 and B2 as I/O, not as open-drain outputs; 7.1 Overview (PDF p.15): a pass-gate architecture with one-shot edge-rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 7.3.5 (PDF p.17): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # DSBGA-8 (YZP) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -707,6 +731,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # SOIC-14 (D) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -830,6 +858,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # TSSOP-14 (PW) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -954,6 +986,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # VQFN-14 (RGY) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -1080,6 +1116,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # WQFN-14 (BQA) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -1202,6 +1242,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # UQFN-12 (RUT) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -1323,6 +1367,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # DSBGA-12 (YZT) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -1446,6 +1494,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # BGA MICROSTAR JUNIOR-12 (ZXU) ordering codes only; a bare part number names no package, and the packages number their pads differently.
@@ -1569,6 +1621,10 @@ reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data 
 status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "open_drain_pads"
+reason = "no pad is listed as open-drain, on purpose: Tables 5-1 to 5-4 Pin Functions (PDF p.4 to p.7) type every A and B pad as I/O, not as open-drain outputs; 8.1 Overview (PDF p.19): a pass gate architecture with one-shot edge rate accelerators and 10 kOhm pull-ups \"conveniently integrated so that an external resistor is not needed\"; 8.3.5 (PDF p.20): each A-port I/O has an internal 10 kOhm pull-up to VCCA and each B-port I/O one to VCCB; so a board check must not ask the port for an external pull-up. The coverage item open_drain_low_side_drive names the open-drain-driver translation mode of the switching characteristics, not an open-drain output pad"
 
 [models.match]
 # nFBGA-12 (NMN) ordering codes only; a bare part number names no package, and the packages number their pads differently.
