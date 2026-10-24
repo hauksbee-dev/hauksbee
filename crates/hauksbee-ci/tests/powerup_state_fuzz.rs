@@ -70,7 +70,7 @@ fn boot_state_fuzz(
     seeds: u32,
     asserts: &str,
     open_gap: &[&str],
-    static_flaws: &[&str],
+    static_flaws: &[StaticFlaw],
 ) -> hauksbee_ci::CiResult {
     hauksbee_testkit::scanned(&format!("{case} boot-state fuzz (nets found)"), nets.len());
     assert!(
@@ -139,14 +139,50 @@ fn boot_state_fuzz(
     result
 }
 
+/// One real flaw the board's static check reports, which makes a fuzz over it
+/// RED. Every failing static row must be one of these and every one of these
+/// must have a failing row: a flaw is listed explicitly or the test fails.
+#[derive(Clone, Copy)]
+enum StaticFlaw {
+    /// A row naming this board net (a floating control net).
+    Net(&'static str),
+    /// A `part_field_mismatch` row on this part whose ordering code orders
+    /// `orders`, a value its Value field does not state.
+    PartField {
+        reference: &'static str,
+        orders: &'static str,
+    },
+}
+
+impl StaticFlaw {
+    /// Whether the failing static row (`label`, `detail`) is this flaw.
+    fn is_row(self, label: &str, detail: &str) -> bool {
+        use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
+        match self {
+            Self::Net(net) => format!("{label} {detail}").contains(&format!("'{net}'")),
+            Self::PartField { reference, orders } => {
+                label == format!("{STATIC_CHECK_KIND}: lint part_field_mismatch on {reference}")
+                    && detail.contains(&format!("orders {orders}"))
+            }
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            Self::Net(net) => format!("'{net}'"),
+            Self::PartField { reference, orders } => format!("{reference} (orders {orders})"),
+        }
+    }
+}
+
 /// Assert a fuzz whose own numeric judgement holds is RED because the board's
-/// static check fails it on real flaws, each failing static row naming one of
-/// the `nets`, and every net named by a failing row. When the board also has
+/// static check fails it on real flaws, each failing static row being one of
+/// the `flaws` and every flaw having a failing row. When the board also has
 /// parts with no model (`open_parts`), the incomplete evidence outranks the
 /// failure in the exit code (INVALID, 3), as it does for any CI run.
 fn assert_red_on_static_flaws(
     result: &hauksbee_ci::CiResult,
-    nets: &[&str],
+    flaws: &[StaticFlaw],
     open_parts: bool,
     case: &str,
 ) {
@@ -174,22 +210,25 @@ fn assert_red_on_static_flaws(
             .all(|r| r.passed),
         "{case}: numeric judgement\n{report}"
     );
-    let failing: Vec<String> = result
+    let failing: Vec<(&str, &str)> = result
         .results
         .iter()
         .filter(|r| r.kind == STATIC_CHECK_KIND && !r.passed && r.waived.is_none())
-        .map(|r| format!("{} {}", r.label, r.detail))
+        .map(|r| (r.label.as_str(), r.detail.as_str()))
         .collect();
-    for row in &failing {
+    for (label, detail) in &failing {
         assert!(
-            nets.iter().any(|n| row.contains(&format!("'{n}'"))),
-            "{case}: unexpected static row {row}"
+            flaws.iter().any(|f| f.is_row(label, detail)),
+            "{case}: unexpected static row {label} {detail}"
         );
     }
-    for net in nets {
+    for flaw in flaws {
         assert!(
-            failing.iter().any(|row| row.contains(&format!("'{net}'"))),
-            "{case}: no failing static row on '{net}' in {failing:?}"
+            failing
+                .iter()
+                .any(|(label, detail)| flaw.is_row(label, detail)),
+            "{case}: no failing static row for {} in {failing:?}",
+            flaw.name()
         );
     }
 }
@@ -214,6 +253,46 @@ fn expected_members(board: &Path, seeds: u32) -> (u32, Vec<String>) {
     let members = u32::try_from(swept.plans.len()).expect("capped run count fits u32");
     (members, swept.coverage.conditions())
 }
+
+const fn part_field(reference: &'static str, orders: &'static str) -> StaticFlaw {
+    StaticFlaw::PartField { reference, orders }
+}
+
+/// Every real flaw the static check reports on the `LumenPnP` motherboard.
+///
+/// The buzzer and fan FET gates (behind 1k series resistors) and two
+/// light-buffer inputs are driven only by STM32F407 pads, which are floating
+/// inputs in reset (RM0090 8.3.1) with nothing on those nets pulling them.
+///
+/// Sixteen resistors carry a Mouser ordering code that orders another value
+/// than their Value field and their LCSC code state: the sheets were copied
+/// from a neighbour and kept its Mouser and Digi-Key codes. R8, R54, R55 and
+/// R56 are `0R`, R53 and R71 are `1k`, R9 is `4.7k` and R10 is `1k`, all with
+/// the 10 k Vishay CRCW0805 code `71-CRCW080510K0FKEAC`; R41 to R48 (`1k` on
+/// the odd designators, `10k` on the even) carry the 36 k code
+/// `71-CRCW080536K0FKEA`. Read off the schematic sheets, not off the check.
+const LUMENPNP_STATIC_FLAWS: [StaticFlaw; 20] = [
+    StaticFlaw::Net("Net-(Q5-Pad1)"),
+    StaticFlaw::Net("Net-(Q6-Pad1)"),
+    StaticFlaw::Net("BTM_LIGHT"),
+    StaticFlaw::Net("TOP_LIGHT"),
+    part_field("R8", "10 kΩ"),
+    part_field("R9", "10 kΩ"),
+    part_field("R10", "10 kΩ"),
+    part_field("R41", "36 kΩ"),
+    part_field("R42", "36 kΩ"),
+    part_field("R43", "36 kΩ"),
+    part_field("R44", "36 kΩ"),
+    part_field("R45", "36 kΩ"),
+    part_field("R46", "36 kΩ"),
+    part_field("R47", "36 kΩ"),
+    part_field("R48", "36 kΩ"),
+    part_field("R53", "10 kΩ"),
+    part_field("R54", "10 kΩ"),
+    part_field("R55", "10 kΩ"),
+    part_field("R56", "10 kΩ"),
+    part_field("R71", "10 kΩ"),
+];
 
 /// `LumenPnP` motherboard: the low-side AO3400A MOSFET gates are driven by
 /// STM32F407 GPIOs that are Hi-Z at reset, behind a 1k series; the buzzer
@@ -268,11 +347,8 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         // stay critical too: no card states an open part's standoff or
         // polarity, so nothing bounds what it clamps. GREEN once all are modelled.
         &["U6", "U7", "U8", "U9", "U10", "U11", "U16"],
-        // Real flaws the static check reports: the buzzer and fan FET gates
-        // (behind 1k series resistors) and two light-buffer inputs are driven
-        // only by STM32F407 pads, which are floating inputs in reset (RM0090
-        // 8.3.1), and nothing on those nets pulls them, so the board fails.
-        &["Net-(Q5-Pad1)", "Net-(Q6-Pad1)", "BTM_LIGHT", "TOP_LIGHT"],
+        // Real flaws the static check reports (see `LUMENPNP_STATIC_FLAWS`).
+        &LUMENPNP_STATIC_FLAWS,
     );
 }
 
@@ -395,7 +471,11 @@ fn reform_supervisor_fuzz(case: &str, seeds: u32) -> Option<hauksbee_ci::CiResul
         // (SP0503BAHT, TPD6E05U06) stay critical too: no card states an open
         // part's standoff or polarity. GREEN once all of them are modelled.
         &["U18", "U7", "U9", "U12", "U14"],
-        &[],
+        // Real flaws the static check reports: C146 and C180 are `1uF` on a
+        // 0402 pad with LCSC C1589 (a 1 uF Samsung part), but their
+        // Manufacturer_No is CL05A104KA5NNNC, the 100 nF part, so the BOM
+        // carries two numbers for two different capacitors.
+        &[part_field("C146", "100 nF"), part_field("C180", "100 nF")],
     ))
 }
 
