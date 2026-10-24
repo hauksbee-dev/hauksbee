@@ -6021,14 +6021,14 @@ value_re = "(?i)^(SN)?74HCT125(D|N|DB|PW|NS)?[RT]?([.,-][A-Z0-9]+)?$"
 
 [models.params]
 voh = 4.4          # SN74HCT125, IOH = -20 uA, VCC 4.5 V (5.4)
-vol = 0.1          # IOL = 20 uA, VCC 4.5 V (5.4)
+vol = 0.1          # IOL = 20 uA, VCC 5.5 V (5.4; the VOL rows are given at 5.5 V)
 vih = 2.0          # VCC 4.5 V to 5.5 V (5.2)
 vil = 0.8
 # VCC = 4.5 V, -40 to 85 C: VOH 3.84 V min at IOH = -6 mA against the 4.4 V
-# light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side: 0.33 V max at 6 mA, 55 Ohm).
+# light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side, VCC 5.5 V: 0.33 V max at 6 mA, 55 Ohm).
 ro = 93.0
 # Strong corner, 25 C typ: VOH 4.3 V at IOH = -6 mA against 4.499 V light-load,
-# 0.199 V / 6 mA = 33 Ohm (VOL side: 0.17 V typ at 6 mA, 28 Ohm) (5.4).
+# 0.199 V / 6 mA = 33 Ohm (VOL side, VCC 5.5 V: 0.17 V typ at 6 mA, 28 Ohm) (5.4).
 ro_strong = 33.0
 tpd_s = 11.0e-9    # A to Y typ, VCC 4.5 V, CL = 50 pF, 25 C (5.5)
 supply_static_ua = 80.0  # ICC max, SN74HCT125, VCC 5.5 V (5.4)
