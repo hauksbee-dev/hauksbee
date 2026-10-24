@@ -7,8 +7,8 @@
 //! and the LED's diode made that 0 V read as driven, so the core was held in
 //! reset for the whole run. The rail now follows the path the static rail
 //! analysis walks. A switch whose enable pin is tied low keeps the rail down,
-//! and the bind report says which part holds it off. The boot decision needs
-//! no emulator, so these run without Renode.
+//! and the bind report says which part holds it off. A core held in reset
+//! needs no emulator; a run whose rail comes up starts it, so needs Renode.
 
 use hauksbee_engine::bind_report::BindReport;
 use hauksbee_engine::HauksbeeEngine;
@@ -211,6 +211,18 @@ fn ldo(value: &'static str, out: &'static str) -> Part<'static> {
     }
 }
 
+/// Whether Renode is built in and installed; a run whose rail comes up starts the core.
+fn renode() -> bool {
+    #[cfg(feature = "renode")]
+    let found = hauksbee_mcu::renode::is_available();
+    #[cfg(not(feature = "renode"))]
+    let found = false;
+    if !found {
+        eprintln!("skipping: Renode not installed");
+    }
+    found
+}
+
 struct Run {
     rail: f64,
     nrst: f64,
@@ -267,6 +279,10 @@ fn rail_warning<'a>(r: &'a Run, net: &str) -> &'a str {
 
 #[test]
 fn an_uncarded_load_switch_feeding_the_mcu_rail_lets_the_core_out_of_reset() {
+    // Needs Renode: a powered core really runs the firmware.
+    if !renode() {
+        return;
+    }
     let Some(r) = run(
         "VDD_MCU",
         &[connector("+3V3"), bare_switch("VDD_MCU", "+3V3")],
@@ -283,6 +299,10 @@ fn an_uncarded_load_switch_feeding_the_mcu_rail_lets_the_core_out_of_reset() {
 
 #[test]
 fn a_carded_load_switch_with_its_enable_pulled_up_lets_the_core_out_of_reset() {
+    // Needs Renode: a powered core really runs the firmware.
+    if !renode() {
+        return;
+    }
     let Some(r) = run(
         "VDD_MCU",
         &[
@@ -304,6 +324,10 @@ fn a_carded_load_switch_with_its_enable_pulled_up_lets_the_core_out_of_reset() {
 
 #[test]
 fn a_schottky_from_vbus_into_an_uncarded_ldo_lets_the_core_out_of_reset() {
+    // Needs Renode: a powered core really runs the firmware.
+    if !renode() {
+        return;
+    }
     let Some(r) = run(
         "VDD_MCU",
         &[
@@ -326,6 +350,10 @@ fn a_schottky_from_vbus_into_an_uncarded_ldo_lets_the_core_out_of_reset() {
 
 #[test]
 fn an_uncarded_ideal_diode_into_a_carded_ldo_lets_the_core_out_of_reset() {
+    // Needs Renode: a powered core really runs the firmware.
+    if !renode() {
+        return;
+    }
     let Some(r) = run(
         "VDD_MCU",
         &[
