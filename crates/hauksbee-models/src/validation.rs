@@ -2421,6 +2421,16 @@ fn check_xtal_int_caps(entry: &ModelEntry, p: &mut Problems) {
         p.require(o.min_f.is_some() == o.max_f.is_some(), || {
             format!("[[models.pin_capability.xtal_int_caps]] '{name}' gives both min_f and max_f or neither (integrated and tunable, no range printed)")
         });
+        for (key, v) in [
+            ("max_crystal_cl_f", o.max_crystal_cl_f),
+            ("max_external_load_f", o.max_external_load_f),
+        ] {
+            if let Some(v) = v {
+                p.require(v.is_finite() && (0.1e-12..=100e-12).contains(&v), || {
+                    format!("[[models.pin_capability.xtal_int_caps]] '{name}' {key} = {v} is outside 0.1 pF to 100 pF: a capacitance in farads")
+                });
+            }
+        }
         p.require(!o.includes_pin_capacitance || o.min_f.is_some(), || {
             format!("[[models.pin_capability.xtal_int_caps]] '{name}' says its figure includes the pin capacitance but prints no min_f/max_f range")
         });

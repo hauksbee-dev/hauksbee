@@ -337,6 +337,7 @@ mod tests {
                 lo_pf,
                 hi_pf,
                 pin_cap_included,
+                limits,
                 basis,
             }) => {
                 assert!((lo_pf - 12.0).abs() < 1e-9 && (hi_pf - 20.0).abs() < 1e-9);
@@ -344,6 +345,9 @@ mod tests {
                     pin_cap_included,
                     "the 6-10 pF CL contains the pin capacitance"
                 );
+                // Table 8 (p.11): crystal CL 6 to 12 pF; 4.1.1 (p.15): 2 pF external.
+                assert_eq!(limits.max_crystal_cl_pf.map(f64::round), Some(12.0));
+                assert_eq!(limits.max_external_pf.map(f64::round), Some(2.0));
                 assert!(basis.contains("AN619") && basis.contains("p.60"), "{basis}");
                 // The data sheet and AN619 disagree about a 0 pF setting; the card says so.
                 assert!(basis.contains("NOT AGREED"), "{basis}");
@@ -377,8 +381,30 @@ mod tests {
             ["1", "2"],
             Some("22p"),
         ));
-        assert_eq!(heavy.len(), 1, "{heavy:?}");
+        // The load mismatch, and the external caps over the 2 pF the data sheet allows.
+        assert_eq!(heavy.len(), 2, "{heavy:?}");
         assert!(heavy[0].message.contains("on-chip per pin"));
+        // Limits the load band cannot show: an 18 pF crystal on 22 pF caps lands in
+        // the band, but Table 8 (p.11) supports 12 pF at most; a 10 pF crystal on
+        // 10 pF caps is over the 2 pF of external capacitance 4.1.1 (p.15) allows.
+        for (value, cap, says) in [
+            ("25MHz 18pF", "22p", "at most 12.0 pF"),
+            ("25MHz 10pF", "10p", "at most 2.0 pF of external"),
+        ] {
+            let found = engine_findings(&si5351_board(
+                value,
+                "SI5351C",
+                qfn20,
+                ["1", "2"],
+                Some(cap),
+            ));
+            assert!(
+                found
+                    .iter()
+                    .any(|f| f.message.contains(says) && f.severity == SiSeverity::Medium),
+                "{value} on {cap}: {found:?}"
+            );
+        }
         // A 6 pF crystal with no external caps is the supported setup (Table 8
         // note 1): the chip's own 6 pF setting is the load.
         assert!(engine_findings(&si5351_board(

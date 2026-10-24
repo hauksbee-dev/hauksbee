@@ -352,6 +352,16 @@ const DEFAULT_C0_PF_MHZ: f64 = 5.0;
 const DEFAULT_C1_FF_WATCH: f64 = 2.5;
 const DEFAULT_C0_PF_WATCH: f64 = 2.0;
 
+/// The limits a driving IC's datasheet puts on the crystal and on the caps the
+/// board adds (see `XtalIntCap::max_crystal_cl_f`), in pF.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LoadLimits {
+    /// The largest crystal CL the driver supports.
+    pub max_crystal_cl_pf: Option<f64>,
+    /// The most external capacitance across the pair (the two caps in series).
+    pub max_external_pf: Option<f64>,
+}
+
 /// What a driving IC's card says about the load capacitance built into an
 /// oscillator pin pair.
 #[derive(Debug, Clone, PartialEq)]
@@ -364,6 +374,8 @@ pub enum IntegratedCaps {
         /// (see `XtalIntCap::includes_pin_capacitance`), so only a trace stray
         /// is assumed on top of it.
         pin_cap_included: bool,
+        /// What the datasheet allows of the crystal and of the board's own caps.
+        limits: LoadLimits,
         basis: String,
     },
     /// The IC has on-chip load capacitance but prints no range for it (a tunable
@@ -384,6 +396,10 @@ impl IntegratedCaps {
                 lo_pf: lo * 1e12,
                 hi_pf: hi * 1e12,
                 pin_cap_included: cap.includes_pin_capacitance,
+                limits: LoadLimits {
+                    max_crystal_cl_pf: cap.max_crystal_cl_f.map(|f| f * 1e12),
+                    max_external_pf: cap.max_external_load_f.map(|f| f * 1e12),
+                },
                 basis,
             },
             _ => Self::Unspecified { basis },
@@ -1097,6 +1113,8 @@ struct DriverCaps {
     range: Option<(f64, f64)>,
     /// The card says the range already contains the chip's pin capacitance.
     pin_cap_included: bool,
+    /// The datasheet's limits on the crystal's CL and on the external caps.
+    limits: LoadLimits,
     tunable_unspecified: bool,
     integrates: bool,
     basis: String,
@@ -1117,6 +1135,10 @@ impl DriverCaps {
                     ..
                 })
             ),
+            limits: match card {
+                Some(IntegratedCaps::Range { limits, .. }) => *limits,
+                _ => LoadLimits::default(),
+            },
             tunable_unspecified: matches!(card, Some(IntegratedCaps::Unspecified { .. })),
             integrates: card.is_some() || integrated_by_name,
             basis: match card {
@@ -1217,6 +1239,12 @@ fn check_crystal_load_cap_with(
                 |spec| judge_against_spec(&site, &spec, Pullability::of(facts, watch)),
             );
             push(severity, message);
+            // What the driver's datasheet allows of the crystal and of the caps,
+            // which the load band above cannot show: a band can cover a CL that
+            // the chip does not support.
+            for message in limit_violations(ext, crystal_spec_cl(xtal, facts), &driver) {
+                push(SiSeverity::Medium, message);
+            }
         } else if driver.tunable_unspecified {
             // The driver's on-chip bank is software-tuned with no printed range,
             // so the board's load cannot be computed: say so, judge nothing.
@@ -1257,6 +1285,46 @@ fn check_crystal_load_cap_with(
             }
         }
     }
+}
+
+/// The messages for a crystal or a pair of external caps outside the limits the
+/// driver's card states: a crystal CL above the largest the chip supports, or more
+/// external capacitance across the pair than the datasheet allows. Each cites the
+/// card's basis. Empty when the card states no limit.
+fn limit_violations(
+    ext: (f64, f64),
+    spec: Option<(f64, String)>,
+    driver: &DriverCaps,
+) -> Vec<String> {
+    // Within a hundredth of a pF: a datasheet limit of 2 pF is met by the 4 pF
+    // on each pad that its own example uses.
+    const SLACK_PF: f64 = 0.01;
+    let basis = &driver.basis;
+    let mut out = Vec::new();
+    if let (Some(max), Some((cl, cite))) = (driver.limits.max_crystal_cl_pf, spec) {
+        if cl > max + SLACK_PF {
+            out.push(format!(
+                "the crystal specs CL = {cl:.1} pF [{cite}] but the driver supports a crystal CL of \
+                 at most {max:.1} pF{basis}, so its load cannot be set right; pick a crystal with \
+                 CL of {max:.0} pF or less."
+            ));
+        }
+    }
+    if let Some(max) = driver.limits.max_external_pf {
+        let total = cl_series(ext.0, ext.1);
+        if total > max + SLACK_PF {
+            out.push(format!(
+                "the external load caps C1={:.0}p, C2={:.0}p present {total:.1} pF across the pair \
+                 but the driver allows at most {max:.1} pF of external load capacitance{basis}; \
+                 more is not set by the chip's own load bank, so drop the caps to {:.0} pF each or \
+                 less, or choose a crystal whose CL the on-chip load meets.",
+                ext.0,
+                ext.1,
+                2.0 * max,
+            ));
+        }
+    }
+    out
 }
 
 /// Walk one resistor hop from a crystal terminal net to find a load cap (the

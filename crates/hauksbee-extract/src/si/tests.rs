@@ -556,9 +556,43 @@ fn a_clock_generators_programmable_load_is_read_from_its_card() {
     let r = crystal_findings(&twelve_bare, &CrystalCards::new());
     assert_eq!(fired(&r).len(), 1, "{r:?}");
     // A 6 pF crystal on 22 pF caps is far past anything the setting can undo.
+    // It is a load mismatch and also external caps over what the data sheet allows.
     let heavy = xtal_on_si5351("25MHz 6pF", "22p");
     let r = crystal_findings(&heavy, &CrystalCards::new());
-    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    assert_eq!(fired(&r).len(), 2, "{r:?}");
+    // An 18 pF crystal on 22 pF caps: the on-chip bank plus the caps present about
+    // 17 to 22 pF, which covers 18, so the load looks right, but the chip supports
+    // a crystal CL of 12 pF at most (Table 8, p.11) and 2 pF of external capacitance
+    // at most (4.1.1, p.15). Both are flagged at Medium, citing the card.
+    let r = crystal_findings(&xtal_on_si5351("25MHz 18pF", "22p"), &CrystalCards::new());
+    let f = fired(&r);
+    assert_eq!(f.len(), 2, "{r:?}");
+    assert!(f.iter().all(|f| f.severity == SiSeverity::Medium), "{f:?}");
+    for says in [
+        "CL = 18.0 pF",
+        "at most 12.0 pF",
+        "card 'si5351c_qfn20'",
+        "Table 8",
+    ] {
+        assert!(
+            f.iter().any(|f| f.message.contains(says)),
+            "{says:?}: {f:?}"
+        );
+    }
+    // A 10 pF crystal is within the CL limit, but 10 pF caps present 5 pF of
+    // external capacitance across the pair against the 2 pF allowed.
+    let r = crystal_findings(&xtal_on_si5351("25MHz 10pF", "10p"), &CrystalCards::new());
+    let f = fired(&r);
+    assert_eq!(f.len(), 1, "{r:?}");
+    assert_eq!(f[0].severity, SiSeverity::Medium);
+    for says in [
+        "C1=10p, C2=10p",
+        "5.0 pF across the pair",
+        "at most 2.0 pF of external",
+        "4.1.1",
+    ] {
+        assert!(f[0].message.contains(says), "{says:?} in {}", f[0].message);
+    }
     // The same board without the Si5351 is judged as a discrete crystal: the
     // 2 pF caps on a 10 pF crystal fire.
     let mut discrete = xtal_on_si5351("MAIN_XTAL 25MHz 10pF", "2p");
@@ -774,6 +808,7 @@ fn a_drivers_on_chip_load_caps_are_part_of_the_board_cl() {
         lo_pf: 4.0,
         hi_pf: 24.5,
         pin_cap_included: false,
+        limits: LoadLimits::default(),
         basis: "card 'efm32pg22' LFXO: Table 4.12".into(),
     };
     let facts = |caps: IntegratedCaps| {
