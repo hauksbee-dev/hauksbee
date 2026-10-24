@@ -11980,6 +11980,13 @@ max_junction_temp_c = 150.0 # Source: Table 6.1, TJ(MAX)
 # the defect-regression fixture's empty-findings claim until the MCP1703 feeding
 # VDD2 is modelled. Re-add them then, with that fixture's expectation.
 
+[models.pin_capability.open_drain]
+basis = "TI ISO1540/ISO1541 SLLSEB6F (December 2022) PDF p.1 Features: \"Open-drain outputs with 3.5-mA Side 1 and 35-mA Side 2 sink current capability\"; 7.4 Isolator Functional Principle PDF p.20: \"Each channel output is made open-drain to comply with the open-drain technology of I2C\"; Table 5-2 PDF p.5 types SDA1 and SDA2 I/O and SCL2 O (SCL1 is an input and is not listed)"
+[models.pin_capability.open_drain.pads]
+"2" = "SDA1"
+"6" = "SCL2"
+"7" = "SDA2"
+
 [models.coverage]
 implements = ["isolated_i2c_identity", "dual_supply_isolation"]
 missing = ["bidirectional_open_drain_logic", "side_specific_thresholds", "scl_propagation", "propagation_delay", "timing_races", "common_mode_transient_behavior", "thermal_shutdown"]
@@ -13432,6 +13439,11 @@ reason = "datasheet publishes no validated model error interval; only the VCC su
 [[models.source.pinout]]
 package = "SOIC-16 (D) / SSOP-16 (DB) / TVSOP-16 (DGV) / TSSOP-16 (PW)"
 pins = { "1" = "SCL", "2" = "SDA", "3" = "A0", "4" = "A1", "5" = "A2", "6" = "P0", "7" = "P1", "8" = "GND", "9" = "P2", "10" = "P3", "11" = "P4", "12" = "P5", "13" = "P6", "14" = "P7", "15" = "RESET", "16" = "VCC" }
+
+[models.pin_capability.open_drain]
+basis = "TI PCA9557 SCPS133K Table 4-1 Pin Functions PDF p.4: P0 \"High impedance open-drain design structure. Connect to VCC through a pullup resistor.\"; P1 to P7 are \"Push-pull design structure\""
+[models.pin_capability.open_drain.pads]
+"6" = "P0"
 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]

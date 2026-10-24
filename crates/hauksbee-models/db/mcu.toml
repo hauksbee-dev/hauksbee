@@ -2080,6 +2080,10 @@ description = "ATmega1284 (non-P) 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF
 value_re = "(?i)^ATmega1284(-(AU|MU|AUR|MUR))?$"
 
 [models.params]
+# DS40002070A Table 9-3 (p.41, Low Power Crystal Oscillator, 0.9 - 16 MHz) and Table 9-5 (p.42, Full Swing Crystal Oscillator, 0.4 - 20 MHz): "Recommended Range for Capacitors C1 and C2 [pF]" 12 - 22
+# (the 0.4 - 0.9 MHz low power row prints a dash).
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 # The non-P core, which simavr models separately from the P.
 backend = "simavr:atmega1284"
 internal_clock = "internal 8 MHz RC oscillator"
@@ -3768,6 +3772,10 @@ value_re = "(?i)^STM32F072C(8|B)(T[67]|U[67])?$"
 mpn_re   = "(?i)^STM32F072C(8|B)(T[67]|U[67])?"
 
 [models.params]
+# DocID025004 Rev 5 (STM32F072x8/xB) p.68, Table 39 HSE oscillator characteristics text: "For CL1 and CL2, it is recommended to use high-quality external ceramic
+# capacitors in the 5 pF to 20 pF range (Typ.)".
+xtal_cap_min_f = 5.0e-12
+xtal_cap_max_f = 20.0e-12
 backend = "renode:stm32f072"
 internal_clock = "internal HSI RC oscillator"
 # NRST's permanent pull-up RPU, 25 kOhm min / 40 typ / 55 max (DocID025004 Rev 5 Table 56,
@@ -4009,6 +4017,10 @@ value_re = "(?i)^STM32F103C[8B]?(T6)?$"
 mpn_re   = "(?i)^STM32F103C[8B]"
 
 [models.params]
+# DS5319 Rev 19 (STM32F103x8/xB) p.52, Table 22 HSE 4-16 MHz oscillator characteristics text: "For CL1 and CL2, it is recommended to use high-quality external ceramic
+# capacitors in the 5 pF to 25 pF range (typ.)" (the LSE crystal's range is 5 to 15 pF, p.53 note, and is not the HSE figure stored here).
+xtal_cap_min_f = 5.0e-12
+xtal_cap_max_f = 25.0e-12
 # hauksbee-mcu backend identifier: the Renode backend brings up the matching
 # Renode platform (stm32f103.repl) and bridges GPIO/UART through its monitor.
 backend = "renode:stm32f103"
@@ -4430,8 +4442,8 @@ role = "pa10"
 level = "high"
 needs = "idle"
 opposed_only = true
-basis = "AN2606 Rev 70 Table 45 (STM32F10xxx configuration in system memory boot mode) PDF p.116, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0008 Rev 20 PDF p.790 section 27.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
-note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+basis = "AN2606 Rev 70 Table 45 (STM32F10xxx configuration in system memory boot mode) PDF p.116, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0008 Rev 20 PDF p.790 section 27.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
 [[models]]
 id = "stm32f401c"
@@ -4463,6 +4475,7 @@ internal_clock = "internal 16 MHz HSI RC oscillator"
 # package's pads are deliberately not mapped.
 "20" = "pb2_boot1" # PB2, BOOT1 additional function (DS9716 Rev 11 Table 8, pad 20)
 "44" = "boot0"   # BOOT0 strapping pin, UFQFPN48 pad 44 (verified vs the footprint)
+"31" = "pa10"   # PA10, USART1_RX (the ROM bootloader's receive pin); DS9716 Table 8 UFQFPN48 column, pad 31 (LQFP64 pin 43, LQFP100 pin 69)
 
 # ADC pads. STMicroelectronics STM32F401xB/xC datasheet DocID024738 Rev 10 (December 2017, DS9716), Table 8
 # pin definitions (datasheet pp.37-43), UQFN48 (= UFQFPN48) column: ADC1_IN0..ADC1_IN9 on PA0-PA7 (PA0-PA2 p.38,
@@ -4582,6 +4595,19 @@ cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 77 PDF p.170-17
 # ADC roles. `_adcN` is the descriptor's engine channel: the ADC1 input number
 # for a pin ADC1 reads, 32 + the ADC2 input number for a pin only ADC2 reads.
 
+# Bootloader UART RX pad bias. Sources, each read from the PDF:
+#   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
+#   AN3155 Rev 22 (September 2026), https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf sha256 0e3e1c35ffa3311aba33440d9d6236dc2f59af8a7f32482cf13d1d0af8c5e1f9;
+#   RM0090 Rev 22 (cached copy target/launch/wp1-datasheets/rm0090.pdf) sha256 f3ff2322eec21f4e49081f68481b764506eee81dba6031bc767e2f8955b27cca: the USART peripheral's character framing, which the STM32F401 shares (RM0368 itself was not available to read);
+#   DS9716 Rev 10 Table 8 (datasheet p.41), UFQFPN48 column: PA10 = pad 31.
+[[models.pin_bias]]
+role = "pa10"
+level = "high"
+needs = "idle"
+opposed_only = true
+basis = "AN2606 Rev 70 Table 77 (STM32F401xB(C) configuration in system memory boot mode) PDF p.170, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of \u201c1\u201ds\" and \"A Break character is interpreted on receiving \u201c0\u201ds for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
+
 [[models]]
 id = "stm32g474c"
 kind = "mcu"
@@ -4592,6 +4618,10 @@ value_re = "(?i)^STM32G47[34]C[BCE]U[36]?$"
 mpn_re   = "(?i)^STM32G47[34]C[BCE]U"
 
 [models.params]
+# DS12288 Rev 6 (STM32G474xB/C/E) p.117, Table 41 HSE oscillator characteristics text: "For CL1 and CL2, it is recommended to use high-quality external ceramic
+# capacitors in the 5 pF to 20 pF range (typ.)".
+xtal_cap_min_f = 5.0e-12
+xtal_cap_max_f = 20.0e-12
 backend = "renode:stm32g4"
 internal_clock = "internal 16 MHz HSI RC oscillator"
 
@@ -4808,8 +4838,8 @@ role = "pa10"
 level = "high"
 needs = "idle"
 opposed_only = true
-basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
-note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
 [[models.pin_bias]]
 role = "pc11"
@@ -4832,6 +4862,10 @@ value_re = "(?i)^STM32G47[34]C[BCE]T[36]?$"
 mpn_re   = "(?i)^STM32G47[34]C[BCE]T"
 
 [models.params]
+# DS12288 Rev 6 (STM32G474xB/C/E) p.117, Table 41 HSE oscillator characteristics text: "For CL1 and CL2, it is recommended to use high-quality external ceramic
+# capacitors in the 5 pF to 20 pF range (typ.)".
+xtal_cap_min_f = 5.0e-12
+xtal_cap_max_f = 20.0e-12
 backend = "renode:stm32g4"
 internal_clock = "internal 16 MHz HSI RC oscillator"
 
@@ -5047,8 +5081,8 @@ role = "pa10"
 level = "high"
 needs = "idle"
 opposed_only = true
-basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
-note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
 # UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
 # (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
@@ -5057,6 +5091,14 @@ note = "The ROM bootloader detects the host by the UART start bit, so a pull-dow
 id = "stm32f77xv"
 kind = "mcu"
 description = "STM32F767/F777/F779 Cortex-M7 MCU, LQFP100"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "xtal_cap_range"
+reason = "DS11243 Rev 8 (STM32F777xx/F778Ax/F779xx) p.136 to p.137, Table 43 HSE 4-26 MHz oscillator characteristics and Figure 30, print no CL1 / CL2 range (the IDD rows quote CL = 5 pF and CL = 10 pF only as measurement conditions, and Figure 30 draws CL1 and CL2 unvalued); no \"pF range\" sentence is printed for this family, so no xtal_cap_min_f / xtal_cap_max_f is stated"
 
 [models.match]
 value_re = "(?i)^STM32F7(6[57]|7[79])V[GI]T[67]?$"
@@ -5322,8 +5364,8 @@ role = "pa10"
 level = "high"
 needs = "idle"
 opposed_only = true
-basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.244, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
-note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.244, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
 [[models.pin_bias]]
 role = "pb11"
@@ -5568,8 +5610,8 @@ role = "pa10"
 level = "high"
 needs = "idle"
 opposed_only = true
-basis = "AN2606 Rev 70 Table 142 (STM32L01xxx/02xxx configuration in system memory boot mode) PDF p.342, USART2_RX pin (USART2 on PA9/PA10): \"PA10 pin: USART2 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0377 Rev 10 PDF p.662 section 24.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
-note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+basis = "AN2606 Rev 70 Table 142 (STM32L01xxx/02xxx configuration in system memory boot mode) PDF p.342, USART2_RX pin (USART2 on PA9/PA10): \"PA10 pin: USART2 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0377 Rev 10 PDF p.662 section 24.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
+note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
 # UNLISTED ON PURPOSE (L0): (a) SRAM row (nBOOT1 = 0 with BOOT0 high) needs nBOOT1 = 0, not factory. (b) nBOOT_SEL = 1 rows
 # (BOOT0 from the nBOOT0 option bit): grey = category 1 only and not the factory state. (c) The empty-check override is
@@ -6226,6 +6268,14 @@ id = "esp32s3_wroom"
 kind = "mcu"
 description = "Espressif ESP32-S3-WROOM-1/-1U/-2 module"
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_bias"
+reason = "ESP32-S3 Series Datasheet v2.2 Table 3-3 Chip Boot Mode Control and its footnote (PDF p.33) list UART Download Boot as one of the Joint Download Boot methods, and ESP32-S3 TRM v1.8 Table 8.2-1 (PDF p.535) repeats it, but neither names the pin the ROM listens on or states an idle level or bias requirement for the UART0 receive pad; the datasheet's pin overview table (PDF p.17) gives U0RXD only its reset state (WPU, IE). This card also maps no U0RXD pad, so no [[models.pin_bias]] row is written"
+
 [models.match]
 value_re = "(?i)^ESP32[-_ ]?S3([-_ ]?WROOM.*)?$"
 # KiCad RF_Module:ESP32-S3-WROOM-1 / -1U / -2 and vendor spellings of the same.
@@ -6428,6 +6478,14 @@ cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU inc
 id = "esp32s3_qfn56"
 kind = "mcu"
 description = "Espressif ESP32-S3 bare chip, QFN56 7x7 mm (Watchy v3)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_bias"
+reason = "ESP32-S3 Series Datasheet v2.2 Table 3-3 Chip Boot Mode Control and its footnote (PDF p.33) list UART Download Boot as one of the Joint Download Boot methods, and ESP32-S3 TRM v1.8 Table 8.2-1 (PDF p.535) repeats it, but neither names the pin the ROM listens on or states an idle level or bias requirement for the UART0 receive pad; the datasheet's pin overview table (PDF p.17) gives U0RXD only its reset state (WPU, IE). This card also maps no U0RXD pad, so no [[models.pin_bias]] row is written"
 
 [models.match]
 value_re = "(?i)^ESP32[-_ ]?S3([-_ ]?WROOM.*)?$"
@@ -6924,6 +6982,14 @@ note = "The ROM bootloader detects the host by the UART start bit, so a pull-dow
 id = "esp32c3_wroom02"
 kind = "mcu"
 description = "Espressif ESP32-C3-WROOM-02/-02U module"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_bias"
+reason = "ESP32-C3-WROOM-02 Datasheet Table 4-3 Chip Boot Mode Control footnote 3 (PDF p.13) and ESP32-C3 TRM v1.4 Table 7.2-1 (PDF p.199) list UART Download Boot as one of the Joint Download Boot methods, and the module pin table (PDF p.11) maps RXD to GPIO20 / U0RXD, but neither document states an idle level or bias requirement for the UART0 receive pad; this card also maps no U0RXD pad, so no [[models.pin_bias]] row is written"
 
 [models.match]
 value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
@@ -8385,6 +8451,14 @@ cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloa
 id = "rp2040_qfn56"
 kind = "mcu"
 description = "Raspberry Pi RP2040, QFN-56 with exposed ground pad"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "xtal_cap_range"
+reason = "RP2040 Datasheet 2.16.1 Overview and 2.16.1.1 Recommended Crystals (PDF p.217, Table 257) give the recommended crystal's own load capacitance (CL = 10 pF) and the 1 MHz to 15 MHz crystal range, but no range for the external capacitors on XIN and XOUT; the capacitor values are in the separate Hardware design with RP2040 document, not in this datasheet, so no xtal_cap_min_f / xtal_cap_max_f is stated"
 
 [models.match]
 value_re = "(?i)^RP2040(?:[-_ ]?QFN[-_ ]?56)?$"

@@ -358,9 +358,9 @@ basis = "p.4 pin table: FAULT is open-drain"
     crate::validation::validate(&entry).unwrap_or_else(|e| panic!("{e:?}"));
 }
 
-/// Replay of the shipped library: the lint's subjects are found, and the cards
-/// the library itself calls load switches or motor drivers carry the fields the
-/// prompt now asks for. Prints the cards that would draw a warning.
+/// Replay of the shipped library: the lint's subjects are found, and no shipped
+/// card draws a field warning (a real value with its basis, or an `unknown`
+/// record naming the field).
 #[test]
 fn shipped_load_switch_and_motor_driver_cards_are_the_lint_subjects() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
@@ -393,16 +393,11 @@ fn shipped_load_switch_and_motor_driver_cards_are_the_lint_subjects() {
     assert!(switches >= 5, "load switches found: {switches}");
     assert!(motors >= 3, "motor drivers found: {motors}");
     assert!(mcus >= 3, "serial-bootloader MCUs found: {mcus}");
-    // The two cards the capacitor and enable work was done on are clean.
-    for id in ["tps22916", "drv8833_pwp16"] {
-        let hits: Vec<_> = noisy
-            .iter()
-            .filter(|n| n.starts_with(&format!("{id}:")))
-            .collect();
-        assert!(hits.is_empty(), "{hits:?}");
-    }
-    eprintln!("shipped cards drawing a field warning ({}):", noisy.len());
-    for n in &noisy {
-        eprintln!("  {n}");
-    }
+    // Every shipped card is clean: each field is either read from its datasheet or carries the
+    // sanctioned `unknown` record naming it. A new card, or a lint change, that opens a gap fails here.
+    assert!(
+        noisy.is_empty(),
+        "shipped cards drawing a field warning ({}): {noisy:#?}",
+        noisy.len()
+    );
 }

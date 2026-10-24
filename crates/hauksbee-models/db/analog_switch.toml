@@ -133,6 +133,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "en_open"
+reason = "DS35404 Rev. 12-3 PDF p.2 Pin Descriptions say only \"Enable input, logic high turns on power switch.\"; the datasheet prints no internal pull-up or pull-down on EN and does not say what an unconnected EN does, so no open-pin behaviour is stated here"
 
 # Capacitance and flag bias, Diodes AP2552/AP2553 DS35404 Rev. 12-3 (https://www.diodes.com/datasheet/download/AP2553.pdf, sha256 c667dbfc5d65b69cbdb32333850b2c6830bebce54f045dbe4d4ffb5287a33ff9).
 [[models.supply_cap]]
@@ -1104,6 +1108,10 @@ ron  = 0.14      # RON typ at VIN = 3.6 V, ID = -100 mA, VEN = 1.5 V (255 mOhm m
 roff = 5.5e6     # from ISHUT-SWITCH 1 uA max at VIN = 5.5 V: an output-side
                  # leakage figure, so this one is genuinely derived
 vth  = 1.25      # VEN_TH max: the guaranteed-ON end of the band. See the note.
+en_on_level = "high"
+en_open = "off"
+en_pull_down_ohms = 2.0e6
+en_open_basis = "DS20006706B Table 4-1 Pin Function Table (printed page 15, PDF p.18 of the PCN copy), EN: \"Active-high CMOS-compatible control input for switch. Internal 2 MΩ pull down resistor to GND, output will be off if this pin is left floating.\"; the Typical Application Circuits (printed page 2) draw the 2 MΩ from EN to GND"
 
 [models.pins]
 # The "Package Types" SC-70-6 top view. That figure is a DRAWING, not a table, so
@@ -1151,6 +1159,21 @@ max_voltage_v       = 6.0    # VIN and VEN
 # discharge, charge-pump startup, supply current and break-before-make timing
 # are omitted. Current limits below use the recommended operating ceilings,
 # not the higher absolute stress ratings, which do not guarantee operation.
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.farnell.com/datasheets/4314383.pdf"
+title = "Microchip MIC94090/1/2/3/4/5 High Side Load Switches for Consumer Applications, DS20006706B (2022-2024), as attached to Microchip PCN SYST-09PKEC043 (15 April 2024)"
+locator = "Table 4-1 Pin Function Table (printed page 15); Typical Application Circuits (printed page 2); Section 5.0 Application Information (printed page 16 onward)"
+sha256 = "b25fdaafb9afd361ba964d5926a6b99766c029730d73461558d7530f0d9df8d6"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_cap"
+reason = "DS20006706B prints no input or output capacitor value or recommendation: the Typical Application Circuits (printed page 2) draw an unvalued battery-and-capacitor symbol on VIN and nothing on VOUT, and Section 5.0 Application Information covers power dissipation only, so no [[models.supply_cap]] row is written"
+
+
 [[models]]
 id = "tps2104"
 kind = "analog_switch"
@@ -1915,6 +1938,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "en_open"
+reason = "DS31359 Rev. 7-2 PDF p.2 Pin Descriptions say only \"Enable input, active high\" and the PDF p.6 Enable/Shutdown Operation text only requires the drive to swing above VIH and below VIL; the datasheet prints no internal pull on EN and does not say what an unconnected EN does, so no open-pin behaviour is stated here"
 
 # Capacitors, Diodes AP2281 DS31359 Rev. 7-2 (sha256 bcdacbc38085b7587a32341094f10d2b7045c7e365cbe758e9561b793f7b0e44).
 [[models.supply_cap]]
@@ -1985,6 +2012,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "en_open"
+reason = "DS31359 Rev. 7-2 PDF p.2 Pin Descriptions say only \"Enable input, active high\" and the PDF p.6 Enable/Shutdown Operation text only requires the drive to swing above VIH and below VIL; the datasheet prints no internal pull on EN and does not say what an unconnected EN does, so no open-pin behaviour is stated here"
 
 [[models.supply_cap]]
 role = "in_out_b"
