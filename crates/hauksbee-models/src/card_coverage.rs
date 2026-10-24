@@ -1081,6 +1081,9 @@ pub fn checklist_text(
             need.key, need.ask, need.look
         );
     }
+    for line in crate::card_fields::checklist_lines(kind, roles) {
+        let _ = writeln!(out, "- {line}");
+    }
     out.push_str(
         "- pins: every pad from the pin-table column of THIS package (`ds pins`)\n\
          - match: value_re accepting the part and its board spellings (`ds board`)\n",

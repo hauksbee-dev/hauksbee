@@ -2410,6 +2410,7 @@ For kind="{entry_kind}", the required params are:
 {required_params}{conventions}
 {optional_params}
 {digital_hint}
+{card_fields}
 {ratings_rules}
 {ratings_hint}
 
@@ -2453,6 +2454,8 @@ WHERE TO LOOK AND HOW TO READ IT:
         param_bounds = param_bounds_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
+        card_fields =
+            crate::card_fields::prompt_guidance(behavioral_family_base_kind(kind).unwrap_or(kind)),
         pin_role_guidance = PIN_ROLE_GUIDANCE,
         ratings_rules = RATINGS_RULES,
         envelope_rules = ENVELOPE_RULES,
@@ -3505,6 +3508,18 @@ impl Reply<'_> {
         parse_and_validate_all(raw, part, kind)
             .map(|all| {
                 let mut out = crate::param_names::source_warnings(&all[0]);
+                // The fields a board check reads that a draft can leave out
+                // (enable behaviour, supply capacitors, open-drain pads, bias
+                // rows, pin roles, crystal caps): card-side, so no datasheet text.
+                for (i, entry) in all.iter().enumerate() {
+                    out.extend(crate::card_fields::warnings(entry).into_iter().map(|w| {
+                        if i == 0 {
+                            w
+                        } else {
+                            format!("[[models]] '{}': {w}", entry.id)
+                        }
+                    }));
+                }
                 // The binding, pin-table, coverage, scope and provenance checks
                 // the agent's `ds check` runs, against this run's sandbox facts.
                 out.extend(
@@ -7405,6 +7420,101 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         assert_eq!(seen.borrow().len(), 2);
         let out = run(Ok("not a card".into())).unwrap();
         assert_eq!(out, model.complete(bad.clone()));
+    }
+
+    /// The drafting prompt asks for the board-check fields on the kinds that carry
+    /// them, in the base the kind's prompts share, and not on a discrete part.
+    #[test]
+    fn the_prompt_asks_for_the_board_check_fields_by_kind() {
+        let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");
+        assert!(switch.contains("LOAD SWITCH") && switch.contains("[[models.supply_cap]]"));
+        assert!(switch.contains("[models.pin_capability.open_drain]"));
+        let driver = build_prompt("DRV_FIXTURE", "digital", "x");
+        assert!(driver.contains("MOTOR DRIVER") && driver.contains("[models.pins] MUST be"));
+        let mcu = build_prompt("MCU_FIXTURE", "mcu", "x");
+        assert!(mcu.contains("ROM bootloader") && mcu.contains("xtal_cap_min_f"));
+        let diode = build_prompt("D_FIXTURE", "diode", "x");
+        assert!(!diode.contains("supply_cap") && !diode.contains("open_drain"));
+        // In the cacheable base, not the part's tail.
+        let parts = build_prompt_parts("SWITCH_FIXTURE", "analog_switch", "x", &[]);
+        assert!(parts.full().contains("LOAD SWITCH"));
+        let other = build_prompt_parts("OTHER_FIXTURE", "analog_switch", "y", &[]);
+        assert_eq!(
+            parts.full().split("THE PART").next(),
+            other.full().split("THE PART").next()
+        );
+    }
+
+    /// A load switch draft that passes the checker but leaves out its capacitors and
+    /// open-enable behaviour is redrafted once with those warnings quoted; the
+    /// redraft that states them stands, and `ds check` shows the same warnings.
+    #[test]
+    fn a_draft_missing_card_fields_is_redrafted_with_the_warning_quoted() {
+        let card = |extra: &str, params: &str| {
+            format!(
+                "[[models]]\nid = \"xsw1\"\nkind = \"analog_switch\"\n\
+                 description = \"XSW1 high-side load switch\"\n\
+                 [models.match]\nvalue_re = \"(?i)^XSW1\"\n\
+                 [models.params]\nron = 0.07\nroff = 5.0e7\nvth = 1.0\nen_on_level = \"high\"\n{params}\
+                 [models.pins]\n\"1\" = \"in_out_b\"\n\"2\" = \"vss\"\n\"3\" = \"ctrl\"\n\"4\" = \"in_out_a\"\n\
+                 {MODEL_SOURCE}\
+                 [[models.source.pinout]]\npackage = \"SOT-23\"\n\
+                 pins = {{ \"1\" = \"VIN\", \"2\" = \"GND\", \"3\" = \"ON\", \"4\" = \"VOUT\" }}\n{extra}"
+            )
+        };
+        let bad = card("", "");
+        let good = card(
+            "[[models.supply_cap]]\nrole = \"in_out_b\"\nside = \"input\"\nmin_f = 1.0e-6\nbasis = \"p.19\"\n",
+            "en_open = \"off\"\nen_open_basis = \"p.3\"\n",
+        );
+        let model = Reply::Model {
+            part: "XSW1",
+            kind: "analog_switch",
+        };
+        let warned = |raw: &str| {
+            crate::card_coverage::with_facts(crate::card_coverage::Facts::default(), || {
+                model.assess(&model.complete(raw.to_owned()), true)
+            })
+            .unwrap_or_else(|e| panic!("{e:#}"))
+        };
+        let found = warned(&bad);
+        assert!(
+            found.iter().any(|w| w.contains("no [[models.supply_cap]]"))
+                && found.iter().any(|w| w.contains("open-pin")),
+            "{found:?}"
+        );
+        assert!(warned(&good).is_empty(), "{:?}", warned(&good));
+        let shown = check_draft(
+            &bad,
+            "XSW1",
+            "analog_switch",
+            &crate::card_coverage::Facts::default(),
+        );
+        assert!(
+            shown.warnings.iter().any(|w| w.contains("supply_cap")),
+            "{shown:?}"
+        );
+
+        let prompts = std::cell::RefCell::new(Vec::new());
+        let out = validated_attempts(1, "BASE", model, ("t", false), |p| {
+            prompts.borrow_mut().push(p.to_string());
+            Ok(if prompts.borrow().len() == 1 {
+                bad.clone()
+            } else {
+                good.clone()
+            })
+        })
+        .unwrap();
+        assert!(out.contains("[[models.supply_cap]]"), "{out}");
+        let prompts = prompts.into_inner();
+        assert_eq!(prompts.len(), 2);
+        assert!(
+            prompts[1].contains("lint warns")
+                && prompts[1].contains("no [[models.supply_cap]]")
+                && prompts[1].contains("en_open"),
+            "{}",
+            prompts[1]
+        );
     }
 
     /// The card LM62460 drafted (ramp-20261021): a start-anchored `mpn_re`, and a
