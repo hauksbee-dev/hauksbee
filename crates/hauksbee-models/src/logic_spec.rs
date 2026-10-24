@@ -396,8 +396,9 @@ pub struct Logic {
     /// from B1 when the direction flips.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sense: BTreeMap<String, String>,
-    /// Inputs the datasheet gives an internal pull resistor, so the pin may be
-    /// left open (and marked no-connect) without floating. Every other input
+    /// Inputs the datasheet gives an internal pull resistor, or a stated default
+    /// state when open (an isolator's `INx`: "default is high"), so the pin may
+    /// be left open (and marked no-connect) without floating. Every other input
     /// left open is a floating CMOS input to the static floating-input check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pulled_inputs: Vec<String>,

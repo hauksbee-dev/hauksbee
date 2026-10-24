@@ -29,8 +29,8 @@ use std::collections::HashMap;
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    control_role, is_capacitor, is_connector_like, is_test_point_or_hole, Component,
-    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
+    control_role, drives_a_level, is_capacitor, is_connector_like, is_test_point_or_hole,
+    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
 };
 use hauksbee_models::refdes::RefClass;
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
@@ -50,7 +50,9 @@ fn holds_no_level(c: &Component, p: &Pin, models: &HashMap<&str, &ModelEntry>) -
     if is_capacitor(c) {
         return Some(c.reference.clone());
     }
-    if class == RefClass::Switch || is_connector_like(c) {
+    // A plug-in module's output pad drives the net though its footprint reads
+    // as a board-to-board connector; a header or plug pad holds nothing.
+    if class == RefClass::Switch || (is_connector_like(c) && !drives_a_level(c, p)) {
         return Some(format!("{} pin {}", c.reference, p.number));
     }
     if class == RefClass::Transistor {
@@ -394,6 +396,48 @@ mod tests {
             ],
         );
         assert!(esp32s3_enable(vec![pnp]).is_empty());
+    }
+
+    /// An ESP32-S3 enable held only by a board-to-board part: a compute module
+    /// (footprint reads as a connector) whose pad is typed `kind`, or a bare
+    /// header.
+    fn enable_held_by(value: &str, lib_id: &str, kind: &str) -> usize {
+        let mut driver = pin_fn("75", EN, "SD_PWR_ON");
+        driver.kind = kind.into();
+        let mut module = fitted("Module1", value, lib_id, vec![driver]);
+        module.footprint = "Connector_Hirose:Hirose_DF40C-100DS".into();
+        let u1 = fitted(
+            "U1",
+            "ESP32-S3-WROOM-1",
+            "RF_Module:ESP32-S3-WROOM-1",
+            vec![pin("1", GND), pin("2", V3), pin_fn("3", EN, "EN")],
+        );
+        let b = board(
+            "t",
+            &[(GND, "GND"), (V3, "+3V3"), (EN, "/SD_PWR_ON")],
+            vec![u1, module],
+        );
+        model_control_lint(&b, &ModelLibrary::builtin())
+            .of_check(LintCheck::FloatingControlPin)
+            .count()
+    }
+
+    #[test]
+    fn a_module_output_pad_drives_the_enable_but_a_header_pin_holds_nothing() {
+        // The compute module's output is a driver: its own sequencer sets the level.
+        assert_eq!(enable_held_by("CM4", "Module:CM4", "output"), 0);
+        // A module whose symbol types the pad passive is still a module by name.
+        assert_eq!(
+            enable_held_by("Compute Module 4", "Module:Raspberry_Pi_CM4", "passive"),
+            0
+        );
+        // Control: a plain header pin (passive) holds no level, so the enable floats.
+        assert_eq!(
+            enable_held_by("Conn_01x02", "Connector:Conn_01x02", "passive"),
+            1
+        );
+        // Control: a connector pad typed input is not a driver either.
+        assert_eq!(enable_held_by("CM4", "Module:CM4", "input"), 1);
     }
 
     #[test]

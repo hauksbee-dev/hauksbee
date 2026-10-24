@@ -23,6 +23,7 @@ pub mod evidence;
 pub mod glossary;
 pub mod header_pinouts;
 pub mod labels;
+pub mod load_class;
 mod models;
 pub mod observations;
 pub mod order;

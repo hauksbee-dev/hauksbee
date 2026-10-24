@@ -101,8 +101,8 @@ pub use kicad_dru::{
     KicadDruRules, KicadDruSkippedRule,
 };
 pub use netlint::{
-    capacitor_polarity_marks, control_role, i2c_pullup_finding_for_net, i2c_role, is_capacitor,
-    is_connector_like, is_ground, is_led, is_led_identity, is_logic_or_switch_ref,
+    capacitor_polarity_marks, control_role, drives_a_level, i2c_pullup_finding_for_net, i2c_role,
+    is_capacitor, is_connector_like, is_ground, is_led, is_led_identity, is_logic_or_switch_ref,
     is_placeholder_value, is_resistor, is_test_point_or_hole, is_unconnected_net,
     model_card_file_in, norm, pin_is_no_connect, render_netlint, uart_pin_role, I2cMode, LintCheck,
     LintFinding, NetLintReport, Severity, ABSTENTION_MARKER, CHECK_BEFORE_ORDERING,

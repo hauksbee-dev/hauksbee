@@ -27,6 +27,12 @@
 //! A capacitor whose value does not read as a capacitance makes the check
 //! abstain, naming it: an unknown size is never counted as 0 F.
 //!
+//! A row the card conditions on a load (`applies_when = "usb_downstream"`: the
+//! datasheet's "for the USB application, each downstream facing port requires
+//! 120 uF") is judged only when the pin's rail reaches that load, here the VBUS
+//! pad of a USB receptacle; on any other load the row is silent and the card's
+//! general-application row, if it has one, is the figure.
+//!
 //! ## What it never claims
 //!
 //! A `recommended` row is a Low note, never a fault. Ceramic capacitance falls
@@ -39,9 +45,10 @@ use std::fmt::Write as _;
 use hauksbee_bind::binder::is_ground;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    pin_is_no_connect, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
-    ABSTENTION_MARKER, REMEDY_MARKER,
+    pin_is_no_connect, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin,
+    Severity, ABSTENTION_MARKER, REMEDY_MARKER,
 };
+use hauksbee_ir::load_class::LoadClass;
 use hauksbee_models::refdes::RefClass;
 use hauksbee_models::{CapGrade, ModelEntry, ModelLibrary, SupplyCap};
 
@@ -146,6 +153,40 @@ fn rail_caps(board: &ExtractedBoard, net: i64, gnd: Option<i64>) -> Vec<&Compone
     caps
 }
 
+/// Whether the rail from `net` reaches a load of `class`.
+fn rail_reaches(board: &ExtractedBoard, net: i64, class: LoadClass) -> bool {
+    match class {
+        LoadClass::UsbDownstream => rail_nets(board, net).into_iter().any(|n| {
+            board
+                .net_members(n)
+                .into_iter()
+                .any(|(c, p)| is_usb_vbus_pad(c, p))
+        }),
+    }
+}
+
+/// Whether pad `p` of `c` is the VBUS pin of a fitted USB receptacle: a
+/// connector whose symbol, value or footprint says USB, on a pad named VBUS (or
+/// the supply pad a layout-only extraction numbers: no name, pad 1 or a USB-C
+/// VBUS pad).
+fn is_usb_vbus_pad(c: &Component, p: &Pin) -> bool {
+    if !AssemblyState::of(c).is_present() || !hauksbee_extract::is_connector_like(c) {
+        return false;
+    }
+    let text = format!("{} {} {}", c.lib_id, c.value, c.footprint).to_ascii_lowercase();
+    if !text.contains("usb") {
+        return false;
+    }
+    let name = p.function.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return matches!(
+            p.number.as_str(),
+            "1" | "A4" | "A9" | "B4" | "B9" | "A4B9" | "A9B4"
+        );
+    }
+    name.contains("vbus") || matches!(name.as_str(), "vcc" | "5v" | "+5v" | "v+" | "power")
+}
+
 /// One finding per fitted part pin whose card states a capacitance the net
 /// does not carry.
 #[must_use]
@@ -192,6 +233,14 @@ pub fn supply_cap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 // the board names itself stays judged.
                 if net.name.trim_start_matches('/').starts_with("Net-(")
                     && board.net_members(net_id).len() <= 1
+                {
+                    continue;
+                }
+                // A row stated for one kind of load applies only where the rail
+                // reaches that load.
+                if row
+                    .applies_when
+                    .is_some_and(|class| !rail_reaches(board, net_id, class))
                 {
                     continue;
                 }
@@ -734,5 +783,90 @@ basis = "fixture datasheet section 8.3, p.13: 10 uF bulk recommended"
                 "{link_ref} {link_value}: {f:?}"
             );
         }
+    }
+
+    /// A load switch whose datasheet states 120 uF only "for the USB
+    /// application" and a 10 nF ceramic for the general application.
+    const USB_SWITCH: &str = r#"
+[[models]]
+id = "supply_cap_usb_switch"
+kind = "digital"
+description = "usb load switch fixture"
+[models.match]
+value_re = "^USBSW$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vin"
+"2" = "gnd"
+"3" = "vout"
+"4" = "en"
+[[models.supply_cap]]
+role = "vout"
+side = "output"
+grade = "required"
+min_f = 1.2e-4
+applies_when = "usb_downstream"
+basis = "fixture datasheet, Output Filter Capacitor: each downstream facing port requires at least 120 uF"
+[[models.supply_cap]]
+role = "vout"
+side = "output"
+grade = "recommended"
+min_f = 1.0e-8
+basis = "fixture datasheet, Output Filter Capacitor: general application, 0.01 uF to 0.1 uF"
+"#;
+
+    /// The switch feeding `HDMI_5V` (100 nF out), which feeds `conn` on pad 1.
+    fn usb_switch_feeding(conn: Component, out_cap: &str) -> Vec<LintFinding> {
+        let dir = hauksbee_testkit::fresh_scratch_dir("supply_cap", "usb-switch");
+        std::fs::write(dir.join("models.toml"), USB_SWITCH).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "test card must load: {errors:?}");
+        let parts = vec![
+            part("U1", "USBSW", &[("1", 2), ("2", 1), ("3", 3), ("4", 4)]),
+            part("C1", "1u", &[("1", 2), ("2", 1)]),
+            part("C2", out_cap, &[("1", 3), ("2", 1)]),
+            conn,
+        ];
+        let b = board(&[(1, "GND"), (2, "V5"), (3, "HDMI_5V"), (4, "EN")], parts);
+        supply_cap_lint(&b, &lib).findings
+    }
+
+    fn receptacle(reference: &str, lib_id: &str, vbus_name: &str) -> Component {
+        let mut c = part(reference, lib_id, &[("1", 3), ("2", 1)]);
+        c.lib_id = lib_id.into();
+        c.footprint = lib_id.into();
+        c.pins[0].function = vbus_name.into();
+        c
+    }
+
+    #[test]
+    fn a_usb_port_requirement_applies_only_when_the_switch_feeds_a_usb_port() {
+        // HDMI +5V pin: the 120 uF row is for a USB port, so nothing fires, and
+        // the general-application row (10 nF) is met by 100 nF.
+        let hdmi = receptacle("J1", "Connector:HDMI_A", "+5V");
+        let f = usb_switch_feeding(hdmi, "100n");
+        assert!(f.is_empty(), "{f:?}");
+        // Control: the same net on a USB-A VBUS pad needs the 120 uF.
+        let usb = receptacle("J2", "Connector:USB_A", "VBUS");
+        let f = usb_switch_feeding(usb, "100n");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+        assert!(
+            f[0].message.contains("requires at least 120"),
+            "{}",
+            f[0].message
+        );
+        // And a USB port that has the 120 uF is clean.
+        let usb = receptacle("J2", "Connector:USB_A", "VBUS");
+        assert!(usb_switch_feeding(usb, "150u").is_empty());
+        // The USB part's ground pin is not the VBUS pad: nothing fires.
+        let mut other = receptacle("J3", "Connector:USB_A", "D+");
+        other.pins[0].net = Some(3);
+        let f = usb_switch_feeding(other, "100n");
+        assert!(f.is_empty(), "{f:?}");
     }
 }

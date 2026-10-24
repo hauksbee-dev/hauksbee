@@ -462,6 +462,10 @@ recommended") and the Application / Layout sections. One row per pin to ground:
   min_single_f = 1.0e-5          # only when ONE capacitor must reach it (a bulk part)
   basis = "<table or sentence, with the PDF page>"
   note = "<type or voltage condition, optional>"
+  applies_when = "usb_downstream"  # only when the datasheet states the figure for one kind
+                                 # of load ("For the USB application, each downstream
+                                 # facing port requires at least 120 uF"); omit otherwise.
+                                 # The general-application figure is its own row.
 
 Only a capacitor from the pin to ground belongs here (a charge-pump capacitor
 between two pins does not). A linear regulator's output capacitor is cout_min_f,
