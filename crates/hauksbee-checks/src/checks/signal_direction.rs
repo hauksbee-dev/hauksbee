@@ -790,6 +790,10 @@ unlocked_by = "validated behavior"
 "4" = "gnd"
 "5" = "vdd"
 "6" = "pa10_usart1_rx"
+[models.pin_capability.uart_rx]
+basis = "synthetic"
+[models.pin_capability.uart_rx.pads]
+"6" = "USART1_RX"
 
 [[models]]
 id = "buffer_x"
