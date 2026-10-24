@@ -10604,7 +10604,7 @@ reason = "RP2040 Datasheet 2.16.1 Overview and 2.16.1.1 Recommended Crystals (PD
 
 [models.match]
 value_re = "(?i)^RP2040(?:[-_ ]?QFN[-_ ]?56)?$"
-footprint_re = '(?i)(^|:)QFN[-_]?56(?:[-_]1EP)?(?:_7x7mm(?:_P0\.4mm)?(?:_EP3\.2x3\.2mm)?)?$'
+footprint_re = '(?i)(^|:)(?:RP2040[-_])?QFN[-_]?56(?:[-_]1EP)?(?:_7x7mm(?:_P0\.4mm)?(?:_EP3\.2x3\.2mm)?)?$'
 
 [models.params]
 backend = "renode:rp2040"
