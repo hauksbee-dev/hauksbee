@@ -69,6 +69,111 @@ value_re = '^(RPi[-_ ]?|Raspberry[-_ ]?Pi[-_ ]?)?Pico[-_ ]?2([-_ ]?W)?([-_ ]?(SM
 mcu = "RP2350"
 source = "Raspberry Pi Pico 2 datasheet (datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf, sha256 cbcfaf881018c686495a2e53c7bd281e7e0a8217d79447d73eda7c8f74b7f675) PDF p.4: 'RP2350A microcontroller with 4 MB flash'"
 
+# --- Plug-in dev boards the library cannot run: named, so the report says which chip
+# Each of these boards fits a header footprint that other boards also use (the
+# Nano, Feather and XIAO footprints). The value names the board, and the board
+# fixes the chip. The library has no header pad map for these boards, and for
+# several of them no emulator for the chip. So the part is left unresolved, and
+# the report names the chip instead of running firmware on the wrong core. The
+# sources are the vendors' product pages, saved 2026-10-24.
+[[mcu_modules]]
+id = "arduino_nano_every"
+value_re = '^(Arduino[-_ ]?)?Nano[-_ ]?Every$'
+mcu = "ATmega4809"
+blocker = "Arduino Nano Every carries an ATmega4809 (megaAVR 0-series), not the classic Nano's ATmega328P, and the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "docs.arduino.cc/hardware/nano-every (sha256 73f2a0e5ed70743e188ee12c47419eddb8f08f84be0efdb7b0fb694c5736280e): 'sharing the same exact pinout but featuring the ATMega4809'"
+
+[[mcu_modules]]
+id = "arduino_nano_esp32"
+value_re = '^(Arduino[-_ ]?)?Nano[-_ ]?ESP32([-_ ]?S3)?$'
+mcu = "ESP32-S3"
+blocker = "Arduino Nano ESP32 carries an ESP32-S3 (in a u-blox NORA-W106), not the classic Nano's ATmega328P, and the model library has no header pad map for it, so its firmware is not run"
+source = "docs.arduino.cc/hardware/nano-esp32 (sha256 5888543c3021d41fdad5ce7d3cb99eb456e59d2fe7ad6a56c1d8a4f498eb6870): 'features the NORA-W106, a module with a ESP32-S3 chip inside'"
+
+[[mcu_modules]]
+id = "arduino_nano_rp2040_connect"
+value_re = '^(Arduino[-_ ]?)?Nano[-_ ]?RP2040([-_ ]?Connect)?$'
+mcu = "RP2040"
+blocker = "Arduino Nano RP2040 Connect carries an RP2040, not the classic Nano's ATmega328P, and the model library has no header pad map for it, so its firmware is not run"
+source = "docs.arduino.cc/hardware/nano-rp2040-connect (sha256 5fc197316f5089f7b49bdc0529f6d3af76ae586e4589055cfe94de9168fb82dd): 'brings the new Raspberry Pi RP2040 microcontroller to the Nano form factor'"
+
+[[mcu_modules]]
+id = "arduino_nano_33_ble"
+value_re = '^(Arduino[-_ ]?)?Nano[-_ ]?33[-_ ]?BLE$'
+mcu = "nRF52840"
+blocker = "Arduino Nano 33 BLE carries an nRF52840, not the classic Nano's ATmega328P, and the model library has no header pad map for it, so its firmware is not run"
+source = "docs.arduino.cc/hardware/nano-33-ble (sha256 9d1f67f6b35ea105e4f7ac3b91e9f26e139b5f92023818e7e7edc54f8c3e69b9): 'builds on the nRF52840 microcontroller'"
+
+[[mcu_modules]]
+id = "arduino_nano_33_iot"
+value_re = '^(Arduino[-_ ]?)?Nano[-_ ]?33[-_ ]?IoT$'
+mcu = "SAMD21"
+blocker = "Arduino Nano 33 IoT carries a SAMD21 (Cortex-M0+), not the classic Nano's ATmega328P; the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "docs.arduino.cc/hardware/nano-33-iot (sha256 2b7409a747eee4fe58613d136f7d1b4daa53cf68b099ba58072c589214341fd0): 'Using the popular Arm Cortex-M0 32-bit SAMD21 processor'"
+
+[[mcu_modules]]
+id = "adafruit_feather_m0"
+value_re = '^(Adafruit[-_ ]?)?Feather[-_ ]?M0([-_ ]?Basic)?([-_ ]?Proto)?$'
+mcu = "ATSAMD21G18"
+blocker = "Adafruit Feather M0 carries an ATSAMD21G18 (Cortex-M0+); the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "adafruit.com/product/2772 (sha256 17198494929ced75b35dcc6065319ba9fc5dee6c5eed11df17d221e8a8c1bb03): 'At the Feather M0's heart is an ATSAMD21G18 ARM Cortex M0 processor'"
+
+[[mcu_modules]]
+id = "adafruit_feather_huzzah_esp8266"
+value_re = '^(Adafruit[-_ ]?)?Feather[-_ ]?HUZZAH([-_ ]?ESP8266)?$'
+mcu = "ESP8266"
+blocker = "Adafruit Feather HUZZAH carries an ESP8266; the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "adafruit.com/product/2821 (sha256 bdfd7134b5c337d2f53fa0f75f585a79f982fe82d1885ab00bfa2196fb31e98c): 'It's an ESP8266 WiFi module with all the extras'"
+
+[[mcu_modules]]
+id = "wemos_d1_mini"
+value_re = '^(WEMOS[-_ ]?|LOLIN[-_ ]?)?D1[-_ ]?mini$'
+mcu = "ESP8266EX"
+blocker = "WEMOS / LOLIN D1 mini carries an ESP8266EX; the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "wemos.cc/en/latest/d1/d1_mini.html (sha256 45169cd34bbbcae3cff65084f04cb0adf6cdc16e0c5ca56c233e09da227cc005): 'A mini wifi board with 4MB flash based on ESP-8266EX'"
+
+[[mcu_modules]]
+id = "teensy_2"
+value_re = '^Teensy[-_ ]?2([.]?0)?$'
+mcu = "ATmega32U4"
+blocker = "Teensy 2.0 carries an ATmega32U4, but the model library has no header pad map for it (which header pin is which port pin), so its firmware is not run"
+source = "pjrc.com/store/teensy.html (sha256 0352942685b28c3562e46197ddf6702cb6ebf0fe66b8eadac217bde700e5fd51): Technical Information links the 'ATMEGA32U4 Datasheet'"
+
+[[mcu_modules]]
+id = "teensy_3_2"
+value_re = '^Teensy[-_ ]?3[.]?2$'
+mcu = "MK20DX256"
+blocker = "Teensy 3.2 carries an NXP MK20DX256 (Cortex-M4); the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "pjrc.com/store/teensy32.html (sha256 8dd8ab1fb1befdfba5eaadbecf8f13f0486c93dd51e02fb884a458f0058396e7): 'ARM Cortex-M4 at 72 MHz'; 'MK20DX256 Manual ... MK20DX256 Datasheet'"
+
+[[mcu_modules]]
+id = "teensy_lc"
+value_re = '^Teensy[-_ ]?LC$'
+mcu = "MKL26Z64"
+blocker = "Teensy LC carries an NXP MKL26Z64 (Cortex-M0+); the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "pjrc.com/store/teensylc.html (sha256 a337b18bb5747d443a40eeb21805efb81f7e2eee9a56c7370c1827d7323b491c): 'ARM Cortex-M0+ at 48 MHz'; 'MKL26Z64 Manual'"
+
+[[mcu_modules]]
+id = "teensy_4"
+value_re = '^Teensy[-_ ]?4([.]?[01])?$'
+mcu = "MIMXRT1062"
+blocker = "Teensy 4.0 / 4.1 carries an NXP i.MX RT1062 (MIMXRT1062, Cortex-M7); the model library has no co-sim or header pad map for it, so its firmware is not run"
+source = "pjrc.com/store/teensy40.html (sha256 b11d867565d435d1c4637f401c0e9b69f57e15b3a9d8441dcb997e1e12fc32dd) and teensy41.html (sha256 5387bd852ebe480ae742a77a8b08aa3ff5265adc6775ade56cb305fb1733f451): 'U1 part number MIMXRT1062DVL6B' / 'MIMXRT1062DVJ6B'"
+
+[[mcu_modules]]
+id = "seeed_xiao_samd21"
+value_re = '^(Seeed(uino)?[-_ ]?(Studio[-_ ]?)?)?XIAO([-_ ]?SAMD21)?([-_ ]?(DIP|SMD|SMT))?$'
+mcu = "ATSAMD21G18"
+blocker = "Seeed XIAO (SAMD21) carries an ATSAMD21G18A (Cortex-M0+); the model library has no co-sim for it, so its firmware is not run"
+source = "wiki.seeedstudio.com/Seeeduino-XIAO (sha256 57d65c9f53cd6e1ec7a60d730bb7565259dc612affa0376bbc9c62105f9d2ce0): 'It carries the powerful ATSAMD21G18A-MU'"
+
+[[mcu_modules]]
+id = "seeed_xiao_nrf52840"
+value_re = '^(Seeed[-_ ]?(Studio[-_ ]?)?)?XIAO[-_ ]?(nRF52840|BLE)([-_ ]?(DIP|SMD|SMT))?$'
+mcu = "nRF52840"
+blocker = "Seeed XIAO nRF52840 carries an nRF52840, but the model library has no header pad map for it, so its firmware is not run"
+source = "wiki.seeedstudio.com/XIAO_BLE (sha256 2c19511b2f0598646b3a3cb826a2d0f8101f3dc3b1e8e989e7ee49130f393b0f): 'equipped with a powerful Nordic nRF52840 MCU'"
+
 # --- Module-specific footprints: the footprint fixes the module --------------
 # The KiCad RF_Module footprints below are drawn for one Espressif module each,
 # and each module integrates one chip family (ESP32-WROOM-32E datasheet v2.1 s1
@@ -98,6 +203,53 @@ id = "esp32_c3_mini_footprint"
 footprint_re = '(?:^|[:/])ESP32[-_ ]?C3[-_ ]?MINI[-_ ]?1'
 as_value = "ESP32-C3-MINI-1"
 source = "Espressif ESP32-C3-MINI-1 datasheet, Module Overview, PDF p.2 (sha256 de7361381348d82a1abd337f10170be7a420675987568f71fe3c5b100deed270): the module integrates the ESP32-C3"
+
+# KiCad's MCU_Module symbols for the Pico name the board exactly
+# (RaspberryPi_Pico, RaspberryPi_Pico_W, and the _Debug / _Extensive drawings of
+# the same boards; KiCad's RP2350 board is RaspberryPi_Pico2). So the symbol
+# fixes the RP2040 even where the 40-pin footprint below cannot.
+[[mcu_modules]]
+id = "pico_symbol"
+lib_re = '(?:^|:)RaspberryPi_Pico(_Debug|_Extensive)?$'
+as_value = "Pico"
+source = "Raspberry Pi Pico datasheet (sha256 757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb) PDF p.5: 'Pico provides minimal (yet flexible) external circuitry to support the RP2040 chip'"
+
+[[mcu_modules]]
+id = "pico_w_symbol"
+lib_re = '(?:^|:)RaspberryPi_Pico_W(_Debug|_Extensive)?$'
+as_value = "Pico W"
+source = "Raspberry Pi Pico W datasheet (sha256 ba8649ba98437301b9f1621504569a27f1d2ba6111795b4df76783adb08de7c5) PDF p.4-5: RP2040 with the Pico's flash and crystal"
+
+# Seeed's KiCad library draws one symbol and footprint per XIAO (XIAO-RP2040-DIP,
+# XIAO-ESP32C3-SMD, ...), so they name a XIAO whose value says nothing.
+[[mcu_modules]]
+id = "xiao_rp2040_footprint"
+footprint_re = '(?:^|[:/])XIAO[-_]RP2040[-_](DIP|SMD|SMT)'
+lib_re = '(?:^|:)XIAO[-_]RP2040[-_](DIP|SMD|SMT)'
+as_value = "XIAO RP2040"
+source = "Seeed XIAO RP2040 schematic v1.3 (sha256 0da8a6c0cf1464c82ac3964b6a933b634761621a884ab1f498f61f777b42aeef) p.1: U6 RP2040"
+
+[[mcu_modules]]
+id = "xiao_esp32c3_footprint"
+footprint_re = '(?:^|[:/])XIAO[-_]ESP32[-_]?C3[-_](DIP|SMD|SMT)'
+lib_re = '(?:^|:)XIAO[-_]ESP32[-_]?C3[-_](DIP|SMD|SMT)'
+as_value = "XIAO ESP32C3"
+source = "Seeed XIAO ESP32C3 schematic (sha256 10eacb7cd87f93f4823bb92d21fc3aa618b75bc9088fe112932f01bb2ce9b24a) p.1: U4 ESP32-C3FN4"
+
+[[mcu_modules]]
+id = "xiao_esp32s3_footprint"
+footprint_re = '(?:^|[:/])XIAO[-_]ESP32[-_]?S3[-_](DIP|SMD|SMT)'
+lib_re = '(?:^|:)XIAO[-_]ESP32[-_]?S3[-_](DIP|SMD|SMT)'
+as_value = "XIAO ESP32S3"
+source = "Seeed XIAO ESP32S3 schematic v1.2 (sha256 c22d0b9fbbc7e0af6a8d0f549bbd10d05da412d092602c96e7ca2ccd05550825) p.1: U1 ESP32-S3R8"
+
+# The Feather footprint is shared by every Feather (ESP32, ESP8266, 32u4, SAMD21,
+# RP2040, ...). The value has to name the Feather.
+[[mcu_modules]]
+id = "feather_footprint"
+footprint_re = '(?:^|[:/])Adafruit[-_]?Feather'
+blocker = "the footprint is the Adafruit Feather header footprint, shared by Feathers with different chips (ESP32, ESP8266, ATmega32U4, SAMD21, RP2040), so it does not say which chip runs the firmware; set the part value to the Feather's name (e.g. 'Feather HUZZAH32', 'Feather RP2040', 'Feather 32u4')"
+source = "adafruit.com/product/2772 (Feather M0: ATSAMD21G18) and /product/2821 (Feather HUZZAH: ESP8266), and the HUZZAH32 / 32u4 / RP2040 Feather schematics: one footprint, different chips"
 
 # --- Footprints shared by boards with different chips: say so, plainly -------
 [[mcu_modules]]

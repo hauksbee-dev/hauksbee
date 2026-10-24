@@ -236,6 +236,99 @@ mod tests {
     }
 
     #[test]
+    fn a_dev_board_on_a_shared_footprint_is_named_by_its_value() {
+        for (value, mcu) in [
+            ("Arduino_Nano_Every", "ATmega4809"),
+            ("Arduino Nano ESP32", "ESP32-S3"),
+            ("Arduino_Nano_RP2040_Connect", "RP2040"),
+            ("Arduino_Nano_33_BLE", "nRF52840"),
+            ("Arduino_Nano_33_IoT", "SAMD21"),
+            ("Adafruit_Feather_M0", "ATSAMD21G18"),
+            ("Adafruit_Feather_HUZZAH_ESP8266", "ESP8266"),
+            ("WEMOS_D1_mini", "ESP8266EX"),
+            ("Teensy4.1", "MIMXRT1062"),
+            ("Teensy 3.2", "MK20DX256"),
+            ("TeensyLC", "MKL26Z64"),
+            ("Teensy2.0", "ATmega32U4"),
+            ("Seeeduino XIAO", "ATSAMD21G18"),
+            ("XIAO-nRF52840-DIP", "nRF52840"),
+        ] {
+            let entry = mcu_module_alias(value).unwrap_or_else(|| panic!("{value}"));
+            assert_eq!(entry.mcu, mcu, "{value}");
+            let blocker = entry
+                .blocker
+                .as_deref()
+                .unwrap_or_else(|| panic!("{value}"));
+            assert!(
+                blocker.contains(mcu.trim_end_matches("EX")),
+                "{value}: {blocker}"
+            );
+        }
+        // The classic Nano and the boards the library carries cards for are not
+        // blocked by value.
+        for value in [
+            "Arduino_Nano_v3.x",
+            "Arduino Nano",
+            "XIAO RP2040",
+            "XIAO-ESP32C3-DIP",
+            "Adafruit_Feather_HUZZAH32_ESP32",
+            "Feather RP2040",
+            "Teensy++2.0",
+        ] {
+            assert!(
+                mcu_module_alias(value)
+                    .and_then(|e| e.blocker.as_ref())
+                    .is_none(),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dev_board_symbol_or_footprint_names_the_board() {
+        for (lib, fp, as_value) in [
+            (
+                "MCU_Module:RaspberryPi_Pico_Extensive",
+                "Module:RaspberryPi_Pico_SMD",
+                "Pico",
+            ),
+            ("MCU_Module:RaspberryPi_Pico_Debug", "", "Pico"),
+            (
+                "MCU_Module:RaspberryPi_Pico_W",
+                "Module:RaspberryPi_Pico_W_SMD",
+                "Pico W",
+            ),
+            (
+                "",
+                "Seeed_Studio_XIAO_Series:XIAO-RP2040-DIP",
+                "XIAO RP2040",
+            ),
+            (
+                "Seeed_Studio_XIAO_Series:XIAO-ESP32C3-SMD",
+                "",
+                "XIAO ESP32C3",
+            ),
+            (
+                "",
+                "Seeed_Studio_XIAO_Series:XIAO-ESP32S3-DIP",
+                "XIAO ESP32S3",
+            ),
+        ] {
+            let entry = mcu_module_by_identity(lib, fp).unwrap_or_else(|| panic!("{lib} {fp}"));
+            assert_eq!(entry.as_value.as_deref(), Some(as_value), "{lib} {fp}");
+        }
+        // The RP2350 Pico 2 symbol is not taken for the RP2040 Pico.
+        assert!(mcu_module_by_identity("MCU_Module:RaspberryPi_Pico2", "")
+            .and_then(|e| e.as_value.as_deref())
+            .is_none());
+        let feather = mcu_module_by_identity("", "Module:Adafruit_Feather").unwrap();
+        assert!(feather
+            .blocker
+            .as_deref()
+            .is_some_and(|b| b.contains("Feather")));
+    }
+
+    #[test]
     fn a_bare_chip_or_connector_footprint_matches_no_module() {
         for fp in [
             "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm",

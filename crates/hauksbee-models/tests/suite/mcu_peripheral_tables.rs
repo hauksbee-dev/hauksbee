@@ -170,6 +170,10 @@ fn matrix_parts_declare_routing_and_a_part_without_a_function_declares_it_empty(
 /// The firmware-intent check finds an AVR's capture pad by the word `ICP1` in
 /// the `timer_capture` table's pad description, so every simulated AVR card with
 /// a capture unit must name it there.
+///
+/// A dev-board card whose header does not bring ICP1 out (the processor's ICP1
+/// pin reaches nothing but the processor) names no ICP1 pad; its basis must then
+/// say so in capitals ("ICP1 IS NOT ON THE ... HEADER") so the gap is deliberate.
 #[test]
 fn every_simulated_avr_card_names_its_capture_pad_icp1() {
     let mut seen = 0;
@@ -186,6 +190,16 @@ fn every_simulated_avr_card_names_its_capture_pad_icp1() {
             .timer_capture
             .as_ref()
             .unwrap_or_else(|| panic!("{}: no timer_capture table", m.id));
+        let header_lacks_icp1 = m.params.get_bool("module").unwrap_or(false)
+            || m.params.get_f64("module_clock_hz").is_some();
+        if header_lacks_icp1 && table.basis.contains("ICP1 IS NOT ON THE") {
+            assert!(
+                !table.pads.values().any(|what| what.contains("ICP1")),
+                "{}: says ICP1 is not on the header but names an ICP1 pad",
+                m.id
+            );
+            continue;
+        }
         assert!(
             table.pads.values().any(|what| what
                 .split(|c: char| !c.is_ascii_alphanumeric())

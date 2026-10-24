@@ -2104,6 +2104,11 @@ fn record_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::R
         if let Some(pins) = spelled.find_map(|name| generic_symbol_pins(name, model.kind)) {
             model.pins = pins;
         }
+        // A plug-in board's card maps its header by LABEL, since the pad
+        // numbers are whichever library's footprint the board used: each pad
+        // the card's pin map leaves open takes the role its name labels.
+        let pads = comp.pins.iter();
+        model.apply_header_labels(pads.map(|p| (p.number.as_str(), p.function.as_str())));
     }
     // The generic LED corner set answers the value "LED" alone; only a plain
     // two-pad LED takes it (a WS2812B/RGB part or a U-designated "LED" is not it).
@@ -2769,6 +2774,15 @@ fn route_mcu_family(comp: &Component) -> Option<McuFamilyRoute> {
     if !looks_like_mcu_candidate(comp) {
         return None;
     }
+    // A value that names a dev board the module table refuses (`Arduino Nano
+    // ESP32`, `XIAO nRF52840`) is not routed by the chip token inside it: the
+    // board's header map is unknown, so binding the bare chip by pin-name guesses
+    // would drive the wrong pads. The refusal names the chip instead.
+    if hauksbee_models::mcu_modules::mcu_module_alias(&comp.value)
+        .is_some_and(|entry| entry.blocker.is_some())
+    {
+        return None;
+    }
     mcu_identity_strings(comp)
         .iter()
         .find_map(|s| route_mcu_family_str(s))
@@ -3411,11 +3425,14 @@ fn unresolved_outcome(
         );
     }
     // A module the table cannot bind says why, in plain words, instead of the
-    // generic "no model".
-    let module_blocker =
-        hauksbee_models::mcu_modules::mcu_module_by_identity(&comp.lib_id, &comp.footprint)
-            .or_else(|| hauksbee_models::mcu_modules::mcu_module_alias(&comp.value))
-            .and_then(|entry| entry.blocker.as_ref());
+    // generic "no model". A value that names the board (`Arduino Nano Every`)
+    // says more than a footprint shared by several boards, so its reason wins.
+    let module_blocker = hauksbee_models::mcu_modules::mcu_module_alias(&comp.value)
+        .and_then(|entry| entry.blocker.as_ref())
+        .or_else(|| {
+            hauksbee_models::mcu_modules::mcu_module_by_identity(&comp.lib_id, &comp.footprint)
+                .and_then(|entry| entry.blocker.as_ref())
+        });
     if let Some(blocker) = module_blocker {
         let msg = format!(
             "[auto-bind] {} \"{}\" not bound: {blocker}.",
