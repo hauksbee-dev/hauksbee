@@ -468,6 +468,65 @@ fn crystal_on_a_driver_without_on_chip_caps_still_fires() {
     assert_eq!(r.finding_count(), 1, "no caps, no integration: must fire");
 }
 
+/// A crystal `Y1` of `value` on a `Si5351C`'s XA/XB (pads 1 and 2), `cap` to ground
+/// on each: the `HackRF` One's clock generator and its 25 MHz, 10 pF crystal.
+fn xtal_on_si5351(value: &str, cap: &str) -> ExtractedBoard {
+    pcb(&format!(
+        r#"(net 1 "XA") (net 2 "XB") (net 3 "GND")
+        (footprint "Crystal:Crystal_SMD_3225-4Pin"
+          (at 10 10) (layer "F.Cu")
+          (property "Reference" "Y1") (property "Value" "{value}")
+          (pad "1" smd rect (at -1 0) (net 1 "XA"))
+          (pad "2" smd rect (at -1 1) (net 3 "GND"))
+          (pad "3" smd rect (at 1 0) (net 2 "XB"))
+          (pad "4" smd rect (at 1 1) (net 3 "GND")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 8 10) (layer "F.Cu")
+          (property "Reference" "C1") (property "Value" "{cap}")
+          (pad "1" smd rect (at 0 0) (net 1 "XA"))
+          (pad "2" smd rect (at 1 0) (net 3 "GND")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 12 10) (layer "F.Cu")
+          (property "Reference" "C2") (property "Value" "{cap}")
+          (pad "1" smd rect (at 0 0) (net 2 "XB"))
+          (pad "2" smd rect (at 1 0) (net 3 "GND")))
+        (footprint "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.5x2.5mm"
+          (at 16 10) (layer "F.Cu")
+          (property "Reference" "U1") (property "Value" "SI5351C")
+          (pad "1" smd rect (at 0 0) (net 1 "XA"))
+          (pad "2" smd rect (at 0 1) (net 2 "XB")))"#
+    ))
+}
+
+/// A crystal on a Si5351 is loaded by the chip's own programmable capacitors
+/// (12 to 20 pF on each of XA and XB, from its card), so the 1 pF the two 2 pF
+/// caps add is right for a 10 pF crystal: the board can reach it, so nothing
+/// fires, with no bound cards at all. A crystal the range cannot reach still does.
+#[test]
+fn a_clock_generators_programmable_load_is_read_from_its_card() {
+    let ok = xtal_on_si5351("MAIN_XTAL 25MHz 10pF", "2p");
+    let r = crystal_findings(&ok, &CrystalCards::new());
+    assert!(fired(&r).is_empty(), "{r:?}");
+    for says in ["on-chip per pin", "card 'si5351c_qfn20'", "p.60"] {
+        assert!(r[0].message.contains(says), "{says:?} in {}", r[0].message);
+    }
+    // 12 pF is the datasheet's own example (10 pF setting plus 2 pF of external).
+    let twelve = xtal_on_si5351("25MHz 12pF", "4p");
+    assert!(fired(&crystal_findings(&twelve, &CrystalCards::new())).is_empty());
+    // A 6 pF crystal on 22 pF caps is far past anything the setting can undo.
+    let heavy = xtal_on_si5351("25MHz 6pF", "22p");
+    let r = crystal_findings(&heavy, &CrystalCards::new());
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    // The same board without the Si5351 is judged as a discrete crystal: the
+    // 2 pF caps on a 10 pF crystal fire.
+    let mut discrete = xtal_on_si5351("MAIN_XTAL 25MHz 10pF", "2p");
+    set_value(&mut discrete, "U1", "SOMETHING_ELSE");
+    assert_eq!(
+        fired(&crystal_findings(&discrete, &CrystalCards::new())).len(),
+        1
+    );
+}
+
 /// The crystal findings of `b` judged with `cards`.
 fn crystal_findings(b: &ExtractedBoard, cards: &CrystalCards) -> Vec<SiFinding> {
     b.si_checks_with(None, cards)

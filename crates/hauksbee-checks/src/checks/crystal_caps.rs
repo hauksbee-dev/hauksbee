@@ -18,8 +18,10 @@
 
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
-use hauksbee_extract::si::{crystal_sites, CrystalCards, CrystalFacts, IntegratedCaps};
-use hauksbee_extract::{is_resistor, ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
+use hauksbee_extract::si::{
+    crystal_sites, driver_caps_with, CrystalCards, CrystalFacts, IntegratedCaps,
+};
+use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::{Confidence, ModelLibrary};
 
 /// What the bound cards say about every crystal on the board.
@@ -61,39 +63,19 @@ pub fn crystal_cards(board: &ExtractedBoard, lib: &ModelLibrary) -> CrystalCards
 }
 
 /// The on-chip load capacitance the card of an IC on `nets` states for the
-/// oscillator pad it connects, if any.
+/// oscillator pad it connects, if any: [`driver_caps_with`] over the binder's
+/// resolution, which a guessed or unresolved part does not pass.
 fn driver_caps(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     nets: &[i64; 2],
 ) -> Option<IntegratedCaps> {
-    let mut candidates: Vec<i64> = nets.to_vec();
-    for &n in nets {
-        for (c, _) in board.net_members(n) {
-            if !AssemblyState::of(c).is_present() || !is_resistor(c) {
-                continue;
-            }
-            candidates.extend(c.pins.iter().filter_map(|p| p.net).filter(|id| *id != n));
+    driver_caps_with(board, nets, |c| {
+        let res = resolve(lib, AssemblyState::of(c).fitted()?);
+        if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
+            return None;
         }
-    }
-    candidates.iter().find_map(|&n| {
-        board.net_members(n).into_iter().find_map(|(c, pin)| {
-            let res = resolve(lib, AssemblyState::of(c).fitted()?);
-            if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
-                return None;
-            }
-            let model = res.model?;
-            let cap = model.xtal_int_caps_on(&pin.number)?;
-            let basis = format!("card '{}' {}: {}", model.id, cap.oscillator, cap.basis);
-            Some(match (cap.min_f, cap.max_f) {
-                (Some(lo), Some(hi)) => IntegratedCaps::Range {
-                    lo_pf: lo * 1e12,
-                    hi_pf: hi * 1e12,
-                    basis,
-                },
-                _ => IntegratedCaps::Unspecified { basis },
-            })
-        })
+        res.model
     })
 }
 
@@ -334,6 +316,51 @@ mod tests {
             "{}",
             heavy[0].message
         );
+    }
+
+    /// A Si5351 clock generator loads its crystal with programmable on-chip
+    /// capacitors (12 to 20 pF on each of XA and XB: register 183 sets the CL
+    /// across the pair to 6, 8 or 10 pF), so a 10 pF crystal on two 2 pF caps is
+    /// reachable and silent, a 6 pF crystal on 22 pF caps is not, and a 12 pF
+    /// crystal needs the 2 pF of external capacitance the datasheet allows.
+    #[test]
+    fn a_si5351s_programmable_crystal_load_is_read_from_its_card() {
+        let on_xa_xb = |value: &str, part_no: &str, cap: &str| {
+            let mut y1 = part("Y1", value, &[("1", 1), ("2", 2)]);
+            y1.footprint = "Crystal:Crystal_SMD_3215-2Pin".into();
+            board(
+                &[(1, "XA"), (2, "XB"), (3, "GND")],
+                vec![
+                    part("U19", part_no, &[("1", 1), ("2", 2)]),
+                    y1,
+                    part("C1", cap, &[("1", 1), ("2", 3)]),
+                    part("C2", cap, &[("1", 2), ("2", 3)]),
+                ],
+            )
+        };
+        let lib = ModelLibrary::builtin();
+        let b = on_xa_xb("25MHz 10pF", "SI5351C", "2p");
+        match crystal_cards(&b, &lib)["Y1"].driver_caps.clone() {
+            Some(IntegratedCaps::Range {
+                lo_pf,
+                hi_pf,
+                basis,
+            }) => {
+                assert!((lo_pf - 12.0).abs() < 1e-9 && (hi_pf - 20.0).abs() < 1e-9);
+                assert!(basis.contains("AN619") && basis.contains("p.60"), "{basis}");
+            }
+            other => panic!("Si5351 range expected, got {other:?}"),
+        }
+        assert!(engine_findings(&b).is_empty(), "{:?}", engine_findings(&b));
+        // Each version of the 20-pin QFN carries the same oscillator.
+        for part_no in ["SI5351A-B-GM", "SI5351B-B-GM", "Si5351C-B-GM"] {
+            let b = on_xa_xb("25MHz 10pF", part_no, "2p");
+            assert!(engine_findings(&b).is_empty(), "{part_no}");
+        }
+        assert!(engine_findings(&on_xa_xb("25MHz 12pF", "SI5351C", "4p")).is_empty());
+        let heavy = engine_findings(&on_xa_xb("25MHz 6pF", "SI5351C", "22p"));
+        assert_eq!(heavy.len(), 1, "{heavy:?}");
+        assert!(heavy[0].message.contains("on-chip per pin"));
     }
 
     /// An EFM32PG22 whose LFXO pads carry the 32.768 kHz crystal: the card says

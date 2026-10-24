@@ -872,7 +872,8 @@ in `[models.pins]` and none a supply or ground role.
 
 ## Pin capability: on-chip crystal load capacitors
 
-An MCU card states the load capacitance built into an oscillator pad pair, so the
+A card (an MCU's, a clock generator's such as the Si5351, an RTC's) states the
+load capacitance built into an oscillator pad pair, so the
 crystal check (`crystal_load_cap`, `docs/checks/SI_CHECKS.md`) can tell a crystal
 with no external caps that the chip loads from one that is missing them. With none
 fitted the bank reaches at most `max_f / 2` (the two pads in series), and a
@@ -889,9 +890,11 @@ basis = "Datasheet <part> <version>, Table <n> (PDF p.<n>): <what the row says>"
 
 `min_f`/`max_f` are the per-pad range the datasheet prints (give both or neither).
 Leave them out when the bank is software-tuned and the datasheet prints no range:
-the check then judges nothing for that oscillator. Validation requires an `mcu`
-card, a basis, two distinct pads that exist in `[models.pins]` and are not supply or
-ground roles, and `0.5 pF <= min_f <= max_f <= 100 pF`.
+the check then judges nothing for that oscillator. Validation requires a basis, two
+distinct pads that exist in `[models.pins]` and are not supply or ground roles, and
+`0.5 pF <= min_f <= max_f <= 100 pF`. When the datasheet gives the load across the
+pair rather than per pad (the Si5351's 6/8/10 pF CL), `min_f`/`max_f` are twice it:
+two equal pads in series present half of each.
 
 A crystal card (`passive_class = "crystal"`, matched by `mpn_re`) carries the
 crystal's own figures as params: `cl_f` (specified load capacitance), `c0_f`
