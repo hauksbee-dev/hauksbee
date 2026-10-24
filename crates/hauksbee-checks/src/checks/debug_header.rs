@@ -47,20 +47,22 @@
 //!   4-pin header whose pin names say nothing about whose point of view they
 //!   are, or that no adapter word names, is not judged: a board's own `TX`
 //!   label usually means the board's transmit, and no document fixes that order.
-//! - **An unnamed serial header is advised on, not judged.** A single-row
-//!   connector of 3 to 6 pins that no standard names, whose connected pins are
-//!   exactly one ground, one supply and the board's own UART pair, is compared
-//!   with the common USB-serial cable (its `TXD` on a lower pin than its `RXD`:
-//!   FTDI TTL-232R, `FT_000054` Table 4.1, read from the shared pinout table). The
-//!   board's transmit before its receive means a straight cable meets transmit
-//!   with transmit, and the finding is Medium: "crossover cable needed". No
-//!   document fixes a module's pin order, so this is advice, and a header to a
-//!   peer board (a crossover by design) cannot be told from one for a cable. The
-//!   direction of each pin is read from an MCU card's pad roles first, so a
-//!   USB-serial bridge on the same lines does not blur it, else from the
-//!   symbols' UART pin names when they all agree.
-//!   A header whose symbol names a pin `TX`/`RX` has been labelled from a point
-//!   of view this check cannot read, so it is left alone.
+//! - **An unnamed header laid out like a sourced adapter is advised on.** A
+//!   single-row connector that no standard names, whose whole layout matches an
+//!   adapter row of the shared pinout table (the same pin count, a ground net on
+//!   each of its ground pins and a supply net on its supply pin; handshake pins
+//!   are free: today the FTDI TTL-232R cable, `FT_000054` Table 4.1, ground on 1,
+//!   supply on 3, `TXD` on 4, `RXD` on 5), is judged against it. The board's
+//!   transmit on the adapter's `TXD` pin, or its receive on the `RXD` pin, means a
+//!   straight cable meets transmit with transmit: Medium, "crossover cable
+//!   needed". A header whose ground and supply sit on no sourced adapter's
+//!   positions abstains, because no document fixes the order of a bare UART
+//!   header (modules differ), and a header to a peer board (a crossover by
+//!   design) cannot be told from one for a cable. The direction of each pin is
+//!   read from an MCU card's pad roles first, so a USB-serial bridge on the
+//!   same lines does not blur it, else from the symbols' UART pin names when
+//!   they all agree. A symbol that names a pin `TX`/`RX` has been labelled from
+//!   a point of view this check cannot read, so it is left alone.
 //! - **Two-row numbering is the standard's.** A symbol that counts down the
 //!   columns (`Top_Bottom`) numbers its pins differently from the standard, so
 //!   it is not judged.
@@ -678,86 +680,109 @@ fn names_a_serial_pin(comp: &Component) -> bool {
     })
 }
 
-/// The order the common USB-serial cable gives its serial pair: whether its
-/// `TXD` (the board's receive) sits on a lower pin than its `RXD`. Read from the
-/// FTDI TTL-232R row of the shared pinout table.
-fn adapter_txd_before_rxd() -> Option<bool> {
-    let h = header_pinouts::header("ftdi_6")?;
-    let pin = |s| h.pins_of(s).first()?.parse::<u32>().ok();
-    Some(pin(HeaderSignal::AdapterTransmit)? < pin(HeaderSignal::AdapterReceive)?)
-}
-
-/// A 3 to 6 pin single-row header no standard names and no adapter word or pin
-/// names identify, whose connected pins are exactly a ground, a supply and the
-/// board's own UART pair, with the board's transmit on a lower pin than its
-/// receive. The common USB-serial cable lists its `TXD` before its `RXD`
-/// (FTDI TTL-232R, `FT_000054` Table 4.1: pin 4 `TXD`, pin 5 `RXD`), so a straight
-/// cable from it meets transmit with transmit: a crossover is needed. Judged
-/// only when the board's own UART pins reach the header and are unambiguous; a
-/// header to a peer board, which crosses by design, looks the same and so
-/// stays a Medium advisory.
+/// A single-row header no standard names and no adapter word or pin names
+/// identify, whose whole layout matches a sourced USB-serial adapter row of the
+/// shared pinout table (same pin count; a ground net on each of the row's
+/// ground pins and a supply net on its supply pin; handshake and unused pins
+/// are free), with the board's own UART pins unambiguously facing the wrong
+/// way on that row: a straight cable or module of that adapter plugged in
+/// meets transmit with transmit, so a crossover is needed. A header whose
+/// ground and supply sit on no sourced adapter's positions is not judged, since
+/// no document fixes the order of a bare UART header. A header to a peer board,
+/// which crosses by design, looks the same and so stays a Medium advisory.
 fn crossover_header_finding(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     comp: &Component,
 ) -> Option<LintFinding> {
-    if !(3..=6).contains(&comp.pins.len())
-        || !is_single_row(comp)
-        || uart_by_pin_names(comp).is_some()
-        || names_a_serial_pin(comp)
-        || !adapter_txd_before_rxd()?
-    {
+    if !is_single_row(comp) || uart_by_pin_names(comp).is_some() || names_a_serial_pin(comp) {
         return None;
     }
-    let numbers: BTreeSet<u32> = comp
-        .pins
-        .iter()
-        .map(|p| p.number.parse::<u32>().ok())
-        .collect::<Option<_>>()?;
-    if numbers.len() != comp.pins.len() {
-        return None;
-    }
-    let (mut ground, mut supply) = (0, 0);
-    let (mut tx, mut rx) = (None, None);
-    for pin in &comp.pins {
-        let Some(net) = pin.net.filter(|id| *id != 0) else {
+    let net_of = |number: &str| {
+        comp.pins
+            .iter()
+            .find(|p| p.number == number)
+            .and_then(|p| p.net)
+            .filter(|id| *id != 0)
+    };
+    let name_of = |id: i64| board.net(id).map(|n| n.name.clone());
+    'rows: for row in header_pinouts::STANDARD_HEADERS {
+        if row.pin_count != comp.pins.len()
+            || row.pins_of(HeaderSignal::AdapterTransmit).len() != 1
+            || row.pins_of(HeaderSignal::AdapterReceive).len() != 1
+        {
             continue;
-        };
-        let name = board.net(net)?.name.clone();
-        let number = pin.number.parse::<u32>().ok()?;
-        match from_name(&name) {
-            Some(HeaderSignal::Ground) => ground += 1,
-            Some(HeaderSignal::Supply) => supply += 1,
-            _ => match board_direction(board, lib, comp, net)? {
-                (true, at) if tx.is_none() => tx = Some((number, name, at)),
-                (false, at) if rx.is_none() => rx = Some((number, name, at)),
-                _ => return None,
-            },
         }
+        // The layout: every ground and supply pad of the row on a matching net.
+        let mut anchored = false;
+        for (number, signal) in row.pins {
+            let want = match signal {
+                HeaderSignal::Ground => HeaderSignal::Ground,
+                HeaderSignal::Supply | HeaderSignal::AdapterSupply5V => HeaderSignal::Supply,
+                _ => continue,
+            };
+            let on = net_of(number).and_then(name_of).and_then(|n| from_name(&n));
+            if on != Some(want) {
+                continue 'rows;
+            }
+            anchored = true;
+        }
+        if !anchored {
+            continue;
+        }
+        // The serial pair: the board's own UART pin facing each adapter pin.
+        let mut wrong = Vec::new();
+        let mut right = 0;
+        for (signal, board_sends) in [
+            (HeaderSignal::AdapterTransmit, true),
+            (HeaderSignal::AdapterReceive, false),
+        ] {
+            let number = row.pins_of(signal)[0];
+            let Some(net) = net_of(number) else { continue };
+            let Some((sends, at)) = board_direction(board, lib, comp, net) else {
+                continue;
+            };
+            if sends == board_sends {
+                wrong.push((number, name_of(net)?, at, board_sends));
+            } else {
+                right += 1;
+            }
+        }
+        if wrong.is_empty() || right > 0 {
+            return None;
+        }
+        let facts = wrong
+            .iter()
+            .map(|(number, net, at, sends)| {
+                format!(
+                    "pin {number} (the adapter's {}) carries the board's {} on net '{net}' ({at})",
+                    if *sends { "TXD" } else { "RXD" },
+                    if *sends { "transmit" } else { "receive" },
+                )
+            })
+            .collect::<Vec<_>>();
+        return Some(LintFinding {
+            check: LintCheck::DebugHeaderPinout,
+            severity: Severity::Medium,
+            message: format!(
+                "{} ({}) is an unnamed header laid out like the {} ({} {}) but its serial pins \
+                 are crossed against it: {}. A cable or module of that layout plugged straight in \
+                 meets transmit with transmit and receive with receive, so a crossover cable is \
+                 needed. Swap the two serial pins (the board's receive on the adapter's TXD pin, \
+                 its transmit on the adapter's RXD pin), or name the header for what it takes; \
+                 a header to a peer board is meant to cross and can ignore this",
+                comp.reference,
+                comp.value.trim(),
+                row.name,
+                row.source.document,
+                row.source.location,
+                facts.join("; "),
+            ),
+            refs: vec![comp.reference.clone()],
+            nets: wrong.into_iter().map(|(_, net, _, _)| net).collect(),
+        });
     }
-    let ((tx_pin, tx_net, tx_at), (rx_pin, rx_net, rx_at)) = (tx?, rx?);
-    if ground != 1 || supply != 1 || tx_pin > rx_pin {
-        return None;
-    }
-    Some(LintFinding {
-        check: LintCheck::DebugHeaderPinout,
-        severity: Severity::Medium,
-        message: format!(
-            "{} ({}) is an unnamed serial header (a ground, a supply and the board's UART pair) \
-             with the board's transmit on pin {tx_pin} (net '{tx_net}', {tx_at}) before its receive \
-             on pin {rx_pin} (net '{rx_net}', {rx_at}). The common USB-serial cable lists its TXD \
-             before its RXD (FTDI TTL-232R, FT_000054 Table 4.1: pin 4 TXD, pin 5 RXD) and no \
-             document fixes any other order for an unnamed header, so a straight cable or \
-             module plugged in meets transmit with transmit: a crossover cable is needed. Swap \
-             the two serial pins to put the board's receive on pin {tx_pin} and its transmit on \
-             pin {rx_pin}, or name the header for the cable it takes (a header to a peer board \
-             is meant to cross, and can ignore this)",
-            comp.reference,
-            comp.value.trim(),
-        ),
-        refs: vec![comp.reference.clone()],
-        nets: vec![tx_net, rx_net],
-    })
+    None
 }
 
 /// Flag every named standard header whose pins carry something else.
@@ -1434,15 +1459,15 @@ mod tests {
         }
     }
 
-    /// An unnamed 4-pin header (GND, supply, UART pair) with the board's
-    /// transmit on the lower serial pin is the order the common USB-serial
-    /// cable does not mate with: Medium, "crossover cable needed". With the
-    /// board's receive on the lower pin (the cable's TXD first) it is silent.
+    /// An unnamed single-row header laid out like the FTDI TTL-232R cable
+    /// (`FT_000054` Table 4.1: GND 1, VCC 3, TXD 4, RXD 5) with the board's TX
+    /// on the cable's TXD pin: Medium, "crossover cable needed". The cable's
+    /// own order is silent, and so is any layout that is not the cable's.
     #[test]
-    fn an_unnamed_uart_header_with_the_boards_tx_first_needs_a_crossover_cable() {
+    fn an_unnamed_header_laid_out_like_the_ftdi_cable_with_tx_on_pin_4_needs_a_crossover() {
         let found = run(vec![
             mcu(),
-            four_pin("Conn_01x04", &[("1", GND), ("2", V5), ("3", TX), ("4", RX)]),
+            header("Debug", &[("1", GND), ("3", V5), ("4", TX), ("5", RX)]),
         ]);
         assert_eq!(found.len(), 1, "{found:#?}");
         let f = &found[0];
@@ -1451,81 +1476,82 @@ mod tests {
         assert_eq!(f.refs, ["J1"]);
         assert_eq!(f.nets, ["MCU_TX", "MCU_RX"]);
         for want in [
-            "unnamed serial header",
-            "transmit on pin 3",
-            "receive on pin 4",
+            "unnamed header laid out like the FTDI 6-pin serial header",
             "FT_000054",
-            "a crossover cable is needed",
+            "pin 4 (the adapter's TXD) carries the board's transmit",
+            "a crossover cable is",
         ] {
             assert!(f.message.contains(want), "{want}: {}", f.message);
         }
-        // The cable's order (receive first) is silent.
+        // Handshake pins may carry anything (an auto-reset line on pin 6).
+        let mut nets = NETS.to_vec();
+        nets.push((9, "DTR"));
+        let with_dtr = header(
+            "Debug",
+            &[("1", GND), ("3", V5), ("4", TX), ("5", RX), ("6", 9)],
+        );
+        let found = debug_header_lint(
+            &board(&nets, vec![mcu(), with_dtr]),
+            &ModelLibrary::builtin(),
+        )
+        .findings;
+        assert_eq!(found.len(), 1, "{found:#?}");
+        // Only the one wrong serial pin reaches the header: still crossed.
+        let one = run(vec![
+            mcu(),
+            header("Debug", &[("1", GND), ("3", V5), ("4", TX)]),
+        ]);
+        assert_eq!(one.len(), 1, "{one:#?}");
+    }
+
+    #[test]
+    fn an_unnamed_header_is_silent_unless_its_whole_layout_is_a_sourced_adapters() {
+        // The same layout with the board's RX on pin 4 (the cable's order).
         let ok = run(vec![
             mcu(),
-            four_pin("Conn_01x04", &[("1", GND), ("2", V5), ("3", RX), ("4", TX)]),
+            header("Debug", &[("1", GND), ("3", V5), ("4", RX), ("5", TX)]),
         ]);
         assert!(ok.is_empty(), "{ok:#?}");
-        // Supply and ground at the ends with the pair between them: judged the same.
-        let ends = run(vec![
-            mcu(),
-            four_pin("Conn_01x04", &[("1", GND), ("2", TX), ("3", RX), ("4", V5)]),
-        ]);
-        assert_eq!(ends.len(), 1, "{ends:#?}");
-        // A 6-pin single-row header with only those four pins connected.
-        let six = run(vec![
-            mcu(),
-            header("Debug", &[("1", GND), ("3", V5), ("4", TX), ("5", RX)]),
-        ]);
-        assert_eq!(six.len(), 1, "{six:#?}");
-        // A header named FTDI keeps the named behaviour: the cable order is silent.
+        // A header named FTDI keeps the named behaviour (the cable order is silent).
         let named = run(vec![
             mcu(),
             header("FTDI", &[("1", GND), ("3", V5), ("4", RX), ("5", TX)]),
         ]);
         assert!(named.is_empty(), "{named:#?}");
-    }
-
-    #[test]
-    fn an_unnamed_uart_header_is_silent_unless_the_evidence_is_definite() {
-        let pads = [("1", GND), ("2", V5), ("3", TX), ("4", RX)];
+        // A 4-pin header whose GND and supply sit on no adapter's positions
+        // abstains in both TX/RX orders.
+        for pads in [
+            [("1", GND), ("2", V5), ("3", TX), ("4", RX)],
+            [("1", GND), ("2", V5), ("3", RX), ("4", TX)],
+            [("1", GND), ("2", TX), ("3", RX), ("4", V5)],
+            [("1", GND), ("2", RX), ("3", TX), ("4", V5)],
+        ] {
+            let found = run(vec![mcu(), four_pin("Conn_01x04", &pads)]);
+            assert!(found.is_empty(), "{pads:?}: {found:#?}");
+        }
+        // A 6-pin header whose supply is not on the cable's pin 3, or whose
+        // ground is not on pin 1.
+        let off = header("Debug", &[("1", GND), ("2", V5), ("4", TX), ("5", RX)]);
+        assert!(run(vec![mcu(), off]).is_empty(), "supply on pin 2");
+        let off = header("Debug", &[("2", GND), ("3", V5), ("4", TX), ("5", RX)]);
+        assert!(run(vec![mcu(), off]).is_empty(), "ground on pin 2");
         // A header whose rows are unknown or two: pin numbers say nothing about order.
-        let mut no_rows = four_pin("Conn", &pads);
+        let pads = [("1", GND), ("3", V5), ("4", TX), ("5", RX)];
+        let mut no_rows = header("Debug", &pads);
         no_rows.lib_id = "Conn".into();
         assert!(run(vec![mcu(), no_rows]).is_empty(), "rows unknown");
-        let mut two_rows = four_pin("Conn", &pads);
-        two_rows.lib_id = "Connector_Generic:Conn_02x02_Odd_Even".into();
+        let mut two_rows = header("Debug", &pads);
+        two_rows.lib_id = "Connector_Generic:Conn_02x03_Odd_Even".into();
         assert!(run(vec![mcu(), two_rows]).is_empty(), "two rows");
-        // A further connected pin (a handshake line, a second signal).
-        let mut nets = NETS.to_vec();
-        nets.push((9, "DTR"));
-        let five = header(
-            "Debug",
-            &[("1", GND), ("3", V5), ("4", TX), ("5", RX), ("6", 9)],
-        );
-        let found =
-            debug_header_lint(&board(&nets, vec![mcu(), five]), &ModelLibrary::builtin()).findings;
-        assert!(found.is_empty(), "{found:#?}");
-        // No supply: not the usual shape.
-        assert!(run(vec![
-            mcu(),
-            four_pin("Conn", &[("1", GND), ("3", TX), ("4", RX)])
-        ])
-        .is_empty());
-        // Only one serial line reaches the header.
-        assert!(run(vec![
-            mcu(),
-            four_pin("Conn", &[("1", GND), ("2", V5), ("3", TX)])
-        ])
-        .is_empty());
         // A pin whose net carries both a transmit and a receive pad is ambiguous.
         let mut both = mcu();
         both.pins[1].net = Some(TX);
         assert!(
-            run(vec![both, four_pin("Conn", &pads)]).is_empty(),
+            run(vec![both, header("Debug", &pads)]).is_empty(),
             "ambiguous"
         );
         // Not fitted.
-        let mut dnp = four_pin("Conn", &pads);
+        let mut dnp = header("Debug", &pads);
         dnp.dnp = true;
         assert!(run(vec![mcu(), dnp]).is_empty(), "not fitted");
     }
@@ -1558,9 +1584,9 @@ mod tests {
             )
             .findings
         };
-        let found = run(four_pin(
-            "Conn_01x04",
-            &[("1", GND), ("2", V5), ("3", TX), ("4", RX)],
+        let found = run(header(
+            "Debug",
+            &[("1", GND), ("3", V5), ("4", TX), ("5", RX)],
         ));
         assert_eq!(found.len(), 1, "{found:#?}");
         assert!(
@@ -1568,9 +1594,9 @@ mod tests {
             "{}",
             found[0].message
         );
-        let ok = run(four_pin(
-            "Conn_01x04",
-            &[("1", GND), ("2", V5), ("3", RX), ("4", TX)],
+        let ok = run(header(
+            "Debug",
+            &[("1", GND), ("3", V5), ("4", RX), ("5", TX)],
         ));
         assert!(ok.is_empty(), "{ok:#?}");
     }
