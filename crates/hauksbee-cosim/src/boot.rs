@@ -18,7 +18,8 @@ use hauksbee_bind::binder::McuBinding;
 use hauksbee_ir::boot::{BootDecision, BootOutcome, StrapReading, StrapReadingLevel};
 use hauksbee_ir::NodeId;
 use hauksbee_models::boot_mode::{
-    level_from_volts, pull_level, select_mode, BootInput, BootSpec, PinLevel, Selection,
+    level_from_volts, pull_level, select_mode, undriven_basis, undriven_strap_note, BootInput,
+    BootSpec, PinLevel, Selection,
 };
 use hauksbee_models::schema::StrapInternalPull;
 
@@ -45,6 +46,10 @@ pub struct PinRead {
     pub level: Option<PinLevel>,
     /// Whether the board itself set the level (as opposed to an internal pull).
     pub board_driven: bool,
+    /// The caveat for a pin the board leaves to the chip's own pull, from the
+    /// one wording `hauksbee_models::boot_mode::undriven_strap_note` gives
+    /// the static strap lint too.
+    pub caveat: Option<String>,
 }
 
 const fn reading_level(level: Option<PinLevel>) -> StrapReadingLevel {
@@ -52,15 +57,6 @@ const fn reading_level(level: Option<PinLevel>) -> StrapReadingLevel {
         Some(PinLevel::Low) => StrapReadingLevel::Low,
         Some(PinLevel::High) => StrapReadingLevel::High,
         None => StrapReadingLevel::Indeterminate,
-    }
-}
-
-const fn pull_words(pull: StrapInternalPull) -> &'static str {
-    match pull {
-        StrapInternalPull::PullUp => "internal pull-up",
-        StrapInternalPull::PullDown => "internal pull-down",
-        StrapInternalPull::None => "no internal pull",
-        StrapInternalPull::Unknown => "no documented internal pull",
     }
 }
 
@@ -97,6 +93,7 @@ pub fn read_pin(role: &str, input: Option<&BootInput>, snap: &BoardSnapshot<'_>)
             reading,
             level,
             board_driven: true,
+            caveat: None,
         };
     }
     // Nothing drives the pin: the silicon pull decides, if there is one.
@@ -107,12 +104,19 @@ pub fn read_pin(role: &str, input: Option<&BootInput>, snap: &BoardSnapshot<'_>)
     } else {
         "not connected"
     };
-    reading.basis = format!("{state}, {}", pull_words(pull));
+    reading.basis = undriven_basis(state, pull);
     reading.level = reading_level(level);
+    let caveat = Some(undriven_strap_note(
+        &reading.pin,
+        &reading.basis,
+        pull,
+        input,
+    ));
     PinRead {
         reading,
         level,
         board_driven: false,
+        caveat,
     }
 }
 
@@ -201,12 +205,7 @@ pub fn resolve(spec: &BootSpec, snap: &BoardSnapshot<'_>) -> Option<Resolved> {
     let mut caveats: Vec<String> = reads
         .iter()
         .filter(|r| !r.board_driven)
-        .map(|r| {
-            format!(
-                "{} is not driven by the board ({}); its level here follows the chip's own pull.",
-                r.reading.pin, r.reading.basis
-            )
-        })
+        .filter_map(|r| r.caveat.clone())
         .collect();
     let selection = select_mode(&spec.modes, &levels);
     let (outcome, mode, cite, shown) = match &selection {
@@ -580,6 +579,7 @@ mod tests {
             vih: Some([0.0, 2.0]),
             note: String::new(),
             cite: String::new(),
+            external_level: String::new(),
         };
         BootSpec {
             latch: None,
@@ -699,6 +699,31 @@ mod tests {
             .caveats
             .iter()
             .any(|c| c.contains("internal pull-down")));
+    }
+
+    /// The co-sim caveat for a pin the board does not define is the same
+    /// sentence the static strap lint uses (`undriven_strap_note`), including the
+    /// vendor's own words when the card says the board must set the level.
+    #[test]
+    fn the_undriven_pin_caveat_is_the_shared_note_with_the_vendors_words() {
+        let mut spec = spec_f1();
+        spec.inputs[0].internal_pull = StrapInternalPull::PullDown;
+        spec.inputs[0].external_level = "use an external pull-down (DS p.9)".into();
+        let r = board(None, None).resolve(&spec).unwrap();
+        let basis = undriven_basis("not connected", StrapInternalPull::PullDown);
+        let expected = undriven_strap_note(
+            "BOOT0",
+            &basis,
+            StrapInternalPull::PullDown,
+            Some(&spec.inputs[0]),
+        );
+        assert!(
+            r.decision.caveats.contains(&expected),
+            "{:#?}",
+            r.decision.caveats
+        );
+        assert!(expected.contains("use an external pull-down (DS p.9)"));
+        assert!(expected.contains("give the pin an external pull resistor"));
     }
 
     #[test]

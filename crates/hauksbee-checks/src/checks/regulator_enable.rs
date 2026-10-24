@@ -120,6 +120,68 @@ impl OffWhenOpen {
     }
 }
 
+/// What the card says an enable pin does when nothing drives it, in the part's
+/// own terms (on or off), whichever level is the on level.
+pub(super) enum OpenState {
+    /// An open pin holds the part off: `en_open = "off"`, or an internal pull
+    /// toward the off level.
+    Off,
+    /// An open pin turns the part on, with the card's reason: `en_open = "on"`,
+    /// or an internal pull toward the on level.
+    On(String),
+    /// The datasheet says the pin must not be left open
+    /// (`en_open = "undefined"`), with the card's quote when it carries one.
+    Undefined(Option<String>),
+    /// The card states nothing about an open pin.
+    Unknown,
+}
+
+impl OpenState {
+    /// The open-pin state of the enable pin of `model`, which is on at its high
+    /// level when `on_high`. An internal pull decides first (it is what an open
+    /// pin settles to), then the datasheet's stated open state.
+    pub(super) fn of(model: &ModelEntry, on_high: bool) -> Self {
+        let params = &model.params;
+        let positive = |k| params.get_f64(k).filter(|v| v.is_finite() && *v > 0.0);
+        let pull = [
+            ("en_pull_down_ohms", false),
+            ("en_pull_up_ohms", true),
+            ("en_pull_down_a", false),
+            ("en_pull_up_a", true),
+        ]
+        .into_iter()
+        .find_map(|(k, up)| positive(k).map(|v| (k, up, v)));
+        if let Some((key, up, v)) = pull {
+            if up != on_high {
+                return Self::Off;
+            }
+            let value = if key.ends_with("_ohms") {
+                ohms(v)
+            } else {
+                format_amps(v)
+            };
+            return Self::On(format!(
+                "the part's internal {} ({value}) turns an open pin on",
+                if up { "pull-up" } else { "pull-down" }
+            ));
+        }
+        let quote = params
+            .get_str("en_open_basis")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        match params.get_str("en_open") {
+            Some("off") => Self::Off,
+            Some("on") => Self::On(quote.map_or_else(
+                || "the datasheet states an open pin turns the part on (en_open = \"on\")".into(),
+                |q| format!("the datasheet states an open pin turns the part on ({q})"),
+            )),
+            Some("undefined") => Self::Undefined(quote),
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// A resistor's value in ohms, or `None` when its value text does not read as
 /// a resistance.
 pub(super) fn resistor_ohms(c: &Component) -> Option<f64> {

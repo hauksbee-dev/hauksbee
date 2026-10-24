@@ -34,7 +34,13 @@
 //!       row's own or the card's boot table. It fires when that pull is the wrong
 //!       level, when the card says there is none, and when a jumper or header
 //!       the user can leave open is the only thing holding a boot-select pin: the
-//!       open position reads the pull, or floats.)
+//!       open position reads the pull, or floats. One more case is a pin whose
+//!       card says the board must set the level itself (the boot table's
+//!       `external_level`, the vendor's words that the pull alone is not enough):
+//!       a bare pin, or one held only by an open-able jumper or header, that
+//!       leans on the right-way pull is then a Medium finding too. The wording
+//!       of what an undriven strap reads is `hauksbee_models::boot_mode::
+//!       undriven_strap_note`, shared with the co-sim boot report.)
 //!
 //! DNP-aware: a Do-Not-Populate resistor is not assembled, so it neither biases
 //! nor overrides anything. On a PCB-only extraction (no schematic pin types) the
@@ -48,7 +54,9 @@ use hauksbee_extract::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_ir::boot::{BootDecision, StrapReading, StrapReadingLevel};
-use hauksbee_models::boot_mode::{pull_level, select_mode, BootInput, PinLevel, Selection};
+use hauksbee_models::boot_mode::{
+    pull_level, select_mode, undriven_basis, undriven_strap_note, BootInput, PinLevel, Selection,
+};
 use hauksbee_models::refdes::{designator, RefClass};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
@@ -156,9 +164,10 @@ pub fn strap_lint_with_drives(
                 } else {
                     // A bare pin the silicon pull settles: silent when the pull
                     // is the level the part needs, a fault when it is not.
-                    report
-                        .findings
-                        .extend(wrong_default_finding(board, &site, pull, None));
+                    report.findings.extend(
+                        wrong_default_finding(board, &site, pull, None)
+                            .or_else(|| unset_level_finding(board, &site, pull, None)),
+                    );
                 }
                 continue;
             }
@@ -168,11 +177,12 @@ pub fn strap_lint_with_drives(
                 if weak
                     .iter()
                     .all(|w| matches!(w.kind, WeakKind::Jumper | WeakKind::Connector))
-                    && strap.boot_select
+                    && (strap.boot_select || external_level_quote(model, strap).is_some())
                 {
-                    report
-                        .findings
-                        .extend(wrong_default_finding(board, &site, pull, Some(weak)));
+                    report.findings.extend(
+                        wrong_default_finding(board, &site, pull, Some(weak))
+                            .or_else(|| unset_level_finding(board, &site, pull, Some(weak))),
+                    );
                 }
             }
             examine_strap(
@@ -431,6 +441,81 @@ fn wrong_default_finding(
             settled.as_str(),
             want.as_str(),
             strap.note,
+            pull_fix(board, comp, site.model, strap, site.net),
+        ),
+        refs: vec![comp.reference.clone()],
+        nets: vec![site.net.to_string()],
+    })
+}
+
+/// The vendor's statement, on the card's boot table, that the board must set
+/// this strap's level because the silicon pull alone is not enough.
+fn external_level_quote<'a>(model: &'a ModelEntry, strap: &StrapPin) -> Option<&'a str> {
+    model
+        .boot_inputs
+        .iter()
+        .find(|i| i.role == strap.role)
+        .and_then(BootInput::requires_external_level)
+}
+
+/// The finding for a strap the silicon pull settles to the level the part needs
+/// when the card says the board must not leave it to that pull
+/// (`external_level`): a pin nothing is on, or one held only by a jumper or
+/// header the user can leave open. `None` when the card says nothing of the
+/// kind, the pull is not stated, or the net is held by anything else. The words
+/// for what the pin reads come from the shared `undriven_strap_note`, as the
+/// co-sim boot report's caveat does.
+fn unset_level_finding(
+    board: &ExtractedBoard,
+    site: &StrapSite<'_>,
+    pull: StrapInternalPull,
+    weak: Option<&[Weak]>,
+) -> Option<LintFinding> {
+    let (comp, strap) = (site.comp, site.strap);
+    // Two cases leave a boot level with no board-defined source: the card says
+    // the board must not lean on the pull, or the card states no pull at all for
+    // a boot-select pin (so the open pin's level is simply unknown).
+    let needs_board =
+        external_level_quote(site.model, strap).is_some() && pull_level(pull).is_some();
+    let pull_unstated = strap.boot_select && pull == StrapInternalPull::Unknown;
+    if !(needs_board || pull_unstated) {
+        return None;
+    }
+    let table = site.model.boot_table();
+    let input = table.input(&strap.role);
+    let pin = input.map_or_else(|| strap.role.to_uppercase(), BootInput::display_name);
+    let basis = undriven_basis(
+        if weak.is_some() {
+            "with the jumper open"
+        } else {
+            "net not driven"
+        },
+        pull,
+    );
+    let who = weak.map_or_else(
+        || format!("net '{}' has nothing on it", site.net),
+        |weak| {
+            let holders = weak
+                .iter()
+                .map(|w| w.label.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "net '{}' is held only by {holders}, which set no level while {}",
+                site.net,
+                strap_when_open(weak)
+            )
+        },
+    );
+    Some(LintFinding {
+        check: LintCheck::StrapPin,
+        severity: Severity::Medium,
+        message: format!(
+            "{} strap pin {} ({}) {who}. {} {}",
+            comp.reference,
+            site.pad,
+            strap.role,
+            undriven_strap_note(&pin, &basis, pull, input),
             pull_fix(board, comp, site.model, strap, site.net),
         ),
         refs: vec![comp.reference.clone()],
@@ -2424,6 +2509,100 @@ outcome = "rom_bootloader"
                 open[0].1
             );
         }
+    }
+
+    /// A boot-select pin whose card states no internal pull, on a net whose only
+    /// holder is a header the user can leave open: nothing the board does sets
+    /// the level, so it is undefined at reset. A 10 kOhm pull-down holds it.
+    const UNSTATED_CARD: &str = r#"
+[[models]]
+id = "strap_unstated_mcu"
+kind = "mcu"
+description = "no stated pull"
+[models.match]
+value_re = "^STRAPPULL$"
+[models.pins]
+"1" = "vdd"
+"2" = "xboot"
+[[models.straps]]
+role = "xboot"
+level = "low"
+boot_select = true
+note = "boot from ROM when high"
+"#;
+
+    #[test]
+    fn a_boot_pin_on_a_header_alone_with_no_stated_pull_has_no_board_defined_level() {
+        let header = || {
+            let mut j = part("J1", "Conn_01x02", &[("1", 3), ("2", 2)]);
+            j.footprint = "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical".into();
+            j
+        };
+        let got = pull_lint(UNSTATED_CARD, vec![header()]);
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!(got[0].0, Medium);
+        for needle in [
+            "J1 pin 1",
+            "nothing is plugged in",
+            "XBOOT is not driven by the board",
+            "no documented internal pull",
+            "undefined",
+            "10 kOhm pull-down",
+        ] {
+            assert!(got[0].1.contains(needle), "'{needle}' not in {}", got[0].1);
+        }
+        // The control: a pull-down beside the header defines the open position.
+        let fixed = pull_lint(UNSTATED_CARD, vec![header(), pull("R1", "10k", 1)]);
+        assert!(fixed.is_empty(), "{fixed:#?}");
+        // A header whose pin is on a rail and ground selects between them.
+        let mut selector = part("J2", "Conn_01x03", &[("1", 3), ("2", 2), ("3", 1)]);
+        selector.footprint = "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical".into();
+        assert!(pull_lint(UNSTATED_CARD, vec![selector]).is_empty());
+        // A solder jumper that ships bridged is a closed link: it ties the pin.
+        let mut bridged = part("SJ1", "SolderJumper", &[("1", 3), ("2", 1)]);
+        bridged.footprint = "Jumper:SolderJumper-2_P1.3mm_Bridged_RoundedPad1.0x1.5mm".into();
+        assert!(pull_lint(UNSTATED_CARD, vec![bridged]).is_empty());
+    }
+
+    /// A strap whose silicon pull is the right level, with the vendor saying the
+    /// board must not leave it to that pull.
+    fn external_card() -> String {
+        PULL_CARD.replace("pull_down", "pull_up").replace(
+            "internal_pull = \"pull_up\"",
+            "internal_pull = \"pull_up\"\nexternal_level = \"p.12 Strapping Pins: the pin must be driven by the board, the weak pull is not enough\"",
+        )
+    }
+
+    #[test]
+    fn a_strap_the_vendor_says_the_board_must_set_is_flagged_when_it_leans_on_the_pull() {
+        let card = external_card();
+        let bare = pull_lint(&card, vec![]);
+        assert_eq!(bare.len(), 1, "{bare:#?}");
+        assert_eq!(bare[0].0, Medium);
+        for needle in [
+            "nothing on it",
+            "XBOOT is not driven by the board (net not driven, internal pull-up)",
+            "The vendor does not leave this to the pull",
+            "the weak pull is not enough",
+            "10 kOhm pull-up",
+        ] {
+            assert!(
+                bare[0].1.contains(needle),
+                "'{needle}' not in {}",
+                bare[0].1
+            );
+        }
+        // The control: an external pull-up defines the level.
+        assert!(pull_lint(&card, vec![pull("R1", "10k", 2)]).is_empty());
+        // Held only by a header the user can leave open: the same finding.
+        let mut jp = part("JP1", "BOOT", &[("1", 3), ("2", 1)]);
+        jp.footprint = "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical".into();
+        let open = pull_lint(&card, vec![jp]);
+        assert_eq!(open.len(), 1, "{open:#?}");
+        assert!(open[0].1.contains("with the jumper open, internal pull-up"));
+        // Without the vendor's statement a bare pin on the right-way pull is
+        // correct, as every ESP32 strap documents.
+        assert!(pull_lint(&PULL_CARD.replace("pull_down", "pull_up"), vec![]).is_empty());
     }
 
     /// An ESP32-C3 GPIO2 has no internal pull at reset (datasheet Table 3-1)

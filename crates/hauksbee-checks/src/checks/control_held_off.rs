@@ -58,13 +58,24 @@
 //! so a part whose datasheet is silent is judged only against a stiff
 //! pull-down.
 //!
+//! A second rule judges the other side of "nothing releases it": an enable
+//! that only an MCU pad drives and nothing holds (`enable_floats_in_reset`).
+//! The pad is high impedance while its MCU is in reset (unless the MCU card
+//! lists the pad's reset mode, see `reset_state`), so the enable floats through
+//! reset and power-up, and what the part does then is the card's open-pin
+//! state (`regulator_enable::OpenState`): off is safe, on or undefined is a
+//! Medium finding, and a card silent on it is a Medium finding only for a
+//! part that is not a plain regulator. A pull to either rail, a fitted
+//! resistor of any value, a switch, header or jumper, or any non-MCU part on
+//! the net leaves the net to the other checks.
+//!
 //! The enable pad of a linear regulator whose card says an open enable is
 //! off is `regulator_enable`'s; every other regulator enable is judged here,
 //! and the two never report one pad. The extract
 //! layer's generic floating-control note covers a control pin alone on its
 //! net.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
@@ -76,11 +87,13 @@ use hauksbee_models::refdes::RefClass;
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use super::envelope::role_net_id;
+use super::floating_inputs::Classifier;
 use super::indicators::name_suggests_active_low;
 use super::regulator_enable::{
     decapitalise, is_load_switch, judged_enable_pad, ohms, pin_drives, survey_net, unfitted_note,
-    Reg, Survey,
+    OpenState, Reg, Survey,
 };
+use super::reset_state::{reset_rest, ResetRest};
 
 /// The weakest internal pull-up assumed when a card prints none and does not
 /// say the pin has none.
@@ -423,6 +436,7 @@ pub fn control_held_off_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
     for (comp, model) in super::resolved_components(board, lib) {
         models.insert(comp.reference.as_str(), model);
     }
+    let by_ref: BTreeMap<&str, ModelEntry> = models.iter().map(|(k, v)| (*k, v.clone())).collect();
     for comp in &board.components {
         if !AssemblyState::of(comp).is_present() || is_connector_like(comp) {
             continue;
@@ -447,10 +461,116 @@ pub fn control_held_off_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
             }
             if let Some(f) = judge(board, comp, pin, model, &models) {
                 report.findings.push(f);
+            } else if let Some(f) = enable_floats_in_reset(board, comp, pin, model, &by_ref) {
+                report.findings.push(f);
             }
         }
     }
     report
+}
+
+/// The finding for an enable only MCU pads drive, which floats while they are in
+/// reset. `None` for anything else: a pin that is not a judged enable, a card
+/// that says an open pin is off, or a net something other than an MCU pad holds.
+fn enable_floats_in_reset(
+    board: &ExtractedBoard,
+    comp: &Component,
+    pin: &Pin,
+    model: Option<&ModelEntry>,
+    models: &BTreeMap<&str, ModelEntry>,
+) -> Option<LintFinding> {
+    // Only a card'd part that is not itself an MCU: an MCU's enable-like pad is
+    // its reset, and a part with no card has no open-pin state to read.
+    let model = model.filter(|m| m.kind != ComponentKind::Mcu)?;
+    let control = control_of(pin, Some(model))?;
+    if control.kind != Kind::Enable {
+        return None;
+    }
+    let net = board.net(pin.net.filter(|id| *id != 0)?)?;
+    if is_ground(&net.name)
+        || netclass::is_supply(&net.name)
+        || hauksbee_extract::is_unconnected_net(&net.name)
+    {
+        return None;
+    }
+    let senses = BTreeSet::new();
+    let classify = Classifier {
+        board,
+        models,
+        senses: &senses,
+        strict: true,
+        open_jumpers: false,
+    };
+    let ResetRest::McuHiZ(pads) = reset_rest(&classify, comp, pin) else {
+        return None;
+    };
+    let declared_no_float = control.role.as_deref().is_some_and(|role| {
+        model
+            .params
+            .get_str("must_not_float_roles")
+            .unwrap_or_default()
+            .split(',')
+            .any(|r| r.trim().eq_ignore_ascii_case(role))
+    });
+    let state = match OpenState::of(model, control.run_high) {
+        // The card requires the pin driven but states nothing of an open pin.
+        OpenState::Unknown if declared_no_float => OpenState::Undefined(Some(
+            "the datasheet gives the pin no pull and requires it driven".to_string(),
+        )),
+        state => state,
+    };
+    let consequence = match state {
+        OpenState::Off => return None,
+        OpenState::On(why) => format!("{why}, so the part is switched on while the MCU is in reset"),
+        OpenState::Undefined(quote) => format!(
+            "the datasheet leaves an open pin undefined{}, so the part's state while the MCU is in reset is unknown",
+            quote.map_or_else(String::new, |q| format!(" ({q})"))
+        ),
+        // A regulator or driver whose active-high enable the card is silent on
+        // is left alone: a rail that is up or down for the length of a reset is
+        // a design choice there. A load switch (its whole job is to be off until
+        // asked) and any enable that runs on a low level have no such default.
+        OpenState::Unknown
+            if control.run_high && model.kind != ComponentKind::AnalogSwitch =>
+        {
+            return None;
+        }
+        OpenState::Unknown => format!(
+            "card '{}' states nothing about an open pin and gives it no internal pull, so the part may be on while the MCU is in reset",
+            model.id
+        ),
+    };
+    let drivers = pads
+        .iter()
+        .map(|w| w.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let supply = supply_name(board, comp, Some(model));
+    let label = &control.label;
+    let fix = if control.run_high {
+        format!(
+            "Add a 100k pull-down from '{}' to ground so {label} rests off until firmware drives it.",
+            net.name
+        )
+    } else {
+        format!(
+            "Add a 100k pull-up from '{}' to {supply} so {label} rests off until firmware drives it.",
+            net.name
+        )
+    };
+    Some(LintFinding {
+        check: LintCheck::ControlHeldOff,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) {label} pin {} is driven only by {drivers} on net '{}'. While that MCU is in reset its pad is high-impedance and nothing on the net pulls the pin, so {label} floats through power-up and reset: {consequence}. {REMEDY_MARKER}{fix}",
+            comp.reference,
+            comp.value.trim(),
+            pin.number,
+            net.name,
+        ),
+        refs: vec![comp.reference.clone()],
+        nets: vec![net.name.clone()],
+    })
 }
 
 /// What to change: return the pull to the level the part runs at, or drive the
@@ -1180,5 +1300,161 @@ mod tests {
         u.pins[0].net = Some(V3);
         let bleeder = part("R1", "1k", &[("1", V3), ("2", GND)]);
         assert!(lint(vec![u, bleeder]).is_empty());
+    }
+
+    /// A part (kind `kind`, pad 3 the enable `role`, params `params`) whose
+    /// enable net `/RST` has only the pads of an MCU (U2: pad 2 unlisted, pad 3
+    /// pulled up in reset) and `extra` parts on it. Returns this check's
+    /// findings.
+    fn gpio_enable(
+        tag: &str,
+        (kind, role, params): (&str, &str, &str),
+        mcu_pad: &str,
+        extra: Vec<Component>,
+    ) -> Vec<LintFinding> {
+        // A load switch names its input and output; the rest only a supply and ground.
+        let pins = if kind == "analog_switch" {
+            "\"1\" = \"in_out_a\"\n\"2\" = \"vss\"\n\"4\" = \"in_out_b\"\n"
+        } else {
+            "\"1\" = \"vcc\"\n\"2\" = \"gnd\"\n"
+        };
+        let card = format!(
+            "[[models]]\nid = \"gpio_en_{tag}\"\nkind = \"{kind}\"\n\
+             description = \"enable fixture\"\n[models.match]\n\
+             value_re = \"^GENTEST-{tag}$\"\n[models.params]\n{params}\n\
+             [models.pins]\n{pins}\"3\" = \"{role}\"\n\
+             [[models]]\nid = \"gpio_mcu_{tag}\"\nkind = \"mcu\"\n\
+             description = \"reset mode fixture\"\n[models.match]\n\
+             value_re = \"^GMCU-{tag}$\"\n[models.pins]\n\"1\" = \"vdd\"\n\
+             \"2\" = \"gpio_a\"\n\"3\" = \"gpio_b\"\n\
+             [models.pin_capability.reset_mode]\nbasis = \"fixture\"\n\
+             [models.pin_capability.reset_mode.pads]\n\"3\" = \"pull_up\"\n"
+        );
+        let dir = hauksbee_testkit::fresh_scratch_dir("control_held_off", tag);
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{tag}: {errors:?}");
+        let mut all = vec![
+            part(
+                "U1",
+                &format!("GENTEST-{tag}"),
+                &[("1", V3), ("2", GND), ("3", RST)],
+            ),
+            part("U2", &format!("GMCU-{tag}"), &[("1", V3), (mcu_pad, RST)]),
+        ];
+        all.extend(extra);
+        control_held_off_lint(&board(&NETS, all), &lib)
+            .of_check(LintCheck::ControlHeldOff)
+            .cloned()
+            .collect()
+    }
+
+    /// The card shape of a real load switch (active-high `ctrl`, input and
+    /// output pins) with `open` as what the datasheet says an open pin does.
+    fn load_switch(open: &str) -> String {
+        format!("ron = 0.04\nroff = 5.0e7\nvth = 1.2\nen_on_level = \"high\"\n{open}")
+    }
+
+    const OPEN_IS_ON: &str = "en_open = \"on\"\nen_open_basis = \"fixture p.1: open = on\"";
+
+    /// A load-switch enable only an MCU pad drives, with the card saying an open
+    /// pin turns the part on: while the MCU is in reset the pad is
+    /// high-impedance, the pin floats and the switch can be on.
+    #[test]
+    fn an_enable_only_a_gpio_drives_floats_in_reset_and_the_card_says_what_that_does() {
+        let params = load_switch(OPEN_IS_ON);
+        let found = gpio_enable("SWON", ("analog_switch", "ctrl", &params), "2", vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Medium);
+        says(
+            &found[0],
+            &[
+                "U1 (GENTEST-SWON) EN pin 3 is driven only by U2 pin 2",
+                "high-impedance",
+                "floats through power-up and reset",
+                "fixture p.1: open = on",
+                "switched on while the MCU is in reset",
+                "100k pull-down from '/RST' to ground",
+            ],
+        );
+        assert!(found[0].own_remedy().is_some(), "{}", found[0].message);
+    }
+
+    /// The silent controls: a pull to the off level, an open state the card says
+    /// is off, an internal pull toward off, and an MCU pad the card pulls in
+    /// reset.
+    #[test]
+    fn a_gpio_enable_with_a_pull_or_an_off_when_open_card_is_silent() {
+        let on = load_switch(OPEN_IS_ON);
+        let sw = |tag: &str, params: &str, pad: &str, extra: Vec<Component>| {
+            gpio_enable(tag, ("analog_switch", "ctrl", params), pad, extra)
+        };
+        let pull = part("R1", "100k", &[("1", RST), ("2", GND)]);
+        assert!(sw("SWPULL", &on, "2", vec![pull]).is_empty());
+        let off = load_switch("en_open = \"off\"\nen_open_basis = \"fixture p.1: open = off\"");
+        assert!(sw("SWOFF", &off, "2", vec![]).is_empty());
+        let internal = load_switch(
+            "en_pull_down_ohms = 1.0e6\nen_open_basis = \"fixture p.1: internal pull-down\"",
+        );
+        assert!(sw("SWINT", &internal, "2", vec![]).is_empty());
+        // A pull-up on an active-high pin is the wrong way round, but the pin is
+        // then defined (on) rather than floating: not this rule's.
+        let up = part("R1", "100k", &[("1", RST), ("2", V3)]);
+        assert!(sw("SWUP", &on, "2", vec![up]).is_empty());
+        // Pad 3 of the MCU is pulled in reset per its card.
+        assert!(sw("SWPAD", &on, "3", vec![]).is_empty());
+    }
+
+    /// A load switch whose datasheet says nothing at all about an open pin is
+    /// judged too: it exists to be off until asked.
+    #[test]
+    fn a_load_switch_enable_with_no_stated_open_state_floats_in_reset() {
+        let params = load_switch("");
+        let found = gpio_enable("SWUNK", ("analog_switch", "ctrl", &params), "2", vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["states nothing about an open pin"]);
+    }
+
+    /// A motor driver (a digital card) whose active-low enable states no pull:
+    /// the same rule. The card's `enable_n` role gives the polarity.
+    #[test]
+    fn a_driver_enable_with_no_stated_pull_floats_in_reset() {
+        let identity = "identity_only = true\nwarning = \"identity only\"\nunlocked_by = \"validated behavior\"";
+        let driver = ("digital", "enable_n", identity);
+        let found = gpio_enable("DRV", driver, "2", vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(
+            &found[0],
+            &[
+                "states nothing about an open pin",
+                "may be on while the MCU is in reset",
+            ],
+        );
+        let pull = part("R1", "100k", &[("1", RST), ("2", V3)]);
+        assert!(gpio_enable("DRVPULL", driver, "2", vec![pull]).is_empty());
+        // An active-high enable on a card that is silent is left alone (a rail
+        // that follows its enable through a reset is a design choice).
+        let high_silent = ("digital", "enable", identity);
+        assert!(gpio_enable("DRVHI", high_silent, "2", vec![]).is_empty());
+    }
+
+    /// A load switch whose datasheet says an open enable is undefined (the
+    /// AP22815 shape: `en_open = "undefined"` and `must_not_float_roles`).
+    #[test]
+    fn a_load_switch_whose_datasheet_forbids_a_floating_enable_floats_in_reset() {
+        let params = load_switch(
+            "en_open = \"undefined\"\nen_open_basis = \"fixture p.2: do not leave floating\"\nmust_not_float_roles = \"ctrl\"",
+        );
+        let found = gpio_enable("SWUNDEF", ("analog_switch", "ctrl", &params), "2", vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(
+            &found[0],
+            &[
+                "leaves an open pin undefined",
+                "do not leave floating",
+                "100k pull-down",
+            ],
+        );
     }
 }

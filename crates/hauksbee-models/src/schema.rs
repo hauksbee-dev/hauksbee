@@ -319,6 +319,13 @@ pub struct PinCapability {
     /// only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_up: Option<PullUpPins>,
+    /// `[models.pin_capability.reset_mode]`: pads that do not rest at high
+    /// impedance while the part is held in reset (an internal pull that is on
+    /// out of reset, a pad that drives a level). A partial statement, as for
+    /// `tri_state`: an unlisted pad is high impedance, the usual reset state of
+    /// a general-purpose pad. An MCU card only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_mode: Option<ResetModePins>,
     /// `[[models.pin_capability.xtal_int_caps]]`: the crystal oscillators whose
     /// load capacitors are inside the chip, one entry per oscillator.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -357,6 +364,7 @@ impl PinCapability {
             && self.tri_state.is_none()
             && self.open_drain.is_none()
             && self.pull_up.is_none()
+            && self.reset_mode.is_none()
             && self.spi_sck.is_none()
             && self.spi_mosi.is_none()
             && self.spi_miso.is_none()
@@ -462,6 +470,57 @@ pub struct OpenDrainPins {
     /// `PGOOD`, `INT`).
     #[serde(default)]
     pub pads: BTreeMap<String, String>,
+}
+
+/// What a pad rests at while its part is held in reset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetPadMode {
+    /// High impedance with no pull: the pad sets no level. The default for a
+    /// pad the card does not list.
+    #[default]
+    HiZ,
+    /// Held to the supply through an internal pull-up.
+    PullUp,
+    /// Held to ground through an internal pull-down.
+    PullDown,
+    /// Driven high.
+    DrivesHigh,
+    /// Driven low.
+    DrivesLow,
+}
+
+impl ResetPadMode {
+    /// Whether the pad sets no level of its own in reset.
+    #[must_use]
+    pub const fn is_hi_z(self) -> bool {
+        matches!(self, Self::HiZ)
+    }
+}
+
+/// The pads of an MCU that rest at something other than high impedance in
+/// reset (see [`PinCapability::reset_mode`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetModePins {
+    /// The datasheet table and page the pad modes are read from.
+    pub basis: String,
+    /// Pad number to what the pad rests at in reset.
+    #[serde(default)]
+    pub pads: BTreeMap<String, ResetPadMode>,
+}
+
+impl ModelEntry {
+    /// What `pad` rests at while the part is held in reset: high impedance
+    /// unless the card says otherwise.
+    #[must_use]
+    pub fn reset_pad_mode(&self, pad: &str) -> ResetPadMode {
+        self.pin_capability
+            .reset_mode
+            .as_ref()
+            .and_then(|t| t.pads.get(pad).copied())
+            .unwrap_or_default()
+    }
 }
 
 /// The pads of an MCU with an internal pull-up (see [`PinCapability::pull_up`]).

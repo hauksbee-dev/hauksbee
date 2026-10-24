@@ -2189,6 +2189,7 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
     // Any card whose pads a crystal hangs on states its load capacitance: an MCU's
     // oscillator, a clock generator's, an RTC's.
     check_xtal_int_caps(entry, p);
+    check_reset_mode(entry, p);
     let cap = &entry.pin_capability;
     let mcu_tables = cap.adc.is_some()
         || PeripheralFunction::ALL
@@ -2264,6 +2265,45 @@ fn check_capability_table(
         p.require(!supply, || {
             format!(
                 "[models.pin_capability.{table}] pad '{pad}' is the supply or ground role '{role}', not {what}"
+            )
+        });
+    }
+}
+
+/// `[models.pin_capability.reset_mode]`: an mcu card's table of pads that do not
+/// rest at high impedance in reset. It needs a basis, lists pads of
+/// `[models.pins]` that are not supply or ground pads, and lists no pad as high
+/// impedance (an unlisted pad is already that).
+fn check_reset_mode(entry: &ModelEntry, p: &mut Problems) {
+    let Some(table) = entry.pin_capability.reset_mode.as_ref() else {
+        return;
+    };
+    p.require(!table.basis.trim().is_empty(), || {
+        "[models.pin_capability.reset_mode] needs a basis citing the datasheet table and page"
+            .into()
+    });
+    p.require(!table.pads.is_empty(), || {
+        "[models.pin_capability.reset_mode] lists no pad: leave the table out instead".into()
+    });
+    p.require(entry.kind == ComponentKind::Mcu, || {
+        "[models.pin_capability.reset_mode] belongs on an mcu card".into()
+    });
+    for (pad, mode) in &table.pads {
+        let Some(role) = entry.pins.get(pad) else {
+            p.push(format!(
+                "[models.pin_capability.reset_mode] pad '{pad}' is not a pad of [models.pins]"
+            ));
+            continue;
+        };
+        p.require(!mode.is_hi_z(), || {
+            format!(
+                "[models.pin_capability.reset_mode] pad '{pad}' is listed as hi_z, which is what an unlisted pad is: drop it"
+            )
+        });
+        let supply = crate::pin_roles::power_pin(&role.trim().to_ascii_lowercase(), entry.kind);
+        p.require(supply.is_none(), || {
+            format!(
+                "[models.pin_capability.reset_mode] pad '{pad}' is the supply or ground role '{role}'"
             )
         });
     }
