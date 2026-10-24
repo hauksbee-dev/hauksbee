@@ -458,6 +458,8 @@ pub fn bind_board_driven(
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
+    // Bare-named rails (`VCC`) whose conventional level the consumers rule out.
+    let bare_unleveled = crate::rail_basis::contradicted_bare_rails(board, lib, &HashMap::new());
     // A switching converter's switch node is pulsed between the rails and is
     // not a rail, whatever its name says: see `switch_node_nets`.
     let switch_nodes = switch_node_nets(board, lib, facts);
@@ -528,6 +530,25 @@ pub fn bind_board_driven(
                      drives it). Name the net with its voltage (+3V3) or supply it with a \
                      [[supply]]",
                     net.name
+                ));
+                report.push(row);
+            } else if let Some(bare) = bare_unleveled.get(&net.id) {
+                // The convention (VCC = 5 V) is contradicted by the recommended
+                // supply rows of the parts on the net: hold no level on it.
+                let mut row = BindRow::without_model(
+                    format!("RAIL:{}", net.name),
+                    String::new(),
+                    Confidence::Exact,
+                    BindOutcome::Skipped {
+                        reason: "rail voltage not stated by its name".to_string(),
+                    },
+                );
+                row.warning = Some(format!(
+                    "'{}' states no voltage and its consumers rule out the {} its name is \
+                     conventionally taken for, so no level is guessed. Name the net with its \
+                     voltage (+3V3) or supply it with a [[supply]]",
+                    net.name,
+                    hauksbee_ir::units::format_volts(bare.conventional)
                 ));
                 report.push(row);
             } else if switch_nodes.contains(&net.id) {
@@ -9060,7 +9081,7 @@ fn feed_mcu_rails(
 /// True when a supply net's name carries no magnitude at all (`VCC`, `+VCC`),
 /// so any voltage [`power_rail_voltage`] returns for it is a convention, not a
 /// statement. `VBUS` and the digit-bearing names (`+5V`, `VCC_3V3`) state theirs.
-fn name_states_no_magnitude(name: &str) -> bool {
+pub(crate) fn name_states_no_magnitude(name: &str) -> bool {
     let leaf = name.rsplit('/').next().unwrap_or(name).trim();
     let leaf = leaf.trim_start_matches('+');
     leaf.eq_ignore_ascii_case("vcc")
@@ -9074,7 +9095,7 @@ fn name_states_no_magnitude(name: &str) -> bool {
 ///
 /// A pad name carries `KiCad`'s `_<pad>` suffix on a layout-only extraction
 /// (`OUT_2`), which is removed before comparing.
-fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
+pub(crate) fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
     fn base(function: &str) -> String {
         let f = function.trim().to_ascii_uppercase();
         match f.rsplit_once('_') {

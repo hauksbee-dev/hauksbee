@@ -330,6 +330,17 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
             look: LOOK_THERMAL,
         });
     }
+    if says_supply_pin_becomes_output(text) {
+        out.push(Need {
+            key: "supply_outputs:dual_role".into(),
+            ask: "[[models.supply_outputs]] for each supply pin the datasheet says is an output \
+                  in one supply mode (the on-chip regulator's output), with `when = { pin = \
+                  \"<the pin that selects the mode>\", min_v = <lowest level for that mode> }` \
+                  so the rail counts as sourced only in that mode"
+                .into(),
+            look: "Reference circuits / power supply scheme / pin descriptions",
+        });
+    }
     match entry.kind {
         ComponentKind::Mcu => mcu_needs(entry, text, &mut out),
         ComponentKind::Vreg => vreg_needs(entry, &mut out),
@@ -393,6 +404,19 @@ fn open_input_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
             .into(),
         look: "Pin functions / function table (open-input default)",
     });
+}
+
+/// Whether the datasheet says a supply pin is an output in one supply mode
+/// ("VCCD becomes an output", "is an output when ... is fed 5 V").
+fn says_supply_pin_becomes_output(text: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\bbecomes?\s+(?:an?\s+)?output\b|\b(?:is|acts\s+as)\s+an?\s+(?:supply\s+)?output\s+(?:only\s+)?(?:when|if|while)\b",
+        )
+        .expect("static regex")
+    })
+    .is_match(text)
 }
 
 /// What a card of `kind` needs before any draft exists (the checklist's groups).
@@ -595,6 +619,7 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
             .envelope
             .iter()
             .any(|e| matches!(e, OperatingEnvelope::RailOrder { .. })),
+        ("supply_outputs", "dual_role") => !entry.supply_outputs.is_empty(),
         ("supply_outputs", role) => entry
             .supply_outputs
             .iter()
@@ -1609,5 +1634,37 @@ value_re = "(?i)^PGLDO$"
             .find(|n| n.key == "input_dc_path")
             .expect("need still listed");
         assert!(satisfied(&card, &need));
+    }
+
+    /// A datasheet that says a supply pin becomes an output in one mode asks for
+    /// a `supply_outputs` row with its mode; a card that has one, or an
+    /// ordinary datasheet, is not asked.
+    #[test]
+    fn a_supply_pin_that_becomes_an_output_needs_a_supply_output_row() {
+        let bare = entry(
+            "[[models]]\nid = \"u\"\nkind = \"digital\"\n[models.pins]\n1 = \"vregin\"\n2 = \"vccd\"\n",
+        );
+        let text = "when the part runs on +5 V (VREGIN), the VCCD becomes an output.";
+        let asks = |e: &ModelEntry, t: &str| {
+            needs(e, t, &[])
+                .iter()
+                .any(|n| n.key == "supply_outputs:dual_role")
+        };
+        assert!(asks(&bare, text));
+        let with_row = entry(
+            "[[models]]\nid = \"u\"\nkind = \"digital\"\n[models.pins]\n1 = \"vregin\"\n2 = \"vccd\"\n\
+             [[models.supply_outputs]]\nrole = \"vccd\"\nnominal = 3.3\nmin = 3.0\nmax = 3.6\nbasis = \"b\"\n",
+        );
+        let need = needs(&with_row, text, &[])
+            .into_iter()
+            .find(|n| n.key == "supply_outputs:dual_role")
+            .expect("asked");
+        assert!(has_field(&with_row, &need));
+        assert!(!has_field(&bare, &need));
+        // An ordinary datasheet (an output that is simply high when enabled) is silent.
+        assert!(!asks(
+            &bare,
+            "the power-good output is high when the rail is in regulation."
+        ));
     }
 }

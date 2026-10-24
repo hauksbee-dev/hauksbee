@@ -307,6 +307,41 @@ pub struct SupplyOutput {
     pub max: f64,
     /// Where the range comes from: the source path(s) and the datasheet rows.
     pub basis: String,
+    /// The mode this pin is an output in, for a supply pin that is an input in
+    /// another mode (an on-chip LDO's output that is an input when the pin is
+    /// fed externally). Absent: the pin sources its rail whenever the part is
+    /// powered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<SupplyOutputWhen>,
+}
+
+/// The mode in which a [`SupplyOutput`] pin sources its rail: the level on
+/// another pin of the part (see [`SupplyOutput::sources_at`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupplyOutputWhen {
+    /// The `[models.pins]` role of the pin whose level selects the mode.
+    pub pin: String,
+    /// The pin is at least this high, V, for the output mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_v: Option<f64>,
+    /// The pin is at most this high, V, for the output mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_v: Option<f64>,
+}
+
+impl SupplyOutput {
+    /// Whether the pin sources its rail when the selecting pin sits at `level`
+    /// volts (`None`: not known). A row with no `when`, and a level nothing
+    /// states, source: only a level that is known to be outside the mode's
+    /// window turns the output into an input.
+    #[must_use]
+    pub fn sources_at(&self, level: Option<f64>) -> bool {
+        let (Some(when), Some(v)) = (&self.when, level) else {
+            return true;
+        };
+        when.min_v.is_none_or(|lo| v >= lo) && when.max_v.is_none_or(|hi| v <= hi)
+    }
 }
 
 /// `[models.pin_capability]`: the peripheral functions the pads can serve.
@@ -3109,5 +3144,26 @@ exponent = 0.925
         assert!((at_20k - 1.251).abs() < 0.005, "{at_20k}");
         let at_49k9 = program.equation_current_a(49_900.0).unwrap();
         assert!((at_49k9 - 0.530).abs() < 0.010, "{at_49k9}");
+    }
+
+    /// A supply-output row with a mode sources only while the pin it names is
+    /// in the mode's window; an unknown level, or a row with no mode, sources.
+    #[test]
+    fn a_supply_output_with_a_mode_sources_only_in_that_mode() {
+        use super::{SupplyOutput, SupplyOutputWhen};
+        let always = SupplyOutput::default();
+        let in_5v_mode = SupplyOutput {
+            when: Some(SupplyOutputWhen {
+                pin: "vregin".into(),
+                min_v: Some(3.6),
+                max_v: None,
+            }),
+            ..SupplyOutput::default()
+        };
+        assert!(always.sources_at(Some(3.3)) && always.sources_at(None));
+        assert!(in_5v_mode.sources_at(Some(5.0)));
+        assert!(in_5v_mode.sources_at(Some(3.6)));
+        assert!(!in_5v_mode.sources_at(Some(3.3)));
+        assert!(in_5v_mode.sources_at(None));
     }
 }

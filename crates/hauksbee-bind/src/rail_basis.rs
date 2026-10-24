@@ -24,7 +24,7 @@
 //! over nets the analysis leaves unpowered (a rail whose name states no
 //! voltage), so `AVDD` cut off by an unfitted ferrite is found too.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
@@ -138,6 +138,9 @@ pub struct RailBases {
     /// test points or holes: the parts whose levels a powered rail lets the
     /// checks judge.
     pub active_parts: Vec<String>,
+    /// Rails named with no voltage whose conventional level the board's own
+    /// consumers rule out: the analysis holds no level on them.
+    pub unleveled: Vec<BareRail>,
 }
 
 /// Output-pin roles a regulator or power-path card names.
@@ -260,6 +263,42 @@ fn function_base(function: &str) -> String {
         }
         _ => f,
     }
+}
+
+/// Whether the pin `role` of `comp` sources its rail on the card's
+/// `supply_outputs` row for it, with `level_of` giving the volts a net is held
+/// at (`None`: unknown).
+///
+/// A row with a `when` (an on-chip regulator's output pin that is an input when
+/// the part is fed another way) sources only while the pin it names sits in the
+/// mode's window; a level nothing states leaves it a source.
+fn card_supply_output(
+    comp: &Component,
+    model: &hauksbee_models::ModelEntry,
+    role: &str,
+    level_of: &dyn Fn(i64) -> Option<f64>,
+) -> bool {
+    model
+        .supply_outputs
+        .iter()
+        .filter(|s| s.role == role)
+        .any(|s| {
+            let level = s.when.as_ref().and_then(|w| {
+                let selecting = model
+                    .pins
+                    .iter()
+                    .filter(|(_, r)| r.eq_ignore_ascii_case(&w.pin))
+                    .find_map(|(pad, _)| {
+                        comp.pins
+                            .iter()
+                            .find(|p| p.number == *pad)
+                            .and_then(|p| p.net)
+                            .filter(|n| *n != 0)
+                    })?;
+                level_of(selecting)
+            });
+            s.sources_at(level)
+        })
 }
 
 /// A battery: designator `BT`/`BAT`, or a battery symbol or footprint.
@@ -508,6 +547,7 @@ fn strong_source_nets(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     kinds: &HashMap<String, String>,
+    level_of: &dyn Fn(i64) -> Option<f64>,
 ) -> HashSet<i64> {
     let mut out = HashSet::new();
     for c in &board.components {
@@ -525,7 +565,7 @@ fn strong_source_nets(
             };
             let role = model.as_ref().and_then(|m| m.pins.get(&p.number));
             let card_out = model.as_ref().zip(role).is_some_and(|(m, role)| {
-                m.supply_outputs.iter().any(|s| s.role == *role)
+                card_supply_output(c, m, role, level_of)
                     || (m.kind == ComponentKind::Vreg && output_role(role))
             });
             let named_out =
@@ -732,6 +772,178 @@ pub(crate) fn unmodelled_feed(
     None
 }
 
+/// A rail whose name states no voltage (a bare `VCC`) and whose conventional
+/// level the board's own consumers rule out.
+///
+/// The analysis holds no level on it: the convention is a guess, and the parts
+/// that draw from the rail say what it can be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BareRail {
+    /// The rail's net.
+    pub net: String,
+    /// The level the name's convention would have given, V.
+    pub conventional: f64,
+    /// The highest minimum any consumer's recommended supply row asks for, V.
+    pub low_v: f64,
+    /// The lowest maximum any consumer's row allows, V. Below `low_v`, no
+    /// single level satisfies every consumer.
+    pub high_v: f64,
+    /// The consumers that set `low_v`.
+    pub low_from: Vec<String>,
+    /// The consumers that set `high_v`.
+    pub high_from: Vec<String>,
+    /// Every consumer with a recommended supply row on the rail.
+    pub consumers: Vec<String>,
+    /// Connectors, test points and batteries on it.
+    pub entries: Vec<String>,
+}
+
+/// Tolerance when a level meets a window edge, V.
+const WINDOW_EPS_V: f64 = 1e-9;
+
+/// The rail's allowed levels per consumer: for each fitted part with a card,
+/// the recommended supply rows of the pins it has on `ids`, a pin's rows
+/// widened to the loosest of its alternatives (a temperature or supply-mode
+/// variant), a part's pins on the rail intersected.
+fn consumer_windows(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    ids: &BTreeSet<i64>,
+) -> Vec<(String, f64, f64)> {
+    let mut out = Vec::new();
+    for c in &board.components {
+        if !AssemblyState::of(c).is_present() {
+            continue;
+        }
+        let Some(model) = library_resolution(lib, c).model else {
+            continue;
+        };
+        let mut window: Option<(f64, f64)> = None;
+        for p in c
+            .pins
+            .iter()
+            .filter(|p| p.net.is_some_and(|n| ids.contains(&n)))
+        {
+            let Some(role) = model.pins.get(&p.number) else {
+                continue;
+            };
+            let rows = model.envelope.iter().filter_map(|e| match e {
+                hauksbee_models::schema::OperatingEnvelope::SupplyRange {
+                    pin,
+                    min_v,
+                    max_v,
+                    ..
+                } if pin.eq_ignore_ascii_case(role) => Some((*min_v, *max_v)),
+                _ => None,
+            });
+            let hull = rows.fold(None, |acc: Option<(f64, f64)>, (lo, hi)| {
+                Some(acc.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))))
+            });
+            if let Some((lo, hi)) = hull {
+                window = Some(window.map_or((lo, hi), |(a, b)| (a.max(lo), b.min(hi))));
+            }
+        }
+        if let Some((lo, hi)) = window {
+            out.push((c.reference.clone(), lo, hi));
+        }
+    }
+    out
+}
+
+/// The rails named with no voltage (`VCC`) whose conventional level the board's
+/// own consumers rule out, by net id.
+///
+/// The convention (a bare `VCC` is 5 V) is a guess. When the parts that draw
+/// from the rail print recommended supply rows that exclude it (a 3.3 V part
+/// on a net called `VCC`), the guess is contradicted by the board itself, so no
+/// level is held and the verdict says what the consumers allow. A rail a
+/// regulator drives, a battery or a `power_out` pin defines, or whose
+/// consumers' windows include the convention keeps it.
+pub(crate) fn contradicted_bare_rails(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+) -> BTreeMap<i64, BareRail> {
+    let mut out = BTreeMap::new();
+    let candidates: Vec<_> = board
+        .nets
+        .iter()
+        .filter(|n| n.id != 0 && crate::binder::name_states_no_magnitude(&n.name))
+        .filter_map(|n| Some((n, power_rail_voltage(&n.name)?)))
+        .collect();
+    if candidates.is_empty() {
+        return out;
+    }
+    let driven = crate::binder::regulator_output_nets(board);
+    for (net, conventional) in candidates {
+        let ids = BTreeSet::from([net.id]);
+        let on_net = || {
+            board
+                .components
+                .iter()
+                .filter(|c| AssemblyState::of(c).is_present())
+                .filter(|c| c.pins.iter().any(|p| p.net == Some(net.id)))
+        };
+        if driven.contains_key(&net.id)
+            || on_net().any(|c| {
+                is_battery(c)
+                    || c.pins
+                        .iter()
+                        .any(|p| p.net == Some(net.id) && p.kind.starts_with("power_out"))
+                    || library_resolution(lib, c).model.is_some_and(|m| {
+                        c.pins.iter().filter(|p| p.net == Some(net.id)).any(|p| {
+                            m.pins
+                                .get(&p.number)
+                                .is_some_and(|r| m.supply_outputs.iter().any(|s| s.role == *r))
+                        })
+                    })
+            })
+        {
+            continue;
+        }
+        let windows = consumer_windows(board, lib, &ids);
+        if windows.is_empty() {
+            continue;
+        }
+        let lo = windows.iter().map(|w| w.1).fold(f64::MIN, f64::max);
+        let hi = windows.iter().map(|w| w.2).fold(f64::MAX, f64::min);
+        let empty = lo > hi + WINDOW_EPS_V;
+        if !empty && conventional >= lo - WINDOW_EPS_V && conventional <= hi + WINDOW_EPS_V {
+            continue;
+        }
+        let setters = |edge: f64, pick: fn(&(String, f64, f64)) -> f64| -> Vec<String> {
+            let mut refs: Vec<String> = windows
+                .iter()
+                .filter(|w| (pick(w) - edge).abs() <= WINDOW_EPS_V)
+                .map(|w| w.0.clone())
+                .collect();
+            refs.sort_by_key(|r| crate::bind_report::natural_ref_key(r));
+            refs
+        };
+        let mut consumers: Vec<String> = windows.iter().map(|w| w.0.clone()).collect();
+        consumers.sort_by_key(|r| crate::bind_report::natural_ref_key(r));
+        let mut entries: Vec<String> = on_net()
+            .filter(|c| is_entry(c, kinds))
+            .map(|c| c.reference.clone())
+            .collect();
+        entries.sort_by_key(|r| crate::bind_report::natural_ref_key(r));
+        out.insert(
+            net.id,
+            BareRail {
+                net: net.name.clone(),
+                conventional,
+                low_v: lo,
+                high_v: hi,
+                low_from: setters(lo, |w| w.1),
+                high_from: setters(hi, |w| w.2),
+                consumers,
+                entries,
+            },
+        );
+    }
+    out
+}
+
 /// A rail to judge: its nets, and the leg that powers it by name (net, volts).
 type Group = (BTreeSet<i64>, Option<(String, f64)>);
 
@@ -770,6 +982,20 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
         id == 0
             || nets.name.get(&id).is_none_or(|n| is_ground(n))
             || nets.node.get(&id).is_none_or(|n| n.is_ground())
+    };
+    // The volts a net is held at where the analysis or its name states one: a
+    // supply leg's level, else the voltage its name carries.
+    let level_of = |id: i64| -> Option<f64> {
+        if grounded(id) {
+            return Some(0.0);
+        }
+        let node = nets.node.get(&id)?;
+        bound
+            .supplies
+            .iter()
+            .find(|l| domains.joined(l.net, *node))
+            .map(|l| l.supply.nominal_volts())
+            .or_else(|| power_rail_voltage(nets.name.get(&id)?))
     };
     // A net that can carry power into a rail: powered in the analysis, or a
     // name that states a voltage.
@@ -910,7 +1136,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                         on.iter().any(|p| {
                             m.pins.get(&p.number).is_some_and(|role| {
                                 (regulating && output_role(role))
-                                    || m.supply_outputs.iter().any(|s| s.role == *role)
+                                    || card_supply_output(c, m, role, &level_of)
                             })
                         })
                     });
@@ -947,7 +1173,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                         || model.as_ref().is_some_and(|m| {
                             on.iter().any(|p| {
                                 m.pins.get(&p.number).is_some_and(|role| {
-                                    m.supply_outputs.iter().any(|s| s.role == *role)
+                                    card_supply_output(c, m, role, &level_of)
                                         || (m.kind == ComponentKind::Vreg && output_role(role))
                                 })
                             })
@@ -1040,7 +1266,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
     // series parts and diodes from a net something sources: an off-board entry,
     // a modelled driver, a part's supply output, or another rail that has an
     // entry or a fitted source (a diode-OR of two feeds, a converter output).
-    let strong = strong_source_nets(board, lib, kinds);
+    let strong = strong_source_nets(board, lib, kinds, &level_of);
     let rail_sourced: HashSet<i64> = (rails.iter().zip(&rail_ids))
         .filter(|(r, _)| !r.entries.is_empty() || !r.feeds.is_empty())
         .flat_map(|(_, ids)| ids.iter().copied())
@@ -1070,5 +1296,8 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
         rails,
         any_powered,
         active_parts,
+        unleveled: contradicted_bare_rails(board, lib, kinds)
+            .into_values()
+            .collect(),
     }
 }
