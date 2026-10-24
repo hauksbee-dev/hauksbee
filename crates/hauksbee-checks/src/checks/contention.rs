@@ -994,6 +994,78 @@ mod tests {
         silent(vec![mcu("U1", &[("3", LINK)]), dnp], "dnp");
     }
 
+    /// A plug-in dev board whose header pads are named by silkscreen label:
+    /// `(pad number, header label, net)` per pad.
+    fn dev_board(reference: &str, value: &str, pads: &[(&str, &str, i64)]) -> Component {
+        let wired: Vec<(&str, i64)> = pads.iter().map(|(p, _, n)| (*p, *n)).collect();
+        let mut u = comp(reference, value, &wired);
+        for (pin, (_, label, _)) in u.pins.iter_mut().zip(pads) {
+            pin.function = (*label).into();
+        }
+        u
+    }
+
+    /// A dev board's UART0 TX header pad is a transmitter like the chip card's
+    /// own TXD pad: it faces a peripheral's TXD output as contention, whichever
+    /// label the symbol puts on the pad, while the RX pad and a plain GPIO pad
+    /// on the same board stay silent. The pad number is the carrier footprint's
+    /// own (`J1-7`), so only the label says which pin it is.
+    #[test]
+    fn a_dev_board_uart_transmit_header_pad_is_a_transmitter() {
+        let gps = || serial_part("U2", &[("1", "TXD", "output", LINK)]);
+        for (value, tx_labels, rx_label, gpio_label) in [
+            (
+                "ESP32-DevKitC-32E",
+                ["TX", "TXD0", "IO1", "GPIO1"].as_slice(),
+                "RX",
+                "IO4",
+            ),
+            (
+                "Seeed Studio XIAO ESP32C3",
+                ["TX", "D6", "GPIO21"].as_slice(),
+                "RX",
+                "D0",
+            ),
+            (
+                "Seeed Studio XIAO ESP32S3",
+                ["TX", "D6", "GPIO43"].as_slice(),
+                "RX",
+                "D0",
+            ),
+            (
+                "Seeed Studio XIAO RP2040",
+                ["TX", "D6", "GPIO0"].as_slice(),
+                "RX",
+                "D0",
+            ),
+            (
+                "Adafruit Feather HUZZAH32",
+                ["TX", "GPIO17"].as_slice(),
+                "RX",
+                "SCK",
+            ),
+            ("Adafruit Feather RP2040", ["TX"].as_slice(), "RX", "SCK"),
+        ] {
+            for label in tx_labels {
+                let b = board(
+                    &[(LINK, "GPS_TX")],
+                    vec![dev_board("U1", value, &[("J1-7", label, LINK)]), gps()],
+                );
+                let found = transmit(&b);
+                assert_eq!(found.len(), 1, "{value} pad '{label}': {found:#?}");
+                assert_eq!(found[0].refs, ["U1", "U2"], "{value} pad '{label}'");
+            }
+            for (label, why) in [(rx_label, "the UART RX pad"), (gpio_label, "a GPIO pad")] {
+                let b = board(
+                    &[(LINK, "GPS_TX")],
+                    vec![dev_board("U1", value, &[("J1-7", label, LINK)]), gps()],
+                );
+                let found = transmit(&b);
+                assert!(found.is_empty(), "{value} {why} '{label}': {found:#?}");
+            }
+        }
+    }
+
     fn resistor(reference: &str, value: &str, a: i64, b: i64) -> Component {
         Component {
             lib_id: "Device:R".into(),

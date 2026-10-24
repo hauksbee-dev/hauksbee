@@ -151,7 +151,7 @@ fn output_role(role: &str) -> bool {
 }
 
 /// A pin function an IC draws power on.
-fn supply_input_name(function: &str) -> bool {
+pub(crate) fn supply_input_name(function: &str) -> bool {
     let f = function
         .trim()
         .to_ascii_uppercase()
@@ -169,7 +169,7 @@ fn supply_input_name(function: &str) -> bool {
 /// (`VDDCORE`, `VCORE`, `VCAP`, `VDDREG`), named like a supply but sourced by the
 /// chip itself, or a reference input (`VREF`), which is a level to compare
 /// against and not a supply.
-fn regulator_output_name(function: &str) -> bool {
+pub(crate) fn regulator_output_name(function: &str) -> bool {
     let f = function.trim().to_ascii_uppercase();
     f.starts_with("VREF")
         || ["CORE", "VCAP", "VREG", "DECOUP"]
@@ -320,6 +320,8 @@ fn is_diode(c: &Component, model: Option<&hauksbee_models::ModelEntry>) -> bool 
 /// A part that joins nets: current may pass from every net in `from` to every
 /// net in `to`. A plain series part lists the same nets both ways.
 struct Bridge {
+    /// Index into the board's components.
+    part: usize,
     from: Vec<i64>,
     to: Vec<i64>,
 }
@@ -337,7 +339,7 @@ fn series_bridges(
     grounded: &dyn Fn(i64) -> bool,
 ) -> Vec<Bridge> {
     let mut out = Vec::new();
-    for c in &board.components {
+    for (part, c) in board.components.iter().enumerate() {
         if !AssemblyState::of(c).is_present() || is_entry(c, kinds) {
             continue;
         }
@@ -370,12 +372,13 @@ fn series_bridges(
             };
             let (from, to) = (on(Polarity::Anode), on(Polarity::Cathode));
             if !from.is_empty() && !to.is_empty() {
-                out.push(Bridge { from, to });
+                out.push(Bridge { part, from, to });
                 continue;
             }
         }
         let all: Vec<i64> = nets.into_iter().collect();
         out.push(Bridge {
+            part,
             from: all.clone(),
             to: all,
         });
@@ -459,6 +462,200 @@ fn strong_source_nets(
         }
     }
     out
+}
+
+/// A pin a part is switched on by when it is high (`EN`, `ENABLE`, `ON`, `CE`),
+/// read from the schematic's pin function; a negated name (`~{EN}`, `EN_N`) is
+/// not one.
+fn plain_enable_name(function: &str) -> bool {
+    matches!(
+        function_base(function).as_str(),
+        "EN" | "ENABLE" | "ON" | "CE"
+    )
+}
+
+/// A part a supply passes through that no model in the co-sim stamps.
+struct PassPart {
+    /// Index into the board's components.
+    part: usize,
+    /// Nets power enters from (an `IN` pin, a diode's anode, either end of a
+    /// series part).
+    from: Vec<i64>,
+    /// Nets power leaves on.
+    to: Vec<i64>,
+    /// The part sets its own output voltage, as far as its pins say: it has an
+    /// `IN` and an `OUT` pin, which a regulator and a load switch share.
+    regulates: bool,
+    /// Its plain enable pin sits on ground: it passes nothing.
+    held_off: bool,
+}
+
+/// The parts power can pass through to a rail without the co-sim stamping a
+/// path: the series parts of [`series_bridges`] that are a diode, a passive or
+/// have no card, and every part with no card that has an `IN` pin and an `OUT`
+/// pin ([`strong_source_nets`]'s converter rule), from its `IN` nets to its
+/// `OUT` nets.
+fn pass_parts(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+    grounded: &dyn Fn(i64) -> bool,
+) -> Vec<PassPart> {
+    let held_off = |c: &Component| {
+        c.pins
+            .iter()
+            .any(|p| plain_enable_name(&p.function) && p.net.is_some_and(|n| n != 0 && grounded(n)))
+    };
+    let unstamped = |c: &Component| {
+        library_resolution(lib, c)
+            .model
+            .is_none_or(|m| matches!(m.kind, ComponentKind::Diode | ComponentKind::Passive))
+    };
+    let mut out = Vec::new();
+    let mut taken: HashSet<usize> = HashSet::new();
+    for (part, c) in board.components.iter().enumerate() {
+        if !AssemblyState::of(c).is_present()
+            || is_entry(c, kinds)
+            || library_resolution(lib, c).model.is_some()
+        {
+            continue;
+        }
+        let nets_with = |want: &[&str]| -> Vec<i64> {
+            let ids: BTreeSet<i64> = (c.pins.iter())
+                .filter(|p| want.contains(&function_base(&p.function).as_str()))
+                .filter_map(|p| p.net)
+                .filter(|n| *n != 0 && !grounded(*n))
+                .collect();
+            ids.into_iter().collect()
+        };
+        let (from, to) = (
+            nets_with(&["IN", "VIN", "VI"]),
+            nets_with(&["OUT", "VOUT", "VO"]),
+        );
+        if !from.is_empty() && !to.is_empty() {
+            taken.insert(part);
+            out.push(PassPart {
+                part,
+                from,
+                to,
+                regulates: true,
+                held_off: held_off(c),
+            });
+        }
+    }
+    for bridge in series_bridges(board, lib, kinds, grounded) {
+        let c = &board.components[bridge.part];
+        if taken.contains(&bridge.part) || !unstamped(c) {
+            continue;
+        }
+        out.push(PassPart {
+            part: bridge.part,
+            from: bridge.from,
+            to: bridge.to,
+            regulates: false,
+            held_off: held_off(c),
+        });
+    }
+    out
+}
+
+/// How the co-sim may power a rail that nothing it stamps drives, read off the
+/// parts power reaches it through.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnmodelledFeed {
+    /// Power reaches the rail from `source`, a net the analysis holds at
+    /// `volts`, through fitted parts no model stamps; `part` is the one on the
+    /// rail.
+    Fed {
+        /// The part on the rail, as `U2 (LSW9001)`.
+        part: String,
+        /// The net power comes from.
+        source: String,
+        /// The voltage the analysis holds `source` at.
+        volts: f64,
+        /// A part on the path sets its own output (an `IN`/`OUT` part with no
+        /// card: a regulator or a load switch), so the rail's voltage is not
+        /// `volts` by the board's evidence.
+        regulated: bool,
+    },
+    /// The only path in passes a part whose enable pin is tied to ground.
+    HeldOff {
+        /// The part, as `U2 (LSW9001)`.
+        part: String,
+        /// The net power would have come from.
+        source: String,
+    },
+}
+
+/// What feeds `rail`, a net the analysis leaves unpowered, through fitted parts
+/// the co-sim does not stamp: a walk of at most [`FEED_HOPS`] parts back from
+/// the rail (against each diode's direction) to a net `volts_of` knows the
+/// voltage of.
+///
+/// A path through a held-off part counts only when no other does.
+pub(crate) fn unmodelled_feed(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+    rail: i64,
+    grounded: &dyn Fn(i64) -> bool,
+    volts_of: &dyn Fn(i64) -> Option<f64>,
+) -> Option<UnmodelledFeed> {
+    let parts = pass_parts(board, lib, kinds, grounded);
+    let name = |id: i64| {
+        (board.nets.iter())
+            .find(|n| n.id == id)
+            .map_or_else(String::new, |n| n.name.clone())
+    };
+    let label = |i: usize| {
+        let c = &board.components[i];
+        format!("{} ({})", c.reference, c.value)
+    };
+    for allow_held_off in [false, true] {
+        // (net, the part on the rail, a regulating part on the path, a
+        // held-off part on the path)
+        let mut frontier: Vec<(i64, Option<usize>, bool, bool)> = vec![(rail, None, false, false)];
+        let mut seen: BTreeSet<i64> = BTreeSet::from([rail]);
+        for _ in 0..FEED_HOPS {
+            let mut next = Vec::new();
+            for &(net, first, regulated, off) in &frontier {
+                for p in parts.iter().filter(|p| p.to.contains(&net)) {
+                    if p.held_off && !allow_held_off {
+                        continue;
+                    }
+                    let first = first.or(Some(p.part));
+                    let (regulated, off) = (regulated || p.regulates, off || p.held_off);
+                    for &n in &p.from {
+                        if !seen.insert(n) {
+                            continue;
+                        }
+                        if let Some(volts) = volts_of(n) {
+                            let part = label(first.unwrap_or(p.part));
+                            return Some(if off {
+                                UnmodelledFeed::HeldOff {
+                                    part,
+                                    source: name(n),
+                                }
+                            } else {
+                                UnmodelledFeed::Fed {
+                                    part,
+                                    source: name(n),
+                                    volts,
+                                    regulated,
+                                }
+                            });
+                        }
+                        next.push((n, first, regulated, off));
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+    }
+    None
 }
 
 /// A rail to judge: its nets, and the leg that powers it by name (net, volts).

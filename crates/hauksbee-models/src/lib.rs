@@ -173,6 +173,7 @@ static BUILTIN_TOML_FILES: &[(&str, &str)] = builtin_db![
     "drivers",
     "mcu_extra",
     "mcu_extra2",
+    "mcu_boards",
     "logic",
     "misc",
     "ignore",

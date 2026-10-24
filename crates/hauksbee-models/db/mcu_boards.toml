@@ -1,0 +1,969 @@
+# Plug-in development boards placed whole on a carrier board: the processor is
+# on the dev board, and the carrier's footprint is the dev board's header.
+#
+# A board that plugs in an ESP32-DevKitC, a Seeed XIAO or an Adafruit Feather
+# never draws the processor, its crystal or its regulator: they are on the dev
+# board. Each card here names the processor the dev board carries (its
+# `backend`), the crystal on the dev board (`module_clock_*`), the rails its
+# own regulator sources on the header (`supply_outputs`), and how each header
+# pin reaches the processor.
+#
+# HEADER MAPS BY LABEL. A dev board's header pad NUMBERS are whatever the
+# library that drew its footprint chose (J2-1..J3-19 on one, 1..38 on another),
+# but its LABELS (`IO21`, `D10`, `3V3`) are the board's own silkscreen and every
+# symbol for it carries them as pin names. So the map is `[models.header_labels]`
+# (label -> role), matched against the pad's pin name; `[models.pins]` (pad
+# number -> role) is given only for a footprint whose numbering is fixed (a
+# KiCad library footprint), and a pad that names a label takes the label's role
+# over it. Labels are matched ignoring case. Every role is the processor's own
+# pin role (`gpio21` on an ESP32 or RP2040, `pc7` on an AVR), so the co-sim
+# drives the right pin.
+#
+# 3.3 V boards: the header's 5 V / USB pin is NOT given the role `5v` (that role
+# is an MCU logic supply, and a module's GPIO drivers would be routed to it). It
+# is `vbus_5v`, an input to the dev board's regulator.
+#
+# ONLY ADD A BOARD WHOSE MAP COMES FROM ITS VENDOR'S SCHEMATIC OR PIN TABLE,
+# cited with the file, its sha256 and the page.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Espressif ESP32-DevKitC V4 (ESP32-WROOM-32E / -32UE, and -VE / -VIE with the
+# WROVER-E). Header labels and the GPIO behind each: ESP32-DevKitC V4 user guide
+# (docs.espressif.com/projects/esp-dev-kits/en/latest/esp32/esp32-devkitc/user_guide.html,
+# sha256 3d34bfe7826be44b0a5a082d46fe9dec1dd4d4eb9fed3f87b709064934e0ac0f),
+# "Header Block" tables J2 and J3; the schematic (dl.espressif.com/dl/schematics/
+# esp32_devkitc_v4_sch.pdf, sha256 ea500de5a3bfa97633f32ddb88fabd2d680637225190ea9c3f81e91b7d8bb7f6,
+# p.1; and the 2017 esp32_devkitc_v4-sch.pdf, sha256
+# 92961687b5fac64b8870ddc2f5e8528351e515b6cafd49e7d1bba4fb974a7349, p.1) shows the
+# same J2/J3 nets, naming the flash pins SD0..SD3 where the guide's silkscreen
+# says D0..D3. Both spellings are labels here.
+[[models]]
+id = "esp32_devkitc_v4"
+kind = "mcu"
+description = "Espressif ESP32-DevKitC V4 dev board (ESP32-WROOM-32E/UE or WROVER-E, 2 x 19-pin header)"
+
+[models.match]
+# "ESP32-DevKitC", "ESP32-DevKitC-V4", "ESP32-DEVKITC-32E", "ESP32-DevKitC-VE"
+# (the ordering codes in the user guide's Ordering Information table). The
+# ESP32-S2/S3/C3 DevKits begin "ESP32-S3-..." and do not match.
+value_re = "(?i)^(Espressif[-_ ]?)?ESP32[-_ ]?DevKitC([-_ ]?(V4|32D|32E|32UE|32U|VE|VIE|N4|N8|N16|R2|R8))*$"
+
+[models.params]
+backend = "qemu:esp32"
+# The 40 MHz crystal is inside the WROOM-32E / WROVER-E can (cited as on the
+# esp32_wroom card in mcu.toml); the DevKitC carrier carries none (schematic p.1).
+module_clock_hz = 40000000
+module_clock_source = "Espressif ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal oscillator integrated on the module (WROVER-E datasheet PDF p.2 states the same); the ESP32-DevKitC V4 schematic p.1 draws no crystal on the carrier"
+module_flash = "4/8/16 MB SPI flash inside the module, ESP32-WROOM-32E datasheet v2.1 PDF p.2-3"
+
+[models.header_labels]
+# J2 (user guide Header Block J2; schematic p.1)
+"3V3" = "3v3"
+"VDD33" = "3v3"
+"EN" = "en"
+"VP" = "gpio36"
+"SVP" = "gpio36"
+"SENSOR_VP" = "gpio36"
+"VN" = "gpio39"
+"SVN" = "gpio39"
+"SENSOR_VN" = "gpio39"
+"IO34" = "gpio34"
+"IO35" = "gpio35"
+"IO32" = "gpio32"
+"IO33" = "gpio33"
+"IO25" = "gpio25"
+"IO26" = "gpio26"
+"IO27" = "gpio27"
+"IO14" = "gpio14"
+"IO12" = "gpio12"
+"GND" = "gnd"
+"IO13" = "gpio13"
+"D2" = "gpio9"
+"SD2" = "gpio9"
+"D3" = "gpio10"
+"SD3" = "gpio10"
+"CMD" = "gpio11"
+"5V" = "vbus_5v"
+"EXT_5V" = "vbus_5v"
+# J3 (user guide Header Block J3; schematic p.1)
+"IO23" = "gpio23"
+"IO22" = "gpio22"
+"TX" = "p01_txd"
+"TXD0" = "p01_txd"
+"IO1" = "p01_txd"
+"RX" = "p03_rxd"
+"RXD0" = "p03_rxd"
+"IO3" = "p03_rxd"
+"IO21" = "gpio21"
+"IO19" = "gpio19"
+"IO18" = "gpio18"
+"IO5" = "gpio5"
+"IO17" = "gpio17"
+"IO16" = "gpio16"
+"IO4" = "gpio4"
+"IO0" = "gpio0"
+"IO2" = "gpio2"
+"IO15" = "gpio15"
+"D1" = "gpio8"
+"SD1" = "gpio8"
+"D0" = "gpio7"
+"SD0" = "gpio7"
+"CLK" = "gpio6"
+# GPIOn spellings of the same pins (symbol libraries use either)
+"GPIO36" = "gpio36"
+"GPIO39" = "gpio39"
+"GPIO34" = "gpio34"
+"GPIO35" = "gpio35"
+"GPIO32" = "gpio32"
+"GPIO33" = "gpio33"
+"GPIO25" = "gpio25"
+"GPIO26" = "gpio26"
+"GPIO27" = "gpio27"
+"GPIO14" = "gpio14"
+"GPIO12" = "gpio12"
+"GPIO13" = "gpio13"
+"GPIO23" = "gpio23"
+"GPIO22" = "gpio22"
+"GPIO1" = "p01_txd"
+"GPIO3" = "p03_rxd"
+"GPIO21" = "gpio21"
+"GPIO19" = "gpio19"
+"GPIO18" = "gpio18"
+"GPIO5" = "gpio5"
+"GPIO17" = "gpio17"
+"GPIO16" = "gpio16"
+"GPIO4" = "gpio4"
+"GPIO0" = "gpio0"
+"GPIO2" = "gpio2"
+"GPIO15" = "gpio15"
+
+[models.ratings]
+# The 3V3 header pin is the module's VDD33: ESP32-WROOM-32E datasheet v2.1
+# Table 13 Absolute Maximum Ratings, VDD33 -0.3 to 3.6 V (as on the esp32_wroom card).
+max_voltage_v = 3.6
+
+# 3V3 on the header is U2 AMS1117-3.3's output (VIN on EXT_5V = USB VBUS through
+# D3 BAT760-7), schematic p.1. AMS1117 datasheet (advanced-monolithic.com/pdf/ds1117.pdf,
+# sha256 189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0) p.2
+# Electrical Characteristics, AMS1117-3.3 output voltage: 3.251 / 3.300 / 3.349 V at
+# VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C, and 3.201 / 3.300 / 3.399 V on the row below
+# it; the wider row is taken.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.201
+max = 3.399
+basis = "ESP32-DevKitC V4 schematic p.1: 3V3 = U2 AMS1117-3.3 VOUT from EXT_5V (USB VBUS through D3 BAT760-7); AMS1117 datasheet ds1117.pdf p.2 AMS1117-3.3 output 3.201/3.300/3.399 V (wider of its two rows)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seeed Studio XIAO RP2040. Map: schematic Seeed-Studio-XIAO-RP2040-v1.3.pdf
+# (files.seeedstudio.com/wiki/XIAO-RP2040/res/, sha256
+# 0da8a6c0cf1464c82ac3964b6a933b634761621a884ab1f498f61f777b42aeef) p.1: header J2
+# pins 1..7 carry nets A0, A1, A2, A3, SDA, SCL, TX and J4 pins 1..7 carry RX, SCK,
+# MISO, MOSI, 3V3, GND, VBUS; the nets reach U6 RP2040 pins 38/39/40/41 (GPIO26..29),
+# 8 (GPIO6), 9 (GPIO7), 2 (GPIO0), 3 (GPIO1), 4 (GPIO2), 6 (GPIO4), 5 (GPIO3). The
+# D0..D10 names are the wiki's pin table (wiki.seeedstudio.com/XIAO-RP2040/, "XIAO
+# Pin / Function"). The pad NUMBERS of a XIAO footprint are not given by Seeed, so
+# this card maps by label only.
+[[models]]
+id = "seeed_xiao_rp2040"
+kind = "mcu"
+description = "Seeed Studio XIAO RP2040 dev board (RP2040, 14 castellated pins)"
+
+[models.match]
+# "XIAO RP2040", "Seeed XIAO RP2040", "XIAO-RP2040-DIP" (Seeed's KiCad library).
+# The XIAO RP2040 Plus has more pins and is not matched.
+value_re = "(?i)^(Seeed[-_ ]?(Studio[-_ ]?)?)?XIAO[-_ ]?RP2040([-_ ]?(DIP|SMD|SMT))?$"
+
+[models.params]
+backend = "renode:rp2040"
+# The crystal X3 (schematic p.1) carries no printed frequency. The board is
+# programmed through the RP2040's USB bootloader (wiki "XIAO-RP2040-with-Arduino":
+# hold BOOT and click RUN to enter boot mode for upload), and the RP2040
+# Datasheet (build 2025-02-20, sha256
+# be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c) PDF p.12,
+# XIN and XOUT: "The USB bootloader requires a 12MHz crystal or 12MHz clock
+# input". So the crystal is 12 MHz.
+module_clock_hz = 12000000
+module_clock_source = "RP2040 Datasheet PDF p.12: the USB bootloader requires a 12MHz crystal; the XIAO RP2040 is flashed through that bootloader (Seeed wiki XIAO-RP2040-with-Arduino) and its crystal X3 (schematic v1.3 p.1) prints no other frequency"
+module_flash = "2 MB, U3 GD25Q16CEIG, XIAO RP2040 schematic v1.3 p.1"
+
+[models.header_labels]
+"D0" = "gpio26_adc0"
+"A0" = "gpio26_adc0"
+"GPIO26" = "gpio26_adc0"
+"D1" = "gpio27_adc1"
+"A1" = "gpio27_adc1"
+"GPIO27" = "gpio27_adc1"
+"D2" = "gpio28_adc2"
+"A2" = "gpio28_adc2"
+"GPIO28" = "gpio28_adc2"
+"D3" = "gpio29_adc3"
+"A3" = "gpio29_adc3"
+"GPIO29" = "gpio29_adc3"
+"D4" = "gpio6"
+"SDA" = "gpio6"
+"GPIO6" = "gpio6"
+"D5" = "gpio7"
+"SCL" = "gpio7"
+"GPIO7" = "gpio7"
+"D6" = "gpio0_txd"
+"TX" = "gpio0_txd"
+"GPIO0" = "gpio0_txd"
+"D7" = "gpio1_rxd"
+"RX" = "gpio1_rxd"
+"GPIO1" = "gpio1_rxd"
+"D8" = "gpio2"
+"SCK" = "gpio2"
+"GPIO2" = "gpio2"
+"D9" = "gpio4"
+"MISO" = "gpio4"
+"GPIO4" = "gpio4"
+"D10" = "gpio3"
+"MOSI" = "gpio3"
+"GPIO3" = "gpio3"
+"3V3" = "3v3"
+"GND" = "gnd"
+"5V" = "vbus_5v"
+"VBUS" = "vbus_5v"
+"VIN" = "vbus_5v"
+
+[models.ratings]
+# RP2040 Datasheet (sha256 be56fbb7...ea8c) PDF p.615, Table 622 Absolute
+# maximum ratings for digital IO: IOVDD -0.5 to 3.63 V.
+max_voltage_v = 3.63
+
+# 3V3 on the header is U4 RS3236-3.3YUTDN4's output (VIN = VBUS through D2),
+# schematic v1.3 p.1. RS3236 datasheet Rev C.1 (distributor copy, img.iceasy.com,
+# sha256 7b0f117c4942e64af708032d98d7b3fe36f86e11836733eee35bc953981a5a2c) p.7:
+# output voltage accuracy -2.5 / +2.5 % at +25 C, IOUT = 0.1 mA. The +-1 % row
+# applies to the -3.3A suffix only. No over-temperature limit is given, only a
+# 35 ppm/C typical tempco.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.2175
+max = 3.3825
+basis = "XIAO RP2040 schematic v1.3 p.1: 3V3 = U4 RS3236-3.3YUTDN4 VOUT; RS3236 datasheet Rev C.1 p.7: output voltage accuracy -2.5..+2.5 % at 25 C, IOUT 0.1 mA"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seeed Studio XIAO ESP32C3. Map: schematic Seeeduino-XIAO-ESP32C3-SCH.pdf
+# (files.seeedstudio.com/wiki/XIAO_WiFi/Resources/, sha256
+# 10eacb7cd87f93f4823bb92d21fc3aa618b75bc9088fe112932f01bb2ce9b24a) p.1: J2 pins
+# 1..7 reach ESP32-C3FN4 GPIO2, GPIO3, MTMS (GPIO4), MTDI (GPIO5), MTCK (GPIO6),
+# MTDO (GPIO7), U0TXD (GPIO21, through R5); J1 pins 1..7 are U0RXD (GPIO20), GPIO8,
+# GPIO9, GPIO10, VCC_3V3, GND, VUSB. D/A names: wiki XIAO_ESP32C3_Getting_Started
+# pin table. Label map only (Seeed gives no footprint pad numbering).
+[[models]]
+id = "seeed_xiao_esp32c3"
+kind = "mcu"
+description = "Seeed Studio XIAO ESP32C3 dev board (ESP32-C3FN4, 14 castellated pins)"
+
+[models.match]
+value_re = "(?i)^(Seeed[-_ ]?(Studio[-_ ]?)?)?XIAO[-_ ]?ESP32[-_ ]?C3([-_ ]?(DIP|SMD|SMT))?$"
+
+[models.params]
+backend = "qemu:esp32c3"
+module_clock_hz = 40000000
+module_clock_source = "XIAO ESP32C3 schematic p.1: crystal X4 '40MHz/306011037' on XTAL_P/XTAL_N"
+module_flash = "4 MB inside the ESP32-C3FN4 (the FN4 ordering code), XIAO ESP32C3 schematic p.1 U4"
+
+[models.header_labels]
+"D0" = "gpio2"
+"A0" = "gpio2"
+"GPIO2" = "gpio2"
+"D1" = "gpio3"
+"A1" = "gpio3"
+"GPIO3" = "gpio3"
+"D2" = "gpio4"
+"A2" = "gpio4"
+"GPIO4" = "gpio4"
+"D3" = "gpio5"
+"A3" = "gpio5"
+"GPIO5" = "gpio5"
+"D4" = "gpio6"
+"SDA" = "gpio6"
+"GPIO6" = "gpio6"
+"D5" = "gpio7"
+"SCL" = "gpio7"
+"GPIO7" = "gpio7"
+"D6" = "gpio21_txd0"
+"TX" = "gpio21_txd0"
+"GPIO21" = "gpio21_txd0"
+"D7" = "gpio20_rxd0"
+"RX" = "gpio20_rxd0"
+"GPIO20" = "gpio20_rxd0"
+"D8" = "gpio8"
+"SCK" = "gpio8"
+"GPIO8" = "gpio8"
+"D9" = "gpio9"
+"MISO" = "gpio9"
+"GPIO9" = "gpio9"
+"D10" = "gpio10"
+"MOSI" = "gpio10"
+"GPIO10" = "gpio10"
+"3V3" = "3v3"
+"VCC_3V3" = "3v3"
+"GND" = "gnd"
+"5V" = "vbus_5v"
+"VUSB" = "vbus_5v"
+"VBUS" = "vbus_5v"
+
+[models.ratings]
+# ESP32-C3 Series Datasheet v2.4 Table 5-1, as on the esp32c3 card.
+max_voltage_v = 3.6
+
+# 3V3 on the header is U2 XC6210B332MR's output, schematic p.1. XC6210 datasheet
+# ETR0317_007 (LCSC C6932990 copy, sha256
+# 41bebb0a51c12aa0959c795bec5f5d220cfc8439d2299c3e994d4737cbdf3981):
+# - p.6: VOUT x0.98 to x1.02 at Ta = 25 C, VIN = VOUT+1 V, IOUT = 30 mA;
+# - p.8: 3.234 / 3.30 / 3.366 V.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.234
+max = 3.366
+basis = "XIAO ESP32C3 schematic p.1: VCC_3V3 = U2 XC6210B332MR VOUT; XC6210 datasheet ETR0317_007 p.6: VOUT x0.98..x1.02 at 25 C"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seeed Studio XIAO ESP32S3 (not the Sense, whose schematic is separate). Map:
+# schematic XIAO_ESP32S3_SCH_v1.2.pdf (files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/,
+# sha256 c22d0b9fbbc7e0af6a8d0f549bbd10d05da412d092602c96e7ca2ccd05550825) p.1:
+# J2 pins 1..7 reach ESP32-S3R8 GPIO1..GPIO6 and U0TXD (GPIO43, through R6); J1
+# pins 1..7 are U0RXD (GPIO44), GPIO7, GPIO8, GPIO9, VCC_3V3, GND, VBUS. D/A names
+# and GPIO43/44: wiki xiao_esp32s3_getting_started pin table. Label map only.
+[[models]]
+id = "seeed_xiao_esp32s3"
+kind = "mcu"
+description = "Seeed Studio XIAO ESP32S3 dev board (ESP32-S3R8, 14 castellated pins)"
+
+[models.match]
+value_re = "(?i)^(Seeed[-_ ]?(Studio[-_ ]?)?)?XIAO[-_ ]?ESP32[-_ ]?S3([-_ ]?(DIP|SMD|SMT))?$"
+
+[models.params]
+backend = "qemu:esp32s3"
+module_clock_hz = 40000000
+module_clock_source = "XIAO ESP32S3 schematic v1.2 p.1: crystal X1 '40MHz/306011364' on XTAL_P/XTAL_N"
+module_flash = "8 MB GD25Q64ENIGR, XIAO ESP32S3 schematic v1.2 p.1"
+
+[models.header_labels]
+"D0" = "gpio1"
+"A0" = "gpio1"
+"GPIO1" = "gpio1"
+"D1" = "gpio2"
+"A1" = "gpio2"
+"GPIO2" = "gpio2"
+"D2" = "gpio3"
+"A2" = "gpio3"
+"GPIO3" = "gpio3"
+"D3" = "gpio4"
+"A3" = "gpio4"
+"GPIO4" = "gpio4"
+"D4" = "gpio5"
+"A4" = "gpio5"
+"SDA" = "gpio5"
+"GPIO5" = "gpio5"
+"D5" = "gpio6"
+"A5" = "gpio6"
+"SCL" = "gpio6"
+"GPIO6" = "gpio6"
+"D6" = "gpio43_txd0"
+"TX" = "gpio43_txd0"
+"GPIO43" = "gpio43_txd0"
+"D7" = "gpio44_rxd0"
+"RX" = "gpio44_rxd0"
+"GPIO44" = "gpio44_rxd0"
+"D8" = "gpio7"
+"A8" = "gpio7"
+"SCK" = "gpio7"
+"GPIO7" = "gpio7"
+"D9" = "gpio8"
+"A9" = "gpio8"
+"MISO" = "gpio8"
+"GPIO8" = "gpio8"
+"D10" = "gpio9"
+"A10" = "gpio9"
+"MOSI" = "gpio9"
+"GPIO9" = "gpio9"
+"3V3" = "3v3"
+"VCC_3V3" = "3v3"
+"GND" = "gnd"
+"5V" = "vbus_5v"
+"VBUS" = "vbus_5v"
+
+[models.ratings]
+# ESP32-S3 Series Datasheet v2.2 (sha256
+# 2d5a7cb7fd559d8d972bd88db32669c0196d23f22d7afaafb0f63d099b589a3f) PDF p.64,
+# Table 5-1 Absolute Maximum Ratings: input power pins -0.3 to 3.6 V.
+max_voltage_v = 3.6
+
+# 3V3 on the header is U3 SGM6029CYG/TR's output, schematic v1.2 p.1. The SGM6029
+# is a buck whose output the VSEL/MODE resistor sets (here R13, 249K 1 %).
+# SGM6029 datasheet Rev A.1 (sg-micro.com, sha256
+# 79d7e25abc3acfd18ab9c394e082663e07dc169151b4bfe0314c13510ced63e0):
+# - p.6 Table 1: 249.0 kOhm or larger selects 3.3 V;
+# - p.5: output voltage accuracy -2 / +2 % in PWM mode over TJ = -40 to +125 C.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.234
+max = 3.366
+basis = "XIAO ESP32S3 schematic v1.2 p.1: VCC_3V3 = U3 SGM6029 buck, MODE R13 249K; SGM6029 datasheet Rev A.1 p.6 Table 1 (249 kOhm selects 3.3 V) and p.5: accuracy -2..+2 % over TJ -40..125 C"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adafruit Feathers. All of them share KiCad's Module:Adafruit_Feather footprint.
+# Pads 1..16 are Adafruit's JP1 pins 16..1, and pads 17..28 are JP3 pins 12..1.
+# That numbering was checked pin by pin against KiCad's
+# MCU_Module:Adafruit_Feather_HUZZAH32_ESP32 symbol (see the HUZZAH32 section
+# below), so each card gives the pad map as well as the labels.
+# On every Feather, the pin labelled EN is the 3.3 V REGULATOR's enable, not the
+# processor's. The processor's reset is the RST / RESET pin (pad 1).
+
+# Adafruit HUZZAH32 ESP32 Feather (ESP32-WROOM-32).
+# Map: Adafruit's Eagle schematic "Adafruit HUZZAH32 ESP32 Feather.sch"
+# (github.com/adafruit/Adafruit-HUZZAH32-ESP32-Feather-PCB, sha256
+# c94cbaf666b6cde286453c09c5263a185b167b1a747a9e404b9103fc0cacc414), from the
+# netlist of JP1 / JP3 to X2 ESP32_WROOM32.
+# GPIO numbers were cross-checked against:
+# - the pinout PDF (sha256
+#   7bf736651854a04ea2d7293e124e2be86c66ef70c1f0fc3ab47c08c8f07c279b) p.1;
+# - the learn guide adafruit-huzzah32-esp32-feather.pdf (sha256
+#   cb04c0aacd1c702cc1dbd7e795c5b7272ccc5485f655bd3273c11a90bbd5d080) pp.10-13.
+# RX/TX are GPIO16/17 (guide p.11: "not connected to the USB/Serial converter").
+[[models]]
+id = "adafruit_feather_huzzah32"
+kind = "mcu"
+description = "Adafruit HUZZAH32 ESP32 Feather (ESP32-WROOM-32, 28-pin Feather header)"
+
+[models.match]
+# "Adafruit_Feather_HUZZAH32_ESP32" (KiCad MCU_Module), "HUZZAH32", "Feather HUZZAH32".
+value_re = "(?i)^(Adafruit[-_ ]?)?(Feather[-_ ]?)?HUZZAH[-_ ]?32([-_ ]?ESP32)?([-_ ]?Feather)?$"
+
+[models.params]
+backend = "qemu:esp32"
+module_clock_hz = 40000000
+module_clock_source = "ESP32-WROOM-32E datasheet v2.1 PDF p.2: 40 MHz crystal integrated in the module (as on the esp32_wroom card); the HUZZAH32 schematic places no crystal outside X2"
+
+[models.pins]
+"1"  = "en"           # RESET: the ESP32's EN (R13 10K to 3.3V, C4 1uF)
+"2"  = "3v3"
+"4"  = "gnd"
+"5"  = "gpio26"       # A0 / DAC2
+"6"  = "gpio25"       # A1 / DAC1
+"7"  = "gpio34"       # A2, input only
+"8"  = "gpio39"       # A3, input only
+"9"  = "gpio36"       # A4, input only
+"10" = "gpio4"        # A5
+"11" = "gpio5"        # SCK
+"12" = "gpio18"       # MOSI
+"13" = "gpio19"       # MISO
+"14" = "gpio16_rxd"       # RX
+"15" = "gpio17_txd"       # TX
+"16" = "gpio21"
+"17" = "gpio23"       # SDA
+"18" = "gpio22"       # SCL
+"19" = "gpio14"       # A6
+"20" = "gpio32"       # A7
+"21" = "gpio15"       # A8
+"22" = "gpio33"       # A9
+"23" = "gpio27"       # A10
+"24" = "gpio12"       # A11
+"25" = "gpio13"       # A12, red LED
+"26" = "vbus_5v"      # USB
+"27" = "reg_en"       # EN: AP2112 enable, R7 100K pull-up
+"28" = "vbat"
+
+[models.header_labels]
+"RESET" = "en"
+"RST" = "en"
+"3V3" = "3v3"
+"3V" = "3v3"
+"GND" = "gnd"
+"A0" = "gpio26"
+"DAC2" = "gpio26"
+"A1" = "gpio25"
+"DAC1" = "gpio25"
+"A2" = "gpio34"
+"I34" = "gpio34"
+"A3" = "gpio39"
+"I39" = "gpio39"
+"A4" = "gpio36"
+"I36" = "gpio36"
+"A5" = "gpio4"
+"SCK" = "gpio5"
+"MOSI" = "gpio18"
+"MISO" = "gpio19"
+"RX" = "gpio16_rxd"
+"TX" = "gpio17_txd"
+"SDA" = "gpio23"
+"SCL" = "gpio22"
+"A6" = "gpio14"
+"A7" = "gpio32"
+"A8" = "gpio15"
+"A9" = "gpio33"
+"A10" = "gpio27"
+"A11" = "gpio12"
+"A12" = "gpio13"
+"USB" = "vbus_5v"
+"VUSB" = "vbus_5v"
+"EN" = "reg_en"
+"BAT" = "vbat"
+"VBAT" = "vbat"
+"IO4" = "gpio4"
+"IO5" = "gpio5"
+"IO12" = "gpio12"
+"IO13" = "gpio13"
+"IO14" = "gpio14"
+"IO15" = "gpio15"
+"IO16" = "gpio16_rxd"
+"IO17" = "gpio17_txd"
+"IO18" = "gpio18"
+"IO19" = "gpio19"
+"IO21" = "gpio21"
+"IO22" = "gpio22"
+"IO23" = "gpio23"
+"IO25" = "gpio25"
+"IO26" = "gpio26"
+"IO27" = "gpio27"
+"IO32" = "gpio32"
+"IO33" = "gpio33"
+"IO34" = "gpio34"
+"IO36" = "gpio36"
+"IO39" = "gpio39"
+"GPIO4" = "gpio4"
+"GPIO5" = "gpio5"
+"GPIO12" = "gpio12"
+"GPIO13" = "gpio13"
+"GPIO14" = "gpio14"
+"GPIO15" = "gpio15"
+"GPIO16" = "gpio16_rxd"
+"GPIO17" = "gpio17_txd"
+"GPIO18" = "gpio18"
+"GPIO19" = "gpio19"
+"GPIO21" = "gpio21"
+"GPIO22" = "gpio22"
+"GPIO23" = "gpio23"
+"GPIO25" = "gpio25"
+"GPIO26" = "gpio26"
+"GPIO27" = "gpio27"
+"GPIO32" = "gpio32"
+"GPIO33" = "gpio33"
+"GPIO34" = "gpio34"
+"GPIO36" = "gpio36"
+"GPIO39" = "gpio39"
+
+[models.ratings]
+# ESP32-WROOM-32E datasheet v2.1 Table 13 Absolute Maximum Ratings, VDD33 3.6 V
+# (as on the esp32_wroom card).
+max_voltage_v = 3.6
+
+# 3V on the header is U2 AP2112-3.3's output (schematic netlist). AP2112
+# datasheet (diodes.com AP2112.pdf, DS39724 Rev. 2-2, sha256
+# ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f) p.8,
+# AP2112-3.3 Electrical Characteristics: VOUT min VOUT*98.5%, max VOUT*101.5%.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.2505
+max = 3.3495
+basis = "HUZZAH32 Feather schematic: 3.3V = U2 AP2112-3.3 OUT; AP2112.pdf p.8 AP2112-3.3 VOUT 98.5%..101.5% of 3.3 V"
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32 Series Datasheet v5.3 (sha256 a7917e6b47528c9dcab06837a49d452e582751335797db879f1cf2d17cd29adf) Table 2-1 Pin Overview (PDF pp.14-15) and Table 4-6 Peripheral Pin Configurations (PDF p.46): GPIO36 ADC1_CH0, GPIO39 ADC1_CH3, GPIO32 ADC1_CH4, GPIO33 ADC1_CH5, GPIO34 ADC1_CH6, GPIO4 ADC2_CH0, GPIO15 ADC2_CH3, GPIO13 ADC2_CH4, GPIO12 ADC2_CH5, GPIO14 ADC2_CH6, GPIO27 ADC2_CH7, GPIO25 ADC2_CH8, GPIO26 ADC2_CH9; GPIO5, 16-19, 21-23 carry none. Pad to GPIO from this card's [models.pins] (HUZZAH32 Feather Eagle schematic netlist, pinout PDF p.1). ADC2 is not usable while Wi-Fi runs (ESP-IDF note, not in the datasheet)"
+[models.pin_capability.adc.pads]
+"5" = "ADC2_CH9 (GPIO26)"
+"6" = "ADC2_CH8 (GPIO25)"
+"7" = "ADC1_CH6 (GPIO34)"
+"8" = "ADC1_CH3 (GPIO39)"
+"9" = "ADC1_CH0 (GPIO36)"
+"10" = "ADC2_CH0 (GPIO4)"
+"19" = "ADC2_CH6 (GPIO14)"
+"20" = "ADC1_CH4 (GPIO32)"
+"21" = "ADC2_CH3 (GPIO15)"
+"22" = "ADC1_CH5 (GPIO33)"
+"23" = "ADC2_CH7 (GPIO27)"
+"24" = "ADC2_CH5 (GPIO12)"
+"25" = "ADC2_CH4 (GPIO13)"
+[models.pin_capability.routed]
+basis = "Espressif ESP32 Series Datasheet v5.3 (PDF page = printed page), Section 4.10 Table 4-6 Peripheral Pin Configurations (p.47-48): General Purpose SPI (HSPICLK, HSPID, HSPIQ, VSPICLK, VSPID, VSPIQ), UART0-2 (U0TXD_out, U0RXD_in, ...), I2C (I2CEXT0/1_SCL/SDA in/out), LED PWM (ledc_hs/ls_sig_out0~7) and Motor PWM (PWM0/1_CAP_IN0~2) are each listed with Pin 'Any GPIO Pins'; Sections 4.8.2-4.8.9 (p.36-40) say 'The pins for UART/I2C/LED PWM Controller/Motor Control PWM can be chosen from any GPIOs via the GPIO Matrix' (HSPI/VSPI also have fixed IO MUX pads, p.36, but the matrix reaches any pad). ESP32 Technical Reference Manual v5.8 (PDF page = printed page), Chapter 6 IO MUX and GPIO Matrix, Section 6.1 (p.116: 'Each of the 162 internal peripheral inputs can select any GPIO pin as the input source', each GPIO output can be one of 176 peripheral output signals) and Section 6.9 Peripheral Signal List (p.125-128: HSPICLK_in/out, U0RXD_in/U0TXD_out, I2CEXT0_SCL_in/out, VSPICLK_in/out, ledc_hs_sig_out0, pwm0_cap0_in). timer_capture is the Motor Control PWM capture module (TRM Chapter 29, p.677: three capture channels latch a 32-bit capture-timer value on the selected edge). GPIO34-39 are input-only pads (no output functions there), which a pad-level table cannot express; hardware peripheral only, a software (bit-banged) implementation can use any pad Module datasheet: ESP32-WROOM-32E & WROOM-32UE Datasheet v2.1, Section 5.2 Digital Peripherals repeats the same statements (UART p.19, I2C p.20, LED PWM p.21, Motor Control PWM p.22, PDF page = printed page)."
+functions = ["spi_sck", "spi_mosi", "spi_miso", "i2c_sda", "i2c_scl", "uart_tx", "uart_rx", "pwm", "timer_capture"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adafruit Feather 32u4 Basic Proto (ATmega32U4, 8 MHz, 3.3 V).
+# Map: Adafruit's Eagle schematic "Adafruit Feather 32u4 Basic rev B.sch"
+# (github.com/adafruit/Adafruit-Feather-32u4-Basic-Proto-PCB, sha256
+# b0f602c45022798e6b5d2eab554ae40fe9290cf162ac9089e21ac9742a2789a1), from the
+# netlist of JP1 / JP3 to IC1 ATMEGA32U4-MU.
+# It was cross-checked against:
+# - the pinout PDF (sha256
+#   947c55b9ee6ec222f8b0e75cef114b7432fc89a2b9e1f6ba104481c205d02e58) p.1
+#   ("D13 13 PC7");
+# - the learn guide adafruit-feather-32u4-basic-proto.pdf (sha256
+#   428e88eeaf9e66b6ec2072fb92aa0aa7e36bd4eae22fe3d2a68c03f3eafdfbc1) p.7.
+# The Bluefruit LE / RFM / FONA variants use some of these pins on the board and
+# are not matched.
+[[models]]
+id = "adafruit_feather_32u4"
+kind = "mcu"
+description = "Adafruit Feather 32u4 Basic Proto (ATmega32U4 at 8 MHz, 28-pin Feather header)"
+
+[models.match]
+value_re = "(?i)^(Adafruit[-_ ]?)?Feather[-_ ]?32u4([-_ ]?Basic)?([-_ ]?Proto)?$"
+
+[models.params]
+backend = "simavr:atmega32u4"
+module_clock_hz = 8000000
+module_clock_source = "Feather 32u4 Basic schematic: Y1 RESONATOR '8MHz' on XTAL1/XTAL2; learn guide p.3: 'ATmega32u4 clocked at 8 MHz and at 3.3V logic'"
+
+[models.pins]
+"1"  = "reset"        # RST: /RESET (no external pull-up on this board)
+"2"  = "3v3"
+"3"  = "aref"
+"4"  = "gnd"
+"5"  = "pf7_adc7"     # A0
+"6"  = "pf6_adc6"     # A1
+"7"  = "pf5_adc5"     # A2
+"8"  = "pf4_adc4"     # A3
+"9"  = "pf1_adc1"     # A4
+"10" = "pf0_adc0"     # A5
+"11" = "pb1_sck"
+"12" = "pb2_mosi"
+"13" = "pb3_miso"
+"14" = "pd2_rxd1"     # RX / D0
+"15" = "pd3_txd1"     # TX / D1
+"16" = "gnd2"         # JP1-1 is GND on this board
+"17" = "pd1_sda"      # SDA / D2
+"18" = "pd0_scl"      # SCL / D3
+"19" = "pc6"          # D5
+"20" = "pd7_adc10"    # D6
+"21" = "pb5_adc12"    # D9 (also the VBAT divider)
+"22" = "pb6_adc13"    # D10
+"23" = "pb7"          # D11
+"24" = "pd6_adc9"     # D12
+"25" = "pc7"          # D13, red LED
+"26" = "vbus_5v"      # USB
+"27" = "reg_en"       # EN: SPX3819 enable, R9 100k pull-up to VBUS
+"28" = "vbat"
+
+[models.header_labels]
+"RST" = "reset"
+"RESET" = "reset"
+"3V" = "3v3"
+"3V3" = "3v3"
+"AREF" = "aref"
+"GND" = "gnd"
+"A0" = "pf7_adc7"
+"A1" = "pf6_adc6"
+"A2" = "pf5_adc5"
+"A3" = "pf4_adc4"
+"A4" = "pf1_adc1"
+"A5" = "pf0_adc0"
+"SCK" = "pb1_sck"
+"MOSI" = "pb2_mosi"
+"MISO" = "pb3_miso"
+"RX" = "pd2_rxd1"
+"D0" = "pd2_rxd1"
+"TX" = "pd3_txd1"
+"D1" = "pd3_txd1"
+"SDA" = "pd1_sda"
+"D2" = "pd1_sda"
+"SCL" = "pd0_scl"
+"D3" = "pd0_scl"
+"D5" = "pc6"
+"D6" = "pd7_adc10"
+"D9" = "pb5_adc12"
+"D10" = "pb6_adc13"
+"D11" = "pb7"
+"D12" = "pd6_adc9"
+"D13" = "pc7"
+"USB" = "vbus_5v"
+"EN" = "reg_en"
+"BAT" = "vbat"
+"VBAT" = "vbat"
+
+[models.ratings]
+# Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (sha256
+# 8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a),
+# section 29.1 Absolute Maximum Ratings (PDF page = printed page 383): Maximum
+# Operating Voltage 6.0 V, DC Current per I/O Pin 40.0 mA, DC Current VCC and
+# GND Pins 200.0 mA (as on the atmega32u4 card). The recommended VCC range is
+# 2.7-5.5 V (Table 29-1, p.383); 6.0 V is the abs max row, not that ceiling.
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
+# 3V on the header is U2 SPX3819-3.3's output from VBUS (schematic netlist).
+# SPX3819 datasheet (maxlinear.com/ds/spx3819.pdf Rev. 2.0.5, sha256
+# 43b63129331150a20339623920ea9f7be758d93e700a3459beb190d483ad35a2) p.2,
+# Electrical Specifications: output voltage tolerance ±2% over the
+# junction-temperature range.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.234
+max = 3.366
+basis = "Feather 32u4 Basic schematic: +3V3 = U2 SPX3819-3.3 OUT; spx3819.pdf p.2 output tolerance ±2% over temperature"
+
+[models.pin_capability.adc]
+basis = "Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, section 1 Pin Configurations Figure 1-1 (PDF p.3) and the port F pin list (PDF p.307): ADC0, ADC1, ADC4-ADC7 on PF0, PF1, PF4-PF7; ADC8-ADC13 on PD4, PD6, PD7, PB4, PB5, PB6. PD4 (ADC8) and PB4 (ADC11) are not on the Feather header (schematic net D4 and D8 reach IC1 only); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.adc.pads]
+"5" = "ADC7"
+"6" = "ADC6"
+"7" = "ADC5"
+"8" = "ADC4"
+"9" = "ADC1"
+"10" = "ADC0"
+"20" = "ADC10"
+"21" = "ADC12"
+"22" = "ADC13"
+"24" = "ADC9"
+[models.pin_capability.spi_sck]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-3 (p.74) PB1 SCK/PCINT1 and section 10.3.1 (p.75); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.spi_sck.pads]
+"11" = "SCK (PB1)"
+[models.pin_capability.spi_mosi]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-3 (p.74) PB2 PDI/MOSI and section 10.3.1 (p.75); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.spi_mosi.pads]
+"12" = "MOSI (PB2)"
+[models.pin_capability.spi_miso]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-3 (p.74) PB3 PDO/MISO and section 10.3.1 (p.74-75); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.spi_miso.pads]
+"13" = "MISO (PB3)"
+[models.pin_capability.i2c_sda]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-8 (p.78) PD1 INT1/SDA and section 10.3.3 (p.79); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.i2c_sda.pads]
+"17" = "SDA (PD1)"
+[models.pin_capability.i2c_scl]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-8 (p.78) PD0 INT0/SCL/OC0B and section 10.3.3 (p.79); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.i2c_scl.pads]
+"18" = "SCL (PD0)"
+[models.pin_capability.uart_tx]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-8 (p.78) PD3 INT3/TXD1 and section 10.3.3 (p.79) (USART1 transmit data, the only USART); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.uart_tx.pads]
+"15" = "TXD1 (PD3)"
+[models.pin_capability.uart_rx]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-8 (p.78) PD2 INT2/RXD1 and section 10.3.3 (p.79) (USART1 receive data, the only USART); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role"
+[models.pin_capability.uart_rx.pads]
+"14" = "RXD1 (PD2)"
+[models.pin_capability.pwm]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-3 (p.74) PB7 OC0A/OC1C, PB6 OC1B/OC4B, PB5 OC1A/OC4B complementary; Table 10-6 (p.77) PC7 OC4A, PC6 OC3A/OC4A complementary; Table 10-8 (p.78) PD7 OC4D, PD6 OC4D complementary, PD0 OC0B: the Timer/Counter0, 1, 3 and 4 output-compare pins; the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"18" = "OC0B (PD0)"
+"19" = "OC3A / OC4A complementary (PC6)"
+"20" = "OC4D (PD7)"
+"21" = "OC1A / OC4B complementary (PB5)"
+"22" = "OC1B / OC4B (PB6)"
+"23" = "OC0A / OC1C (PB7)"
+"24" = "OC4D complementary (PD6)"
+"25" = "OC4A (PC7)"
+[models.pin_capability.timer_capture]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J-USB-ATmega16U4/32U4-Datasheet_04/2016 (PDF page numbers, which equal the printed page numbers), Table 10-6 (p.77) PC7 ICP3/CLKO/OC4A (Timer/Counter3 input capture) and Table 10-8 (p.78) PD4 ICP1/ADC8. ICP1 IS NOT ON THE FEATHER HEADER: the Feather 32u4 Basic rev B schematic net D4 joins PD4(ICP1/ADC8) to nothing but IC1, so the only capture input a carrier board can reach is ICP3 on D13 (pad 25); the pads are this card's 28 Feather header positions ([models.pins], from the Adafruit Feather 32u4 Basic rev B Eagle schematic netlist JP1/JP3 to IC1 and its pinout PDF p.1), each wired straight to the ATmega32U4 port pin named in its role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"25" = "ICP3 (PC7)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adafruit Feather RP2040.
+# Map: Adafruit's Eagle schematic "Adafruit Feather RP2040.sch"
+# (github.com/adafruit/Adafruit-Feather-RP2040-PCB, sha256
+# f0f409d60c232511f8440582bfaae19f9d25ad8712b831f56e33fa0dc3b9f75a), from the
+# netlist of JP1 / JP3 to the RP2040.
+# It was cross-checked against the pinout PDF (sha256
+# e10a2a8c12d489d76631fa72abbc53914a1e2560ac2c23835b462261baa059ea) p.1 ("D13
+# GPIO13", "SCK GPIO18", "RX GPIO1", "D4 GPIO6").
+# On this Feather pad 3 is a second 3.3 V pin (JP1-14 is tied to +3V3), not AREF.
+[[models]]
+id = "adafruit_feather_rp2040"
+kind = "mcu"
+description = "Adafruit Feather RP2040 (RP2040, 28-pin Feather header)"
+
+[models.match]
+value_re = "(?i)^(Adafruit[-_ ]?)?Feather[-_ ]?RP2040$"
+
+[models.params]
+backend = "renode:rp2040"
+module_clock_hz = 12000000
+module_clock_source = "Feather RP2040 schematic: Y1 '12MHz/12pF' on XIN/XOUT; learn guide adafruit-feather-rp2040-pico.pdf (sha256 180e8af7193411606706c083ee26be58ec5d0151664f559a8327d7560cff4037) p.9: '12 MHz crystal for perfect timing'"
+
+[models.pins]
+"1"  = "run"          # RST: RUN, R1 10K to 3V3
+"2"  = "3v3"
+"3"  = "3v3"          # tied to 3V3 on this Feather
+"4"  = "gnd"
+"5"  = "gpio26_adc0"  # A0
+"6"  = "gpio27_adc1"  # A1
+"7"  = "gpio28_adc2"  # A2
+"8"  = "gpio29_adc3"  # A3
+"9"  = "gpio24"       # D24
+"10" = "gpio25"       # D25
+"11" = "gpio18"       # SCK
+"12" = "gpio19"       # MOSI
+"13" = "gpio20"       # MISO
+"14" = "gpio1_rxd"        # RX
+"15" = "gpio0_txd"        # TX
+"16" = "gpio6"        # D4
+"17" = "gpio2"        # SDA
+"18" = "gpio3"        # SCL
+"19" = "gpio7"        # D5
+"20" = "gpio8"        # D6
+"21" = "gpio9"        # D9
+"22" = "gpio10"       # D10
+"23" = "gpio11"       # D11
+"24" = "gpio12"       # D12
+"25" = "gpio13"       # D13, red LED
+"26" = "vbus_5v"      # USB
+"27" = "reg_en"       # EN: regulator enable, R3 10K pull-up
+"28" = "vbat"
+
+[models.header_labels]
+"RST" = "run"
+"RESET" = "run"
+"3.3V" = "3v3"
+"3V3" = "3v3"
+"3V" = "3v3"
+"GND" = "gnd"
+"A0" = "gpio26_adc0"
+"A1" = "gpio27_adc1"
+"A2" = "gpio28_adc2"
+"A3" = "gpio29_adc3"
+"D24" = "gpio24"
+"D25" = "gpio25"
+"SCK" = "gpio18"
+"MOSI" = "gpio19"
+"MISO" = "gpio20"
+"RX" = "gpio1_rxd"
+"TX" = "gpio0_txd"
+"D4" = "gpio6"
+"SDA" = "gpio2"
+"SCL" = "gpio3"
+"D5" = "gpio7"
+"D6" = "gpio8"
+"D9" = "gpio9"
+"D10" = "gpio10"
+"D11" = "gpio11"
+"D12" = "gpio12"
+"D13" = "gpio13"
+"USB" = "vbus_5v"
+"EN" = "reg_en"
+"BAT" = "vbat"
+"VBAT" = "vbat"
+
+[models.ratings]
+# RP2040 Datasheet (sha256 be56fbb7...ea8c) PDF p.615, Table 622: IOVDD max 3.63 V.
+max_voltage_v = 3.63
+
+# 3V3 is U2's output. U2 is fitted as either an RT9080-33 or an AP2112-3.3 (the
+# schematic value is "RT9080/AP2112-3.3").
+# - RT9080 datasheet DS9080-09 (richtek.com, sha256
+#   52d09967ef32672003df93d1382bc249715365406f59d110d9ebad6d618017d4) p.6: output
+#   voltage accuracy -2 / +2 % at TA = 25 C, ILOAD = 1 mA.
+# - AP2112-3.3: 98.5..101.5 % (AP2112.pdf p.8), which lies inside the RT9080 band.
+# So the wider band covers either part.
+[[models.supply_outputs]]
+role = "3v3"
+nominal = 3.3
+min = 3.234
+max = 3.366
+basis = "Feather RP2040 schematic: +3V3 = U2 'RT9080/AP2112-3.3' OUT; RT9080 DS9080-09 p.6: accuracy -2..+2 % at 25 C (AP2112.pdf p.8: 98.5..101.5 %, inside it)"
+
+[models.pin_capability.adc]
+basis = "Raspberry Pi RP2040 Datasheet (build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c) Table 615 GPIO pins (PDF p.614): GPIO26/ADC0, GPIO27/ADC1, GPIO28/ADC2, GPIO29/ADC3 'User IO or ADC input'; on the Feather RP2040 all four are on the header as A0-A3 (pads 5-8, Adafruit Feather RP2040 schematic netlist and pinout PDF p.1); hardware peripheral only"
+[models.pin_capability.adc.pads]
+"5" = "ADC0 (GPIO26)"
+"6" = "ADC1 (GPIO27)"
+"7" = "ADC2 (GPIO28)"
+"8" = "ADC3 (GPIO29)"
+[models.pin_capability.spi_sck]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: SPIx SCK is the F1 function on GPIO2, 6, 10, 14, 18, 22, 26 (SPI0: GPIO2/6/18/22, SPI1: GPIO10/14/26); pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.spi_sck.pads]
+"5" = "SPI1 SCK (F1) (GPIO26)"
+"11" = "SPI0 SCK (F1) (GPIO18)"
+"16" = "SPI0 SCK (F1) (GPIO6)"
+"17" = "SPI0 SCK (F1) (GPIO2)"
+"22" = "SPI1 SCK (F1) (GPIO10)"
+[models.pin_capability.spi_mosi]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: SPIx TX (the PL022 data-out, MOSI as master) is F1 on GPIO3, 7, 11, 15, 19, 23, 27 (SPI0: GPIO3/7/19/23, SPI1: GPIO11/15/27); as a slave the TX pad carries MISO; pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.spi_mosi.pads]
+"6" = "SPI1 TX (F1) (GPIO27)"
+"12" = "SPI0 TX (F1) (GPIO19)"
+"18" = "SPI0 TX (F1) (GPIO3)"
+"19" = "SPI0 TX (F1) (GPIO7)"
+"23" = "SPI1 TX (F1) (GPIO11)"
+[models.pin_capability.spi_miso]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: SPIx RX (the PL022 data-in, MISO as master) is F1 on GPIO0, 4, 8, 12, 16, 20, 24, 28 (SPI0: GPIO0/4/16/20, SPI1: GPIO8/12/24/28); as a slave the RX pad carries MOSI; pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.spi_miso.pads]
+"7" = "SPI1 RX (F1) (GPIO28)"
+"9" = "SPI1 RX (F1) (GPIO24)"
+"13" = "SPI0 RX (F1) (GPIO20)"
+"15" = "SPI0 RX (F1) (GPIO0)"
+"20" = "SPI1 RX (F1) (GPIO8)"
+"24" = "SPI1 RX (F1) (GPIO12)"
+[models.pin_capability.i2c_sda]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: I2Cx SDA is F3 on GPIO0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28 (even GPIOs; I2C0 on GPIO0/4/8/12/16/20/24/28, I2C1 on GPIO2/6/10/14/18/22/26); pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.i2c_sda.pads]
+"5" = "I2C1 SDA (F3) (GPIO26)"
+"7" = "I2C0 SDA (F3) (GPIO28)"
+"9" = "I2C0 SDA (F3) (GPIO24)"
+"11" = "I2C1 SDA (F3) (GPIO18)"
+"13" = "I2C0 SDA (F3) (GPIO20)"
+"15" = "I2C0 SDA (F3) (GPIO0)"
+"16" = "I2C1 SDA (F3) (GPIO6)"
+"17" = "I2C1 SDA (F3) (GPIO2)"
+"20" = "I2C0 SDA (F3) (GPIO8)"
+"22" = "I2C1 SDA (F3) (GPIO10)"
+"24" = "I2C0 SDA (F3) (GPIO12)"
+[models.pin_capability.i2c_scl]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: I2Cx SCL is F3 on GPIO1, 3, 5, ..., 29 (odd GPIOs; I2C0 on GPIO1/5/9/13/17/21/25/29, I2C1 on GPIO3/7/11/15/19/23/27); pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.i2c_scl.pads]
+"6" = "I2C1 SCL (F3) (GPIO27)"
+"8" = "I2C0 SCL (F3) (GPIO29)"
+"10" = "I2C0 SCL (F3) (GPIO25)"
+"12" = "I2C1 SCL (F3) (GPIO19)"
+"14" = "I2C0 SCL (F3) (GPIO1)"
+"18" = "I2C1 SCL (F3) (GPIO3)"
+"19" = "I2C1 SCL (F3) (GPIO7)"
+"21" = "I2C0 SCL (F3) (GPIO9)"
+"23" = "I2C1 SCL (F3) (GPIO11)"
+"25" = "I2C0 SCL (F3) (GPIO13)"
+[models.pin_capability.uart_tx]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: UARTx TX is F2 on GPIO0, 4, 8, 12, 16, 20, 24, 28 (UART0: GPIO0/12/16/28, UART1: GPIO4/8/20/24); pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.uart_tx.pads]
+"7" = "UART0 TX (F2) (GPIO28)"
+"9" = "UART1 TX (F2) (GPIO24)"
+"13" = "UART1 TX (F2) (GPIO20)"
+"15" = "UART0 TX (F2) (GPIO0)"
+"20" = "UART1 TX (F2) (GPIO8)"
+"24" = "UART0 TX (F2) (GPIO12)"
+[models.pin_capability.uart_rx]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: UARTx RX is F2 on GPIO1, 5, 9, 13, 17, 21, 25, 29 (UART0: GPIO1/13/17/29, UART1: GPIO5/9/21/25); pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.uart_rx.pads]
+"8" = "UART0 RX (F2) (GPIO29)"
+"10" = "UART1 RX (F2) (GPIO25)"
+"14" = "UART0 RX (F2) (GPIO1)"
+"21" = "UART1 RX (F2) (GPIO9)"
+"25" = "UART0 RX (F2) (GPIO13)"
+[models.pin_capability.pwm]
+basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 2 General Purpose Input/Output (GPIO) Bank 0 Functions in section 1.4.3 GPIO Functions (printed pp.12-13, PDF pp.13-14; page numbers here are printed pages, PDF page = printed + 1) and the same function table repeated as Table 279 in section 2.19.2 Function Select (printed p.237) selected by the GPIOx_CTRL FUNCSEL field: every GPIO0-29 carries a PWM channel as F4 (PWMn A on even channels, PWMn B on odd; PWM0-PWM7 slices, 8 slices x 2 outputs, repeated on GPIO16-29), also Table 515 in section 4.5.2 (printed p.522) 'All 30 GPIO pins on RP2040 can be used for PWM'; the same slice output may be selected on two GPIOs; pad to GPIO number from this card's [models.pins], taken from the Adafruit Feather RP2040 Eagle schematic netlist (JP1/JP3 to the RP2040) and its pinout PDF p.1; hardware peripheral only, a software (bit-banged or PIO) implementation can use any GPIO"
+[models.pin_capability.pwm.pads]
+"5" = "PWM5 A (F4) (GPIO26)"
+"6" = "PWM5 B (F4) (GPIO27)"
+"7" = "PWM6 A (F4) (GPIO28)"
+"8" = "PWM6 B (F4) (GPIO29)"
+"9" = "PWM4 A (F4) (GPIO24)"
+"10" = "PWM4 B (F4) (GPIO25)"
+"11" = "PWM1 A (F4) (GPIO18)"
+"12" = "PWM1 B (F4) (GPIO19)"
+"13" = "PWM2 A (F4) (GPIO20)"
+"14" = "PWM0 B (F4) (GPIO1)"
+"15" = "PWM0 A (F4) (GPIO0)"
+"16" = "PWM3 A (F4) (GPIO6)"
+"17" = "PWM1 A (F4) (GPIO2)"
+"18" = "PWM1 B (F4) (GPIO3)"
+"19" = "PWM3 B (F4) (GPIO7)"
+"20" = "PWM4 A (F4) (GPIO8)"
+"21" = "PWM4 B (F4) (GPIO9)"
+"22" = "PWM5 A (F4) (GPIO10)"
+"23" = "PWM5 B (F4) (GPIO11)"
+"24" = "PWM6 A (F4) (GPIO12)"
+"25" = "PWM6 B (F4) (GPIO13)"
+[models.pin_capability.timer_capture]
+basis = "Raspberry Pi RP2040 Datasheet (build-date 2025-02-20): the system timer (section 4.6.1 Overview, printed p.534) has one 64-bit counter and four match alarms and no input-capture channel; no pad latches a timer count on an edge (Table 2 GPIO Bank 0 Functions, section 1.4.3, printed pp.12-13, lists no capture function). PWM B-pin input mode (section 4.5.2.5, printed p.526) gates or counts edges but does not latch a timestamp, and PIO is not a fixed-function peripheral, so the package has no timer-capture pads."

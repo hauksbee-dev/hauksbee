@@ -960,8 +960,11 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
     for out in &entry.supply_outputs {
         let r = &out.role;
-        p.require(entry.pins.values().any(|v| v == r), || {
-            format!("[[models.supply_outputs]] role '{r}' is not a role in [models.pins]")
+        let named = entry.pins.values().chain(entry.header_labels.values());
+        p.require(named.into_iter().any(|v| v == r), || {
+            format!(
+                "[[models.supply_outputs]] role '{r}' is not a role in [models.pins] or [models.header_labels]"
+            )
         });
         let ordered = out.min.is_finite()
             && out.max.is_finite()

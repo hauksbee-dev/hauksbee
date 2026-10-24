@@ -112,6 +112,8 @@ mod dc_overstress;
 mod deck_sim_http;
 #[path = "declarative_sensor_cosim.rs"]
 mod declarative_sensor_cosim;
+#[path = "dev_board_binding.rs"]
+mod dev_board_binding;
 #[path = "diode_fallback.rs"]
 mod diode_fallback;
 #[path = "dnp_processor.rs"]
@@ -268,6 +270,8 @@ mod strap_lint_corpus;
 mod strong_drive_overstress;
 #[path = "supply_chain_scope.rs"]
 mod supply_chain_scope;
+#[path = "supply_path_reset_cosim.rs"]
+mod supply_path_reset_cosim;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
 #[path = "tarski_stretcher_transient.rs"]

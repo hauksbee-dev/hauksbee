@@ -259,7 +259,12 @@ fn coverage_stage_rows_are_the_engines_variants() {
 #[test]
 fn backend_rows_cover_the_cards_and_soc_descriptors() {
     let mut ids = BTreeSet::new();
-    for file in ["mcu.toml", "mcu_modules.toml", "unmodelled.toml"] {
+    for file in [
+        "mcu.toml",
+        "mcu_boards.toml",
+        "mcu_modules.toml",
+        "unmodelled.toml",
+    ] {
         for line in read(&format!("crates/hauksbee-models/db/{file}")).lines() {
             if let Some(rest) = line.trim_start().strip_prefix("backend = \"") {
                 if let Some(id) = rest.split('"').next() {

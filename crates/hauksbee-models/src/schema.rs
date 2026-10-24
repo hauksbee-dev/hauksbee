@@ -90,6 +90,19 @@ pub struct ModelEntry {
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
 
+    /// `[models.header_labels]`: a plug-in board's header labels to roles.
+    ///
+    /// A dev board placed whole (an ESP32-DevKitC, a Seeed XIAO, a Feather)
+    /// has header pad numbers that depend on whichever library drew its
+    /// footprint, but its labels (`D10`, `A0`, `IO21`, `3V3`) are the board's
+    /// own and every symbol for it carries them as pin names. A pad whose pin
+    /// name has a `/`-separated part that is a key here takes that key's role,
+    /// over any `[models.pins]` role for its number (keys are matched ignoring
+    /// case, `~{}` overbar marks and a leading `+`); see
+    /// [`ModelEntry::header_label_role`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub header_labels: BTreeMap<String, String>,
+
     /// `[[models.supply_outputs]]`: rails this part SOURCES on its own pins
     /// while it is fitted and powered, such as a dev-board module's regulated
     /// `5V`/`3V3` header pins fed from its USB connector or on-board regulator.
@@ -580,6 +593,48 @@ impl ModelEntry {
             .as_ref()
             .and_then(|t| t.pads.get(pad).copied())
             .unwrap_or_default()
+    }
+
+    /// The `[models.header_labels]` role a pad named `pin_name` takes.
+    ///
+    /// The name's `/`-separated parts are tried in order (`SCK/D15`,
+    /// `A12/IO13`), each with `~{`/`}` overbar marks, a leading `+` and
+    /// surrounding space removed, compared ignoring case.
+    #[must_use]
+    pub fn header_label_role(&self, pin_name: &str) -> Option<&str> {
+        if self.header_labels.is_empty() {
+            return None;
+        }
+        pin_name.split('/').find_map(|part| {
+            let label = part.replace("~{", "").replace(['}', '~'], "");
+            let label = label.trim().trim_start_matches('+');
+            self.header_labels
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(label))
+                .map(|(_, role)| role.as_str())
+        })
+    }
+
+    /// Give each of `pads` (number, name) that names a header label its role.
+    ///
+    /// The role comes from [`Self::header_label_role`]. The label wins over `pins` on that pad: the card's pad numbers follow
+    /// one footprint's numbering, while a pad that names its label says
+    /// which header pin it is whatever library drew it. Pads with no label
+    /// keep the `pins` role, so a board file with bare pad numbers still binds
+    /// through the card's footprint numbering.
+    pub fn apply_header_labels<'a>(&mut self, pads: impl IntoIterator<Item = (&'a str, &'a str)>) {
+        if self.header_labels.is_empty() {
+            return;
+        }
+        let found: Vec<(String, String)> = pads
+            .into_iter()
+            .filter(|(number, _)| !number.trim().is_empty())
+            .filter_map(|(number, name)| {
+                self.header_label_role(name)
+                    .map(|role| (number.to_string(), role.to_string()))
+            })
+            .collect();
+        self.pins.extend(found);
     }
 }
 

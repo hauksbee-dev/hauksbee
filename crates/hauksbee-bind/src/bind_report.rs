@@ -195,6 +195,9 @@ pub struct BindReport {
     /// Logic and MCU parts whose pin clamps and quiescent draw
     /// [`crate::junctions::stamp_ic_junctions`] can stamp.
     pub ic_sites: Vec<crate::junctions::IcSite>,
+    /// Processor supply rails whose only way in is a part with no card whose
+    /// enable pin is tied to ground, as (net, why): the rail stays down.
+    pub held_off_feeds: Vec<(String, String)>,
 }
 
 /// One connected pin of a fitted part, as the bind pass saw it.

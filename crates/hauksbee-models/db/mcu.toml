@@ -2864,7 +2864,14 @@ kind = "mcu"
 description = "Arduino Nano module (ATmega328P carrier, 30-pin 2.54mm header)"
 
 [models.match]
-value_re   = "(?i)^Arduino.?Nano"
+# Anchored on both ends: the Nano footprint and the "Arduino_Nano..." value prefix
+# are shared by Nano boards with other chips (KiCad MCU_Module has
+# Arduino_Nano_Every = ATmega4809, Arduino_Nano_ESP32 = ESP32-S3,
+# Arduino_Nano_RP2040_Connect = RP2040, all on Module:Arduino_Nano), and an open
+# prefix bound every one of them as an ATmega328P. Only the plain Nano and the v3
+# spellings (KiCad "Arduino_Nano_v3.x") name this board; db/mcu_modules.toml
+# names the others so their refusal says which chip they carry.
+value_re   = "(?i)^Arduino[-_ ]?Nano([-_ ]?(v|r|rev)?[-_ ]?3([.][0-9x]+)*)?$"
 footprint_re = "(?i)Arduino.*Nano"
 
 [models.params]
