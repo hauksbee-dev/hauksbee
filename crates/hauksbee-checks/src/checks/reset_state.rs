@@ -41,9 +41,18 @@ pub(super) fn pad_reset_mode(
 /// How the net on one pad rests while its MCU holders are in reset.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ResetRest {
-    /// Something sets a level in reset: a rail, a pull, a driver that is not an
-    /// MCU pad, or an MCU pad the card says is pulled or driven there.
+    /// Something sets a level in reset: a rail, a pull, or a driver that is
+    /// not an MCU pad.
     Set,
+    /// Held only by MCU pads, at least one of which the card says is pulled or
+    /// driven in reset: the net rests at that pad's level, not floating.
+    McuPulled {
+        /// The pads, as the classifier names them.
+        pads: Vec<Weak>,
+        /// The level they hold the net at (`true` high), or `None` when the
+        /// pads pull or drive it both ways. A driven pad outranks a pulled one.
+        high: Option<bool>,
+    },
     /// Nothing is on the net at all.
     Open,
     /// Held only by MCU pads that are high impedance in reset: the net floats.
@@ -53,6 +62,21 @@ pub(super) enum ResetRest {
     /// share the net with, or replace, the MCU pads: they may set a level in
     /// the reset window, and this module does not judge which.
     Mixed,
+}
+
+/// The level a set of pulled or driven pad modes holds a net at: the driven
+/// pads' level when any pad drives, else the pulls'; `None` when they disagree.
+fn rest_level(modes: &[ResetPadMode]) -> Option<bool> {
+    let level =
+        |up: ResetPadMode, down: ResetPadMode| match (modes.contains(&up), modes.contains(&down)) {
+            (true, false) => Some(Some(true)),
+            (false, true) => Some(Some(false)),
+            (true, true) => Some(None),
+            (false, false) => None,
+        };
+    level(ResetPadMode::DrivesHigh, ResetPadMode::DrivesLow)
+        .or_else(|| level(ResetPadMode::PullUp, ResetPadMode::PullDown))
+        .flatten()
 }
 
 /// How the net on `pin` of `comp` rests while the MCUs that hold it are in
@@ -68,15 +92,18 @@ pub(super) fn reset_rest(classify: &Classifier<'_>, comp: &Component, pin: &Pin)
             if !all_mcu {
                 return ResetRest::Mixed;
             }
-            let pulled_or_driven = weak.iter().any(|w| {
-                w.pad.as_ref().is_some_and(|(reference, pad)| {
-                    !pad_reset_mode(classify.models, reference, pad).is_hi_z()
-                })
-            });
-            if pulled_or_driven {
-                ResetRest::Set
-            } else {
-                ResetRest::McuHiZ(weak)
+            let modes: Vec<ResetPadMode> = weak
+                .iter()
+                .filter_map(|w| w.pad.as_ref())
+                .map(|(reference, pad)| pad_reset_mode(classify.models, reference, pad))
+                .filter(|m| !m.is_hi_z())
+                .collect();
+            if modes.is_empty() {
+                return ResetRest::McuHiZ(weak);
+            }
+            ResetRest::McuPulled {
+                high: rest_level(&modes),
+                pads: weak,
             }
         }
     }
@@ -139,7 +166,10 @@ basis = "fixture"
     #[test]
     fn a_pad_the_card_does_not_list_floats_in_reset_and_a_listed_pull_does_not() {
         assert!(matches!(rest("1", vec![]), ResetRest::McuHiZ(w) if w.len() == 1));
-        assert_eq!(rest("2", vec![]), ResetRest::Set, "pulled up in reset");
+        assert!(
+            matches!(rest("2", vec![]), ResetRest::McuPulled { high: Some(true), ref pads } if pads.len() == 1),
+            "pulled up in reset"
+        );
     }
 
     #[test]

@@ -41,7 +41,7 @@ const EDGE_V: f64 = 1e-3;
 /// The roles of `m` that are logic inputs: an analog switch's control pins, or
 /// the declared inputs of a `[models.logic]` block that are real pads, and the
 /// pads its `sense` map samples.
-fn input_roles(m: &ModelEntry) -> Vec<&str> {
+pub(super) fn input_roles(m: &ModelEntry) -> Vec<&str> {
     let is_pad = |r: &str| m.pins.values().any(|p| p == r);
     let ctrl = |r: &&String| {
         let n = r.strip_prefix("ctrl_").map_or(r.as_str(), |_| "ctrl");

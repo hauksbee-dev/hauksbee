@@ -65,7 +65,11 @@
 //! reset and power-up, and what the part does then is the card's open-pin
 //! state (`regulator_enable::OpenState`): off is safe, on or undefined is a
 //! Medium finding, and a card silent on it is a Medium finding only for a
-//! part that is not a plain regulator. A pull to either rail, a fitted
+//! part that is not a plain regulator. An MCU pad the card pulls or drives in
+//! reset is not floating, but its level is what the enable sees through the
+//! reset window: toward the enable's on level it is the same Medium finding
+//! (the part is switched on while the MCU is in reset), toward its off level
+//! it is silent, whatever the pull's polarity. A pull to either rail, a fitted
 //! resistor of any value, a switch, header or jumper, or any non-MCU part on
 //! the net leaves the net to the other checks.
 //!
@@ -104,7 +108,7 @@ const ASSUMED_INTERNAL_PULL_OHMS: f64 = 10_000.0;
 const NEVER_HIGH_FRACTION: f64 = 0.3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(super) enum Kind {
     Enable,
     Reset,
 }
@@ -137,17 +141,17 @@ enum InternalPull {
     Unknown,
 }
 
-struct Control {
-    kind: Kind,
+pub(super) struct Control {
+    pub(super) kind: Kind,
     /// The pin's name for the finding.
     label: String,
     /// The card's role for the pad, lower case.
-    role: Option<String>,
+    pub(super) role: Option<String>,
     /// Whether the part runs with the pin at its HIGH level. An active-high
     /// enable and an active-low reset do; an active-low enable and an
     /// active-high reset, whose polarity only the card can give, run low and
     /// are held off by a pull to the supply.
-    run_high: bool,
+    pub(super) run_high: bool,
 }
 
 /// An Eagle-style `!RESET` spelling reads as the active-low reset it is.
@@ -227,7 +231,7 @@ fn reset_spelled_active_low(function: &str) -> bool {
 
 /// Which control the pad is and whether it is one this check judges: an
 /// active-high enable or an active-low reset.
-fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
+pub(super) fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
     let kind_text = pin.kind.trim().to_ascii_lowercase();
     if pin_drives(pin) || kind_text.contains("power") {
         return None;
@@ -501,9 +505,17 @@ fn enable_floats_in_reset(
         strict: true,
         open_jumpers: false,
     };
-    let ResetRest::McuHiZ(pads) = reset_rest(&classify, comp, pin) else {
-        return None;
+    let (pads, pulled_high) = match reset_rest(&classify, comp, pin) {
+        ResetRest::McuHiZ(pads) => (pads, None),
+        ResetRest::McuPulled {
+            pads,
+            high: Some(high),
+        } => (pads, Some(high)),
+        _ => return None,
     };
+    if let Some(high) = pulled_high {
+        return pulled_in_reset(board, comp, (pin, net), (model, &control), &pads, high);
+    }
     let declared_no_float = control.role.as_deref().is_some_and(|role| {
         model
             .params
@@ -563,6 +575,61 @@ fn enable_floats_in_reset(
         severity: Severity::Medium,
         message: format!(
             "{} ({}) {label} pin {} is driven only by {drivers} on net '{}'. While that MCU is in reset its pad is high-impedance and nothing on the net pulls the pin, so {label} floats through power-up and reset: {consequence}. {REMEDY_MARKER}{fix}",
+            comp.reference,
+            comp.value.trim(),
+            pin.number,
+            net.name,
+        ),
+        refs: vec![comp.reference.clone()],
+        nets: vec![net.name.clone()],
+    })
+}
+
+/// The finding for an enable whose only holders are MCU pads the card pulls or
+/// drives in reset.
+///
+/// Toward the enable's on level the part is switched on while the MCU is in
+/// reset, exactly as a floating pin on an open-on enable is; toward its off
+/// level the pin is held off and nothing is said.
+fn pulled_in_reset(
+    board: &ExtractedBoard,
+    comp: &Component,
+    (pin, net): (&Pin, &hauksbee_extract::Net),
+    (model, control): (&ModelEntry, &Control),
+    pads: &[super::floating_inputs::Weak],
+    high: bool,
+) -> Option<LintFinding> {
+    if high != control.run_high {
+        return None;
+    }
+    let drivers = pads
+        .iter()
+        .map(|w| w.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (way, level) = if high {
+        ("up", "high")
+    } else {
+        ("down", "low")
+    };
+    let supply = supply_name(board, comp, Some(model));
+    let label = &control.label;
+    let fix = if control.run_high {
+        format!(
+            "Add a pull-down from '{}' to ground stiff enough to beat the pad's internal pull (10 kOhm against a 30-50 kOhm pull-up), or move {label} to a pad that is high-impedance or pulled down in reset.",
+            net.name
+        )
+    } else {
+        format!(
+            "Add a pull-up from '{}' to {supply} stiff enough to beat the pad's internal pull (10 kOhm against a 30-50 kOhm pull-down), or move {label} to a pad that is high-impedance or pulled up in reset.",
+            net.name
+        )
+    };
+    Some(LintFinding {
+        check: LintCheck::ControlHeldOff,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) {label} pin {} is driven only by {drivers} on net '{}'. While that MCU is in reset its card says the pad is pulled or driven {way} ({level}), which is {label}'s on level, and nothing else on the net sets it: the part is switched on while the MCU is in reset. {REMEDY_MARKER}{fix}",
             comp.reference,
             comp.value.trim(),
             pin.number,
@@ -1304,8 +1371,8 @@ mod tests {
 
     /// A part (kind `kind`, pad 3 the enable `role`, params `params`) whose
     /// enable net `/RST` has only the pads of an MCU (U2: pad 2 unlisted, pad 3
-    /// pulled up in reset) and `extra` parts on it. Returns this check's
-    /// findings.
+    /// pulled up and pad 4 pulled down in reset) and `extra` parts on it.
+    /// Returns this check's findings.
     fn gpio_enable(
         tag: &str,
         (kind, role, params): (&str, &str, &str),
@@ -1326,9 +1393,9 @@ mod tests {
              [[models]]\nid = \"gpio_mcu_{tag}\"\nkind = \"mcu\"\n\
              description = \"reset mode fixture\"\n[models.match]\n\
              value_re = \"^GMCU-{tag}$\"\n[models.pins]\n\"1\" = \"vdd\"\n\
-             \"2\" = \"gpio_a\"\n\"3\" = \"gpio_b\"\n\
+             \"2\" = \"gpio_a\"\n\"3\" = \"gpio_b\"\n\"4\" = \"gpio_c\"\n\
              [models.pin_capability.reset_mode]\nbasis = \"fixture\"\n\
-             [models.pin_capability.reset_mode.pads]\n\"3\" = \"pull_up\"\n"
+             [models.pin_capability.reset_mode.pads]\n\"3\" = \"pull_up\"\n\"4\" = \"pull_down\"\n"
         );
         let dir = hauksbee_testkit::fresh_scratch_dir("control_held_off", tag);
         std::fs::write(dir.join("models.toml"), card).unwrap();
@@ -1382,8 +1449,8 @@ mod tests {
     }
 
     /// The silent controls: a pull to the off level, an open state the card says
-    /// is off, an internal pull toward off, and an MCU pad the card pulls in
-    /// reset.
+    /// is off, an internal pull toward off, and an MCU pad the card pulls
+    /// toward the off level in reset.
     #[test]
     fn a_gpio_enable_with_a_pull_or_an_off_when_open_card_is_silent() {
         let on = load_switch(OPEN_IS_ON);
@@ -1402,8 +1469,43 @@ mod tests {
         // then defined (on) rather than floating: not this rule's.
         let up = part("R1", "100k", &[("1", RST), ("2", V3)]);
         assert!(sw("SWUP", &on, "2", vec![up]).is_empty());
-        // Pad 3 of the MCU is pulled in reset per its card.
-        assert!(sw("SWPAD", &on, "3", vec![]).is_empty());
+        // Pad 4 of the MCU is pulled down in reset per its card: the
+        // active-high enable is held off through reset.
+        assert!(sw("SWPAD", &on, "4", vec![]).is_empty());
+    }
+
+    /// An MCU pad the card pulls toward the enable's ON level in reset is no
+    /// safer than a floating one: the part is switched on while the MCU is in
+    /// reset, whatever the card says an open pin does. Pulled toward the off
+    /// level it is silent (the control above).
+    #[test]
+    fn a_pad_pulled_toward_the_enables_on_level_in_reset_switches_the_part_on() {
+        let off_when_open =
+            load_switch("en_open = \"off\"\nen_open_basis = \"fixture p.1: open = off\"");
+        for (tag, params) in [("PUON", load_switch(OPEN_IS_ON)), ("PUOFF", off_when_open)] {
+            let found = gpio_enable(tag, ("analog_switch", "ctrl", &params), "3", vec![]);
+            assert_eq!(found.len(), 1, "{tag}: {found:#?}");
+            says(
+                &found[0],
+                &[
+                    "is driven only by U2 pin 3",
+                    "pulled or driven up (high)",
+                    "switched on while the MCU is in reset",
+                    "Add a pull-down from '/RST' to ground",
+                ],
+            );
+        }
+        // An active-low enable (the card's `enable_n`) pulled up is held off.
+        let identity = "identity_only = true\nwarning = \"identity only\"\nunlocked_by = \"validated behavior\"";
+        let low = gpio_enable("PULOW", ("digital", "enable_n", identity), "3", vec![]);
+        assert!(low.is_empty(), "{low:#?}");
+        // ... and pulled down it is switched on.
+        let on = gpio_enable("PDLOW", ("digital", "enable_n", identity), "4", vec![]);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        says(
+            &on[0],
+            &["switched on while the MCU is in reset", "Add a pull-up"],
+        );
     }
 
     /// A load switch whose datasheet says nothing at all about an open pin is
@@ -1515,15 +1617,28 @@ mod tests {
         );
     }
 
-    /// Each pad is judged on its own table row: STM32F411 PA15 (JTDI, pull-up
-    /// in reset per RM0383 8.3.1) is silent, while a plain port pad of the same
-    /// card floats.
+    /// Each pad is judged on its own table row (RM0383 8.3.1, PDF p.148, on
+    /// the shipped STM32F411VE card): PA15 (JTDI, pull-up in reset) alone on
+    /// an active-high load-switch enable turns the switch on while the MCU is
+    /// in reset, PA14 (SWCLK, pull-down in reset) holds it off, and a plain
+    /// port pad floats.
     #[test]
-    fn a_stm32_debug_pad_is_pulled_in_reset_and_a_plain_port_pad_floats() {
+    fn a_stm32_debug_pad_pulled_up_in_reset_turns_an_enable_on_and_one_pulled_down_holds_it_off() {
         let lqfp100 = "Package_QFP:LQFP-100_14x14mm_P0.5mm";
         let pa15 = shipped_mcu_enable("PA15", "STM32F411VET6", lqfp100, "77");
-        assert!(pa15.is_empty(), "{pa15:#?}");
+        assert_eq!(pa15.len(), 1, "{pa15:#?}");
+        says(
+            &pa15[0],
+            &[
+                "U1 (SHIPTEST-PA15) EN pin 3 is driven only by U2 pin 77",
+                "pulled or driven up (high)",
+                "switched on while the MCU is in reset",
+            ],
+        );
+        let pa14 = shipped_mcu_enable("PA14", "STM32F411VET6", lqfp100, "76");
+        assert!(pa14.is_empty(), "{pa14:#?}");
         let plain = shipped_mcu_enable("PLAIN", "STM32F411VET6", lqfp100, "91");
         assert_eq!(plain.len(), 1, "{plain:#?}");
+        says(&plain[0], &["floats through power-up and reset"]);
     }
 }
