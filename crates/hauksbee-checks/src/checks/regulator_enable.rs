@@ -622,6 +622,10 @@ fn island_member(board: &ExtractedBoard, (o, q): (&Component, &Pin), net: i64) -
     if is_test_point_or_hole(o) || is_capacitor(o) {
         return Island::Load;
     }
+    // A connector pad, whatever its drawn type, may be fed from off the board.
+    if is_connector_like(o) {
+        return Island::Source;
+    }
     if o.pins.len() == 2 {
         match RefClass::of(&o.reference) {
             RefClass::Resistor if resistor_ohms(o).is_some() => {
@@ -651,11 +655,12 @@ fn island_member(board: &ExtractedBoard, (o, q): (&Component, &Pin), net: i64) -
 /// when anything on them might source a level, or a record is refused.
 fn output_island(
     board: &ExtractedBoard,
-    (reg, out, out_role): (&Component, i64, &str),
+    (reg, out): (&Component, i64),
     models: &HashMap<&str, ModelEntry>,
 ) -> Option<std::collections::BTreeSet<i64>> {
     let mut island = std::collections::BTreeSet::from([out]);
     let mut queue = vec![out];
+    let mut pending: Vec<&Component> = Vec::new();
     while let Some(net) = queue.pop() {
         for (o, q) in board.net_members(net) {
             match AssemblyState::of(o) {
@@ -668,9 +673,10 @@ fn output_island(
                 .and_then(|m| m.pins.get(&q.number))
                 .map(|r| r.to_ascii_lowercase());
             if std::ptr::eq(o, reg) {
-                // The part's own output sources the island; no other pad may
-                // drive or share it.
-                let own_out = net == out && role.as_deref() == Some(out_role);
+                // The part's own output sources the island, on every pad of it
+                // (a tab or a second output pad the card does not name too);
+                // no other pad may drive or share it.
+                let own_out = net == out;
                 if !own_out
                     && (pin_drives(q) || q.kind.trim().eq_ignore_ascii_case("bidirectional"))
                 {
@@ -704,11 +710,52 @@ fn output_island(
                         queue.push(next);
                     }
                 }
-                Island::Source => return None,
+                Island::Source => {
+                    if !pending.iter().any(|p: &&Component| std::ptr::eq(*p, o)) {
+                        pending.push(o);
+                    }
+                }
             }
         }
     }
-    Some(island)
+    // A part that might source a level is no source when everything that
+    // powers it is on the island: it is dead until the regulator runs (an MCU
+    // whose GPIO pulls an I2C line up from the rail, a sensor on the rail).
+    pending
+        .iter()
+        .all(|o| powered_only_by(board, o, &island))
+        .then_some(island)
+}
+
+/// Whether every supply pad of `o` is on the island: it has at least one
+/// supply pad on a non-ground net, none of them off the island, and it is not
+/// a connector (an off-board source). A part with no typed supply pad is not
+/// read as island-powered.
+fn powered_only_by(
+    board: &ExtractedBoard,
+    o: &Component,
+    island: &std::collections::BTreeSet<i64>,
+) -> bool {
+    if is_connector_like(o) {
+        return false;
+    }
+    let mut supplied = false;
+    for p in &o.pins {
+        if !p.kind.trim().eq_ignore_ascii_case("power_in") {
+            continue;
+        }
+        let Some(id) = p.net.filter(|id| *id != 0) else {
+            continue;
+        };
+        if board.net(id).is_some_and(|n| is_ground(&n.name)) {
+            continue;
+        }
+        if !island.contains(&id) {
+            return false;
+        }
+        supplied = true;
+    }
+    supplied
 }
 
 /// The on-high enable of a device that has an input and an output, with the
@@ -795,7 +842,7 @@ fn self_fed_enable(
     let en = pin.net.filter(|id| *id != 0)?;
     let out = role_net_id(comp, model, &gate.out_role)?;
     let input = role_net_id(comp, model, &gate.in_role);
-    let island = output_island(board, (comp, out, &gate.out_role), models)?;
+    let island = output_island(board, (comp, out), models)?;
     if !island.contains(&en) || input.is_some_and(|i| island.contains(&i)) {
         return None;
     }
@@ -1242,6 +1289,16 @@ mod tests {
     /// judgement abstains), `U1` from `+5V` to `+3V3` with EN on `en`, plus
     /// `extra` parts, judged by [`regulator_enable_lint`].
     fn self_fed(tag: &str, en: i64, extra: Vec<Component>) -> Vec<LintFinding> {
+        let reg = part(
+            "U1",
+            &format!("SFTEST-{tag}"),
+            &[("1", VIN), ("2", GND), ("3", en), ("5", V3)],
+        );
+        self_fed_with(tag, reg, extra)
+    }
+
+    /// As [`self_fed`], with the regulator part `reg` given.
+    fn self_fed_with(tag: &str, reg: Component, extra: Vec<Component>) -> Vec<LintFinding> {
         let card = format!(
             "[[models]]\nid = \"sf_test_{tag}\"\nkind = \"vreg\"\n\
              description = \"self-fed enable fixture\"\n[models.match]\n\
@@ -1259,11 +1316,7 @@ mod tests {
         let errors = lib.load_user_dir(&dir);
         assert!(errors.is_empty(), "{tag}: {errors:?}");
         let mut parts = vec![
-            part(
-                "U1",
-                &format!("SFTEST-{tag}"),
-                &[("1", VIN), ("2", GND), ("3", en), ("5", V3)],
-            ),
+            reg,
             part("C1", "1u", &[("1", VIN), ("2", GND)]),
             part("C2", "2.2u", &[("1", V3), ("2", GND)]),
         ];
@@ -1276,6 +1329,65 @@ mod tests {
             (GPIO, "/MCU_PA3"),
         ];
         regulator_enable_lint(&board(&nets, parts), &lib).findings
+    }
+
+    /// An MCU with a supply pad on `supply` and a GPIO on `/MCU_PA3`, pulled
+    /// up to `+3V3` through `R7`: the usual I2C pull-up on a regulator's rail.
+    fn mcu_with_pull_up(supply: i64) -> Vec<Component> {
+        let mut mcu = part("U3", "SomeMCU", &[("1", supply), ("2", GND), ("7", GPIO)]);
+        mcu.pins[0].kind = "power_in".into();
+        mcu.pins[1].kind = "power_in".into();
+        mcu.pins[2].kind = "bidirectional".into();
+        vec![mcu, part("R7", "4.7k", &[("1", V3), ("2", GPIO)])]
+    }
+
+    #[test]
+    fn a_self_fed_enable_is_flagged_through_parts_only_the_rail_powers() {
+        // An MCU hanging a GPIO on the rail through a pull-up is powered by
+        // that rail alone, so it cannot raise the enable before the part runs.
+        let mut parts = vec![load_on(V3)];
+        parts.extend(mcu_with_pull_up(V3));
+        let found = self_fed("RAILMCU", V3, parts);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        says(&found[0], &["its own output '+3V3'", "can never start"]);
+        // A tab or second output pad the card does not name is the part's own output.
+        let mut tab = part(
+            "U1",
+            "SFTEST-TABBED",
+            &[("1", VIN), ("2", GND), ("3", V3), ("5", V3), ("6", V3)],
+        );
+        tab.pins[4].kind = "power_out".into();
+        let found = self_fed_with("TABBED", tab, vec![load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+    }
+
+    #[test]
+    fn a_self_fed_enable_stays_silent_when_a_part_powered_elsewhere_hangs_on_the_rail() {
+        // The same pull-up, but the MCU on the line is powered from the input
+        // rail, so it can drive the line (and through the resistor the enable).
+        let mut parts = vec![load_on(V3)];
+        parts.extend(mcu_with_pull_up(VIN));
+        assert!(
+            self_fed("OTHERMCU", V3, parts).is_empty(),
+            "powered elsewhere"
+        );
+        // A part with a supply on each of two rails is also powered elsewhere.
+        let mut parts = vec![load_on(V3)];
+        parts.extend(mcu_with_pull_up(V3));
+        let mut both = part("U5", "TwoRail", &[("1", V3), ("2", VIN), ("3", GPIO)]);
+        both.pins[0].kind = "power_in".into();
+        both.pins[1].kind = "power_in".into();
+        both.pins[2].kind = "bidirectional".into();
+        parts.push(both);
+        assert!(self_fed("TWORAIL", V3, parts).is_empty(), "second supply");
+        // A connector on the rail is an off-board source.
+        let mut header = part("J1", "Conn_01x02", &[("1", V3), ("2", GND)]);
+        header.pins[0].kind = "power_in".into();
+        assert!(
+            self_fed("HDR", V3, vec![load_on(V3), header]).is_empty(),
+            "a connector"
+        );
     }
 
     /// An IC load on `net`: a supply pad, which draws and sets nothing.
