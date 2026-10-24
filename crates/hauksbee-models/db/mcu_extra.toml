@@ -240,6 +240,14 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 83 (STM32F411xx configuration in system memory boot mode) PDF p.185, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0383 Rev 4 PDF p.506 section 19.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
 note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
+[models.pin_capability.reset_mode]
+basis = "RM0383 Rev 4 (STM32F411 reference manual), section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.148); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.159)"
+[models.pin_capability.reset_mode.pads]
+"34" = "pull_up"  # pa13
+"37" = "pull_down"  # pa14
+"38" = "pull_up"  # pa15
+"40" = "pull_up"  # pb4
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F411CC/CE, WLCSP49 (ordering code F411C[CE]Y).
 #
@@ -737,6 +745,14 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 83 (STM32F411xx configuration in system memory boot mode) PDF p.185, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in input no pull mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0383 Rev 4 PDF p.506 section 19.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\" AN2606 Rev 70 Figure 1 note 1, PDF p.47: \"A pull-up resistor must be added, if they are not connected on host side\"; section 4.3, PDF p.49: \"It is recommended to keep the RX pins of unused bootloader interfaces (USART_RX, SPI_MOSI, and CAN_RX, if present) at a known (low or high) level\"."
 note = "The ROM bootloader detects a USART host by the start bit of its 0x7F frame, so a pull-down or a tie to ground on this pin holds the line in the break state and the bootloader cannot detect a host on this USART (its other interfaces still work). AN2606 allows an unused bootloader RX pin at either known level, so this matters only when the board is flashed over this USART; a missing bias is not reported, only one the wrong way round."
 
+[models.pin_capability.reset_mode]
+basis = "RM0383 Rev 4 (STM32F411 reference manual), section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.148); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.159)"
+[models.pin_capability.reset_mode.pads]
+"46" = "pull_up"  # pa13
+"49" = "pull_down"  # pa14
+"50" = "pull_up"  # pa15
+"56" = "pull_up"  # pb4
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F411VC/VE, LQFP100 (14 x 14 mm, ordering code F411V[CE]T).
 #
@@ -1045,6 +1061,14 @@ needs = "idle"
 opposed_only = true
 basis = "AN2606 Rev 70 Table 83 (STM32F411xx configuration in system memory boot mode) PDF p.185, USART2_RX pin: \"PD6 pin: USART2 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0383 Rev 4 PDF p.506 section 19.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "RM0383 Rev 4 (STM32F411 reference manual), section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.148); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.159)"
+[models.pin_capability.reset_mode.pads]
+"72" = "pull_up"  # pa13
+"76" = "pull_down"  # pa14
+"77" = "pull_up"  # pa15
+"90" = "pull_up"  # pb4
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F411VC/VE, UFBGA100 (7 x 7 mm, ordering code F411V[CE]H).
@@ -1474,6 +1498,12 @@ abs_max_basis = "Nordic nRF52832 Product Specification v1.9, Table 8 p.20 absolu
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "adc_pin_map"]
 missing = ["boot_strap_levels_not_applicable_no_strap_pins", "reset_pin_uicr_configuration", "theta_ja_not_in_specification", "per_pin_current_rating", "gpio_vih_vil_voh_vol_on_pads", "alternate_function_tables", "nfc_pin_ratings", "nrf52832_specific_renode_platform", "silicon_timing_and_errata"]
+
+[models.pin_capability.reset_mode]
+basis = "nRF52832 Product Specification v1.9, section 20.3.10 PIN_CNF[n] reset value 0x00000002: input, buffer disconnected, no pull (PDF p.136), so GPIOs are high impedance; section 16.1 DAP note: the SWDIO line has an internal pull-up and the SWDCLK line an internal pull-down (PDF p.73)"
+[models.pin_capability.reset_mode.pads]
+"25" = "pull_down"  # swdclk
+"26" = "pull_up"  # swdio
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Nordic nRF52832 (Cortex-M4F) SoC, WLCSP 50-ball (order code CIAA).

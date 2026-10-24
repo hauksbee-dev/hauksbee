@@ -2273,7 +2273,9 @@ fn check_capability_table(
 /// `[models.pin_capability.reset_mode]`: an mcu card's table of pads that do not
 /// rest at high impedance in reset. It needs a basis, lists pads of
 /// `[models.pins]` that are not supply or ground pads, and lists no pad as high
-/// impedance (an unlisted pad is already that).
+/// impedance (an unlisted pad is already that). A table with no pad is allowed:
+/// with its basis it says the datasheet states that every pad of the card is
+/// high impedance in reset, which is different from a card that says nothing.
 fn check_reset_mode(entry: &ModelEntry, p: &mut Problems) {
     let Some(table) = entry.pin_capability.reset_mode.as_ref() else {
         return;
@@ -2281,9 +2283,6 @@ fn check_reset_mode(entry: &ModelEntry, p: &mut Problems) {
     p.require(!table.basis.trim().is_empty(), || {
         "[models.pin_capability.reset_mode] needs a basis citing the datasheet table and page"
             .into()
-    });
-    p.require(!table.pads.is_empty(), || {
-        "[models.pin_capability.reset_mode] lists no pad: leave the table out instead".into()
     });
     p.require(entry.kind == ComponentKind::Mcu, || {
         "[models.pin_capability.reset_mode] belongs on an mcu card".into()
@@ -4594,6 +4593,47 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         let mut e = listed(ComponentKind::Mcu);
         open_drain(&mut e, "p.3", &[("2", "ALERT")]);
         rejects(&e, "belongs on a card that is not an mcu");
+    }
+
+    fn reset_mode(e: &mut ModelEntry, basis: &str, pads: &[(&str, crate::ResetPadMode)]) {
+        e.pin_capability.reset_mode = Some(crate::schema::ResetModePins {
+            basis: basis.into(),
+            pads: pads.iter().map(|&(a, m)| (a.into(), m)).collect(),
+        });
+    }
+
+    /// A card may state that no pad leaves high impedance in reset (an empty
+    /// table with its basis), which is not the same as saying nothing; the
+    /// table still needs the basis, real pads, no `hi_z` and no supply pad, and
+    /// belongs on an mcu.
+    #[test]
+    fn a_reset_mode_table_may_be_empty_but_needs_a_basis_and_real_pads() {
+        use crate::ResetPadMode::{HiZ, PullDown, PullUp};
+        let mut ok = listed(ComponentKind::Mcu);
+        reset_mode(&mut ok, "DS 14.2.1 p.85: pins are tri-stated in reset", &[]);
+        accepts(&ok);
+        let mut ok = listed(ComponentKind::Mcu);
+        reset_mode(
+            &mut ok,
+            "DS Table 615 p.613",
+            &[("1", PullDown), ("2", PullUp)],
+        );
+        accepts(&ok);
+        let mut e = listed(ComponentKind::Mcu);
+        reset_mode(&mut e, " ", &[]);
+        rejects(&e, "needs a basis");
+        let mut e = listed(ComponentKind::Mcu);
+        reset_mode(&mut e, "p.1", &[("9", PullUp)]);
+        rejects(&e, "not a pad of [models.pins]");
+        let mut e = listed(ComponentKind::Mcu);
+        reset_mode(&mut e, "p.1", &[("1", HiZ)]);
+        rejects(&e, "listed as hi_z");
+        let mut e = listed(ComponentKind::Mcu);
+        reset_mode(&mut e, "p.1", &[("3", PullUp)]);
+        rejects(&e, "supply or ground role");
+        let mut e = listed(ComponentKind::Diode);
+        reset_mode(&mut e, "p.1", &[]);
+        rejects(&e, "belongs on an mcu card");
     }
 
     #[test]

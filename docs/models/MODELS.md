@@ -803,6 +803,12 @@ basis = "Datasheet <part> <version>, Table <n> pin states in reset (PDF p.<n>)"
 A pad of an `mcu` card that the table does not list is high-impedance in reset,
 which is what every GPIO of the common families does until firmware configures it.
 `hi_z` is never written; listing a pad is how a card says it is not floating. A
+table with a basis and no pads is allowed and means the datasheet states that every
+pad of the card is high impedance in reset (the AVR sheets say the port pins are
+tri-stated in reset); a card with no table at all says nothing, so its pads are
+unknown, not stated. The `At Reset` column of the Espressif pin tables, the
+reset-state column of the RP2040 pin list and the reference manual's debug-pin
+paragraph (STM32) are the usual sources, quoted by table and page in `basis`. A
 board enable pin that only such a pad drives, with no pull on the net, floats while
 the MCU resets, and `control_held_off.rs` reads what the enable card says an open
 pin does (`en_open`, `en_pull_*`, `en_on_level`; a load switch or a motor driver
