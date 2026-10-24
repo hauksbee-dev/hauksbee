@@ -912,6 +912,10 @@ fn run_unobserved(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // With an `asbuilt` overlay the check judges the reworked board the
     // simulation ran: the same overlay, applied to the static board.
     let asbuilt_path = spec.asbuilt_path();
+    // The same image the run loaded: the check reads what the program means to
+    // use (`hauksbee check --firmware`), so a spec naming firmware gets those
+    // findings too.
+    let static_firmware = runner::static_check_firmware(&spec);
     let gate = (asbuilt_path.as_deref())
         .map(hauksbee_engine::asbuilt::AsBuiltOverlay::load)
         .transpose()
@@ -921,6 +925,7 @@ fn run_unobserved(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 &spec.board_path(),
                 &lib,
                 overlay.as_ref(),
+                static_firmware.as_deref(),
             )
         });
     let mut static_conditions: Vec<String> = Vec::new();

@@ -2057,6 +2057,20 @@ fn resolve_spec_firmware(spec: &Spec) -> Result<Option<PathBuf>, SpecError> {
     Ok(Some(path.canonicalize().unwrap_or(path)))
 }
 
+/// The firmware image the board's static check reads, when the spec names one.
+///
+/// Resolved as the run resolves it ([`resolve_spec_firmware`]) but silent: the
+/// run has already validated the image and said where it came from, and a
+/// spec whose firmware cannot be resolved never reaches the static check.
+pub(crate) fn static_check_firmware(spec: &Spec) -> Option<PathBuf> {
+    let path = spec.firmware_path()?;
+    match hauksbee_engine::firmware_input::resolve_firmware_cli(&path) {
+        Ok(Some(resolved)) => Some(resolved.path),
+        Ok(None) => Some(path),
+        Err(_) => None,
+    }
+}
+
 // The per-seed co-sim loop and its aggregates share many locals; the float-time
 // loop steps a fixed frame and the epsilon absorbs accumulated rounding.
 #[allow(clippy::too_many_lines, clippy::while_float)]
