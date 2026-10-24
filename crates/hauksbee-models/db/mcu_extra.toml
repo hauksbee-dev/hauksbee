@@ -45,7 +45,7 @@ footprint_re = '(?i)(^|[:_])(UFQFPN|V?QFN)[-_]?48([^0-9]|$)'
 
 [models.params]
 # DS10314 Rev 8 (STM32F411xC/xE) p.85, HSE 4-26 MHz oscillator (Table 37 text): "For CL1 and CL2, it is recommended to use high-quality external ceramic
-# capacitors in the 5 pF to 25 pF range (Typ.)" (PCB and MCU pin capacitance, about 10 pF, is part of the load, so the external capacitors sit below the crystal's CL).
+# capacitors in the 5 pF to 25 pF range (Typ.)" (the datasheet gives 10 pF as a rough estimate of the PCB and MCU pin capacitance that adds to the load).
 xtal_cap_min_f = 5.0e-12
 xtal_cap_max_f = 25.0e-12
 backend = "renode:stm32f4"
@@ -282,7 +282,7 @@ footprint_re = '(?i)WLCSP[-_]?49([^0-9]|$)'
 
 [models.params]
 # DS10314 Rev 8 (STM32F411xC/xE) p.85, HSE 4-26 MHz oscillator (Table 37 text): "For CL1 and CL2, it is recommended to use high-quality external ceramic
-# capacitors in the 5 pF to 25 pF range (Typ.)" (PCB and MCU pin capacitance, about 10 pF, is part of the load, so the external capacitors sit below the crystal's CL).
+# capacitors in the 5 pF to 25 pF range (Typ.)" (the datasheet gives 10 pF as a rough estimate of the PCB and MCU pin capacitance that adds to the load).
 xtal_cap_min_f = 5.0e-12
 xtal_cap_max_f = 25.0e-12
 backend = "renode:stm32f4"
@@ -520,7 +520,7 @@ footprint_re = '(?i)(^|[:_])LQFP[-_]?64([^0-9]|$)'
 
 [models.params]
 # DS10314 Rev 8 (STM32F411xC/xE) p.85, HSE 4-26 MHz oscillator (Table 37 text): "For CL1 and CL2, it is recommended to use high-quality external ceramic
-# capacitors in the 5 pF to 25 pF range (Typ.)" (PCB and MCU pin capacitance, about 10 pF, is part of the load, so the external capacitors sit below the crystal's CL).
+# capacitors in the 5 pF to 25 pF range (Typ.)" (the datasheet gives 10 pF as a rough estimate of the PCB and MCU pin capacitance that adds to the load).
 xtal_cap_min_f = 5.0e-12
 xtal_cap_max_f = 25.0e-12
 backend = "renode:stm32f4"
@@ -779,7 +779,7 @@ footprint_re = '(?i)(^|[:_])LQFP[-_]?100([^0-9]|$)'
 
 [models.params]
 # DS10314 Rev 8 (STM32F411xC/xE) p.85, HSE 4-26 MHz oscillator (Table 37 text): "For CL1 and CL2, it is recommended to use high-quality external ceramic
-# capacitors in the 5 pF to 25 pF range (Typ.)" (PCB and MCU pin capacitance, about 10 pF, is part of the load, so the external capacitors sit below the crystal's CL).
+# capacitors in the 5 pF to 25 pF range (Typ.)" (the datasheet gives 10 pF as a rough estimate of the PCB and MCU pin capacitance that adds to the load).
 xtal_cap_min_f = 5.0e-12
 xtal_cap_max_f = 25.0e-12
 backend = "renode:stm32f4"
@@ -1088,7 +1088,7 @@ footprint_re = '(?i)(^|[:_])(UFBGA|BGA)[-_]?100([^0-9]|$)'
 
 [models.params]
 # DS10314 Rev 8 (STM32F411xC/xE) p.85, HSE 4-26 MHz oscillator (Table 37 text): "For CL1 and CL2, it is recommended to use high-quality external ceramic
-# capacitors in the 5 pF to 25 pF range (Typ.)" (PCB and MCU pin capacitance, about 10 pF, is part of the load, so the external capacitors sit below the crystal's CL).
+# capacitors in the 5 pF to 25 pF range (Typ.)" (the datasheet gives 10 pF as a rough estimate of the PCB and MCU pin capacitance that adds to the load).
 xtal_cap_min_f = 5.0e-12
 xtal_cap_max_f = 25.0e-12
 backend = "renode:stm32f4"
