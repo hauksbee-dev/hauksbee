@@ -391,6 +391,12 @@ pub enum LintCheck {
     /// can never run. Produced by the `firmware_intent` check, which runs only
     /// when a firmware image is given.
     FirmwareUnconnectedPad,
+    /// A current-sense shunt (a resistor of at most 0.1 ohm with a measurement
+    /// input on its nets) whose sense connection reaches the shunt pad only
+    /// through copper that also carries the load current, when that shared
+    /// copper's estimated resistance exceeds 1% of the shunt. Produced by the
+    /// layout check in `kelvin_sense`.
+    KelvinSense,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -515,7 +521,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -568,6 +574,7 @@ impl LintCheck {
         Self::PinMuxCapability,
         Self::SymbolCardPinMismatch,
         Self::FirmwareUnconnectedPad,
+        Self::KelvinSense,
     ];
 
     #[must_use]
@@ -625,6 +632,7 @@ impl LintCheck {
             Self::PinMuxCapability => "pin_mux_capability",
             Self::SymbolCardPinMismatch => "symbol_card_pin_mismatch",
             Self::FirmwareUnconnectedPad => "firmware_unconnected_pad",
+            Self::KelvinSense => "kelvin_sense",
         }
     }
 }

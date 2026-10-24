@@ -35,6 +35,7 @@ impl ExtractedBoard {
     pub fn layout_lint(&self, layout_text: &str, schematic: Option<&Self>) -> NetLintReport {
         let mut report = NetLintReport::default();
         copper_islands(layout_text, &mut report.findings);
+        crate::kelvin_sense::kelvin_sense(self, layout_text, &mut report.findings);
         if let Some(sch) = schematic {
             schematic_parity(self, sch, &mut report.findings);
             part_identity_parity(self, sch, &mut report.findings);

@@ -63,6 +63,7 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::UncheckedMcu
         | LintCheck::PinFunction
         | LintCheck::UnroutedPad
+        | LintCheck::KelvinSense
         | LintCheck::PcbSchematicMismatch
         | LintCheck::RailConflict
         | LintCheck::MissingDecoupling

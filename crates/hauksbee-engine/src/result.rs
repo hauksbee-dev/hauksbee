@@ -4013,6 +4013,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::SwitchShort
         | LintCheck::PinMuxCapability
         | LintCheck::FirmwareUnconnectedPad
+        | LintCheck::KelvinSense
         | LintCheck::SymbolCardPinMismatch
         | LintCheck::LedReversed
         | LintCheck::UnwiredConnector
@@ -4040,6 +4041,9 @@ const fn wiring_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::FirmwareUnconnectedPad => {
             "Wire the signal the firmware times or counts to the pad the finding names, or take that interrupt out of the firmware."
+        }
+        LintCheck::KelvinSense => {
+            "Run the sense connection as a track of its own from the shunt pad itself (a Kelvin connection), clear of the pour and the load track."
         }
         LintCheck::LedReversed => {
             "Turn the LED round so its anode faces the positive rail and its cathode ground."
