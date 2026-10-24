@@ -355,24 +355,38 @@ fn footprint_marked_terminal(footprint: &str) -> Option<(String, Terminal)> {
 /// the `KiCad` convention that pad 1 is the cathode of a `Diode_SMD`/`Diode_THT`
 /// footprint and the + terminal of a polarised-capacitor footprint or symbol.
 fn library_convention(c: &Component, diode: bool) -> Option<(String, Terminal)> {
-    let (lib, name) = footprint_split(&c.footprint);
     if diode {
         if let Some(marked) = footprint_marked_terminal(&c.footprint) {
             return Some(marked);
         }
+        let (lib, _) = footprint_split(&c.footprint);
         return matches!(lib.as_str(), "DIODE_SMD" | "DIODE_THT")
             .then(|| ("1".to_string(), Terminal::Low));
     }
-    let polarised_footprint = matches!(
+    let (footprint, symbol) = capacitor_polarity_marks(c);
+    (footprint == Some(true) || symbol == Some(true)).then(|| ("1".to_string(), Terminal::High))
+}
+
+/// Whether a capacitor's `KiCad` footprint and its symbol mark it polarised.
+///
+/// Each is `None` unless it comes from the stock library that says: a
+/// `Capacitor_*` footprint is polarised when its name starts `CP_`, a `Device`
+/// capacitor symbol when it is `CP`, `CP_*` or `C_Polarized*`.
+#[must_use]
+pub fn capacitor_polarity_marks(c: &Component) -> (Option<bool>, Option<bool>) {
+    let (lib, name) = footprint_split(&c.footprint);
+    let footprint = matches!(
         lib.as_str(),
         "CAPACITOR_TANTALUM_SMD" | "CAPACITOR_THT" | "CAPACITOR_SMD"
-    ) && name.starts_with("CP_");
-    let polarised_symbol = c.lib_id.split_once(':').is_some_and(|(lib, symbol)| {
+    )
+    .then(|| name.starts_with("CP_"));
+    let symbol = c.lib_id.split_once(':').and_then(|(lib, symbol)| {
         let symbol = symbol.to_ascii_uppercase();
-        lib.eq_ignore_ascii_case("Device")
-            && (symbol.starts_with("C_POLARIZED") || symbol.starts_with("CP_") || symbol == "CP")
+        (lib.eq_ignore_ascii_case("Device") && symbol.starts_with('C')).then(|| {
+            symbol.starts_with("C_POLARIZED") || symbol.starts_with("CP_") || symbol == "CP"
+        })
     });
-    (polarised_footprint || polarised_symbol).then(|| ("1".to_string(), Terminal::High))
+    (footprint, symbol)
 }
 
 /// The nets on a two-terminal part's high and low terminals, when its pins or

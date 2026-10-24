@@ -317,6 +317,12 @@ pub enum LintCheck {
     /// drafted from that file would describe the wrong part. Low severity and
     /// non-gating. Produced by the engine-layer `datasheet_field` check.
     DatasheetMismatch,
+    /// A passive's fields disagree about the part: the value its manufacturer
+    /// part number decodes to is not its Value field's, the MPN's case is not
+    /// the footprint's, the footprint and symbol disagree about polarity, or
+    /// the MPN's rated voltage is below the rail it sits on. Produced by the
+    /// engine-layer `part_fields` check.
+    PartFieldMismatch,
     /// A pull-up resistor that is present but cannot do its job: its rail never
     /// comes up, or it leaves the line below the receiver's guaranteed
     /// input-high level (VIH) because the rail is too low or the resistor too
@@ -561,6 +567,7 @@ impl LintCheck {
         Self::RailUnpowered,
         Self::ControlHeldOff,
         Self::DatasheetMismatch,
+        Self::PartFieldMismatch,
         Self::PullupIneffective,
         Self::AudioBusWiring,
         Self::PowerDomainBackfeed,
@@ -619,6 +626,7 @@ impl LintCheck {
             Self::RailUnpowered => "rail_unpowered",
             Self::ControlHeldOff => "control_held_off",
             Self::DatasheetMismatch => "datasheet_mismatch",
+            Self::PartFieldMismatch => "part_field_mismatch",
             Self::PullupIneffective => "pullup_ineffective",
             Self::AudioBusWiring => "audio_bus_wiring",
             Self::PowerDomainBackfeed => "power_domain_backfeed",
@@ -708,6 +716,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 pub use hauksbee_models::netclass::{is_ground, is_positive_supply, is_supply, leaf as norm};
+pub use polarity::capacitor_polarity_marks;
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)?

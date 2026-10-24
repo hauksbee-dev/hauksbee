@@ -1623,22 +1623,31 @@ const RATED_VOLTAGE_FIELDS: [&str; 8] = [
 /// The rated voltage a capacitor's own record states: its value ("10uF/16V",
 /// "100nF 25V X7R"), else a rated-voltage field ([`RATED_VOLTAGE_FIELDS`])
 /// whose text is a voltage, or a bare number of volts on a field whose name
-/// is itself a voltage (a bare "Rating" of "0.25" is no voltage).
+/// is itself a voltage (a bare "Rating" of "0.25" is no voltage), else the
+/// rating its capacitor part number decodes to ([`hauksbee_models::mpn`]).
 fn capacitor_stated_voltage(comp: &Component) -> Option<f64> {
-    hauksbee_models::value::parse_voltage_rating_v(&comp.value).or_else(|| {
-        comp.properties.iter().find_map(|(k, v)| {
-            let key = k.trim().to_ascii_lowercase().replace(['_', '-'], " ");
-            if !RATED_VOLTAGE_FIELDS.contains(&key.as_str()) {
-                return None;
-            }
-            hauksbee_models::value::parse_voltage_rating_v(v).or_else(|| {
-                (key != "rating")
-                    .then(|| v.trim().parse::<f64>().ok())
-                    .flatten()
-                    .filter(|x| x.is_finite() && *x > 0.0)
-            })
+    let field = comp.properties.iter().find_map(|(k, v)| {
+        let key = k.trim().to_ascii_lowercase().replace(['_', '-'], " ");
+        if !RATED_VOLTAGE_FIELDS.contains(&key.as_str()) {
+            return None;
+        }
+        hauksbee_models::value::parse_voltage_rating_v(v).or_else(|| {
+            (key != "rating")
+                .then(|| v.trim().parse::<f64>().ok())
+                .flatten()
+                .filter(|x| x.is_finite() && *x > 0.0)
         })
-    })
+    });
+    let decoded = || {
+        std::iter::once(comp.value.trim())
+            .chain(mpn_properties(comp))
+            .filter_map(hauksbee_models::mpn::decode)
+            .find(|d| d.kind == 'C')?
+            .rated_v
+    };
+    hauksbee_models::value::parse_voltage_rating_v(&comp.value)
+        .or(field)
+        .or_else(decoded)
 }
 
 /// What a board and the library alone decide, for the binder to take.
@@ -13382,6 +13391,24 @@ style = "i2c_pointer"
         ] {
             assert_eq!(capacitor_stated_voltage(&cap(key, text)), None, "{key}");
         }
+        // A capacitor part number states its rating when no field does; a
+        // stated field still wins, and a resistor's part number states none.
+        assert_eq!(
+            capacitor_stated_voltage(&cap("MPN", "CL05A105KQ5NNNC")),
+            Some(6.3)
+        );
+        let both = Component {
+            properties: vec![
+                ("MPN".into(), "CL05A105KQ5NNNC".into()),
+                ("Voltage".into(), "16V".into()),
+            ],
+            ..comp("C1", "1uF")
+        };
+        assert_eq!(capacitor_stated_voltage(&both), Some(16.0));
+        assert_eq!(
+            capacitor_stated_voltage(&cap("MPN", "RC0402JR-0710KL")),
+            None
+        );
     }
 
     #[test]

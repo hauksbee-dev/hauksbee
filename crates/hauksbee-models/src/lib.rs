@@ -84,6 +84,7 @@ pub mod extract_usage;
 pub mod logic_spec;
 pub mod matcher;
 pub mod mcu_modules;
+pub mod mpn;
 pub mod netclass;
 pub mod output_load;
 pub mod pack;

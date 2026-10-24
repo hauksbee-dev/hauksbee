@@ -1944,6 +1944,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This pin has a resistor to ground, and nothing else on its net can raise it: no pull-up, no GPIO or supervisor output, no switch to a supply. An enable that stays low never turns the part on, and a reset that stays low holds the part in reset so it never runs. The usual cause is a pull-up whose far end was wired to ground, or a pull-up that is not fitted.".to_string(),
                 "Connect the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor.".to_string(),
             ),
+            LintCheck::PartFieldMismatch => (
+                f.message
+                    .rsplit_once(hauksbee_extract::REMEDY_MARKER)
+                    .map_or_else(|| f.message.clone(), |(said, _)| said.trim().to_string()),
+                "A part's manufacturer part number, value, footprint and symbol are four descriptions of one part, and the assembler buys and places by the part number and footprint. When they disagree, the board is built with a part the schematic does not describe: another value, a lower voltage rating, a case that does not fit the land, or a polarised part the schematic cannot orient.".to_string(),
+                f.own_remedy().map_or_else(
+                    || "Correct whichever field is wrong so all four name the same part.".to_string(),
+                    str::to_string,
+                ),
+            ),
             LintCheck::DatasheetMismatch => (
                 f.message
                     .rsplit_once(hauksbee_extract::REMEDY_MARKER)

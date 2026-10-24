@@ -97,6 +97,9 @@
 //! - [`datasheet_field`]: a part's `Datasheet` field whose file name clearly
 //!   names a different device or logic family, so a model drafted from it
 //!   would describe the wrong part (a low-severity, non-gating note).
+//! - [`part_fields`]: a passive whose decoded part number, Value field,
+//!   footprint and symbol disagree (value, rated voltage, case, polarity), or
+//!   whose part number is rated below its rail.
 //! - [`crystal_caps`]: crystal load capacitors far outside the C1/C2 range the
 //!   driving IC's card states (`xtal_cap_min_f`/`xtal_cap_max_f`), for a
 //!   crystal whose value states no CL.
@@ -188,6 +191,7 @@ pub mod node_drive;
 pub mod open_drain_pullup;
 pub mod open_paths;
 pub mod output_release;
+pub mod part_fields;
 pub mod pin_bias;
 pub mod pin_mux;
 pub mod power_pins;
@@ -785,7 +789,15 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(node_drive::node_drive_lint(board, lib).findings);
     extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
+    // A part the solved DC stress pass already holds over its rating is not
+    // judged against its rail a second time by its part number.
+    let overstressed = |r: &str| {
+        (dc.report.findings.iter())
+            .any(|f| f.check == LintCheck::DcOverstress && f.refs.iter().any(|x| x == r))
+    };
+    let fields = part_fields::part_field_lint(board, &overstressed).findings;
     report.findings.extend(dc.report.findings);
+    report.findings.extend(fields);
     lint_tick(14);
     add_unsolved_led_findings(&mut report, board, lib);
     // The comparator half of the analog-input check and the logic-level check
