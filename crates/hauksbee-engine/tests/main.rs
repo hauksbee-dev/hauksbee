@@ -152,6 +152,8 @@ mod ground_names;
 mod hardware_history;
 #[path = "host_serial_cosim.rs"]
 mod host_serial_cosim;
+#[path = "i2c_address_corpus.rs"]
+mod i2c_address_corpus;
 #[path = "i2c_sensor_cosim.rs"]
 mod i2c_sensor_cosim;
 #[path = "i2c_sensor_cosim_qemu.rs"]

@@ -848,6 +848,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     check_pin_bias(entry, &mut p);
     check_supply_cap(entry, &mut p);
     check_input_dc_path(entry, &mut p);
+    p.0.extend(entry.i2c.iter().flat_map(|b| b.problems(entry)));
     check_peripheral_limits(entry, &mut p);
 
     // A pin map is a stated fact even on an identity-only card.

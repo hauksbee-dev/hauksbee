@@ -30,6 +30,22 @@ supply_pin = "8"           # VDD
 gnd_pin = "3"              # GND
 warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
 
+[models.i2c]
+address = 0x48
+basis = "TI ADS1115 SBAS444E (Dec 2024) PDF p.20 section 7.5.1.1 Table 7-2: ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b"
+[[models.i2c.select]]
+address = 0x48
+straps = { addr = "low" }
+[[models.i2c.select]]
+address = 0x49
+straps = { addr = "high" }
+[[models.i2c.select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[models.i2c.select]]
+address = 0x4B
+straps = { addr = "scl" }
+
 [models.pins]
 # Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.
 # SDA and SCL are named in the bus vocabulary.
@@ -284,6 +300,22 @@ supply_pin = "8"           # VDD
 gnd_pin = "3"              # GND
 warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
 
+[models.i2c]
+address = 0x48
+basis = "TI ADS1115 SBAS444E (Dec 2024) PDF p.20 section 7.5.1.1 Table 7-2: ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b"
+[[models.i2c.select]]
+address = 0x48
+straps = { addr = "low" }
+[[models.i2c.select]]
+address = 0x49
+straps = { addr = "high" }
+[[models.i2c.select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[models.i2c.select]]
+address = 0x4B
+straps = { addr = "scl" }
+
 [models.pins]
 # Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.
 # SDA and SCL are named in the bus vocabulary.
@@ -537,6 +569,22 @@ supply_static_ua = 150.0   # 5.5 Electrical Characteristics p.6, IVDD operating 
 supply_pin = "8"           # VDD
 gnd_pin = "3"              # GND
 warning = "configuration, threshold and conversion registers are executable (16-bit result, code = Vin x 32768 / FSR clipped at 7FFFh / 8000h); the data registers (config, Lo_thresh, Hi_thresh, conversion) are executable, but nothing times a conversion: the conversion register always shows the currently driven AINx inputs as if the converter were infinitely fast, the data-rate bits DR[7:5], MODE, the OS handshake and the comparator are stored but not acted on, and ALERT/RDY is never driven. The analog inputs are harness values, not net voltages, and the offset, gain and noise errors are taken as zero"
+
+[models.i2c]
+address = 0x48
+basis = "TI ADS1115 SBAS444E (Dec 2024) PDF p.20 section 7.5.1.1 Table 7-2: ADDR to GND 1001000b, VDD 1001001b, SDA 1001010b, SCL 1001011b"
+[[models.i2c.select]]
+address = 0x48
+straps = { addr = "low" }
+[[models.i2c.select]]
+address = 0x49
+straps = { addr = "high" }
+[[models.i2c.select]]
+address = 0x4A
+straps = { addr = "sda" }
+[[models.i2c.select]]
+address = 0x4B
+straps = { addr = "scl" }
 
 [models.pins]
 # Table 4-1 Pin Functions p.3: RUG, DYN and DGS share one numbering for the ADS1115 column.

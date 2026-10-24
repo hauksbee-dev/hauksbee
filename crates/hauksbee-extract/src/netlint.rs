@@ -114,7 +114,8 @@ impl LintFinding {
             | LintCheck::RequiredPinBias
             | LintCheck::SupplyCapacitance
             | LintCheck::HoldUpDroop
-            | LintCheck::PullupIneffective => {
+            | LintCheck::PullupIneffective
+            | LintCheck::I2cAddressClash => {
                 self.severity == Severity::Low && self.message.contains(ABSTENTION_MARKER)
             }
             _ => false,
@@ -417,6 +418,12 @@ pub enum LintCheck {
     /// copper's estimated resistance exceeds 1% of the shunt. Produced by the
     /// layout check in `kelvin_sense`.
     KelvinSense,
+    /// Two or more I2C targets on one bus whose 7-bit addresses collide once
+    /// their address-select pins are read from the netlist, from the cards'
+    /// `[models.i2c]` blocks. A part whose address firmware can move is a Low
+    /// note; a Low abstention names a part whose address pin the board leaves
+    /// unresolved. Produced by the engine-layer `i2c_address` check.
+    I2cAddressClash,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -541,7 +548,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 57] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -598,6 +605,7 @@ impl LintCheck {
         Self::SymbolCardPinMismatch,
         Self::FirmwareUnconnectedPad,
         Self::KelvinSense,
+        Self::I2cAddressClash,
     ];
 
     #[must_use]
@@ -659,6 +667,7 @@ impl LintCheck {
             Self::SymbolCardPinMismatch => "symbol_card_pin_mismatch",
             Self::FirmwareUnconnectedPad => "firmware_unconnected_pad",
             Self::KelvinSense => "kelvin_sense",
+            Self::I2cAddressClash => "i2c_address_clash",
         }
     }
 }

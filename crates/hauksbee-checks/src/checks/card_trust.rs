@@ -49,6 +49,7 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::HoldUpDroop
         | LintCheck::PinMuxCapability
         | LintCheck::FirmwareUnconnectedPad
+        | LintCheck::I2cAddressClash
         // The card's open-drain and internal pull-up pad tables decide it.
         | LintCheck::MissingOpenDrainPullup => Some(Basis::Card),
         // Read from the schematic, the layout or the netlist alone.

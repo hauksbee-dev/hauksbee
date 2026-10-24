@@ -3608,6 +3608,14 @@ supply_static_ua = 6.0    # Table 10 p.20, SW STANDBY (2V8 mode), typ column; in
 supply_pin = "11"
 gnd_pin = "3"
 
+[models.i2c]
+address = 0x29
+basis = "ST VL53L0X DS11555 rev 6 PDF p.15: default device address 0x52 as an 8-bit write byte, which is 7-bit 0x29"
+[models.i2c.reassignable]
+via = "software"
+requires_pin = "xshut"
+basis = "ST VL53L0X DS11555 rev 6 PDF p.1 features: Programmable I2C address; PDF p.5 note: XSHUT is needed for hardware standby, with no I2C communication while it is low"
+
 [models.pins]
 "1" = "avddvcsel"   # AVDDVCSEL, VCSEL supply, connected to the main supply
 "2" = "avssvcsel"   # AVSSVCSEL, VCSEL ground, connected to the main ground
