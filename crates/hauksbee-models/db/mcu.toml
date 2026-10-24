@@ -4807,7 +4807,7 @@ basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memo
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 [models.pin_capability.reset_mode]
-basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72)"
+basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72). Note 6 (PDF p.72): PB4 also carries the UCPD1 dead-battery Rd pull-down (5.1 kOhm) whenever PA10 (UCPD1_DBCC2) is high, which overrides the weak pull-up; that conditional pull is not listed"
 [models.pin_capability.reset_mode.pads]
 "36" = "pull_up"  # pa13_swdio
 "37" = "pull_down"  # pa14_swclk
@@ -5046,7 +5046,7 @@ basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memo
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 [models.pin_capability.reset_mode]
-basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72)"
+basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72). Note 6 (PDF p.72): PB4 also carries the UCPD1 dead-battery Rd pull-down (5.1 kOhm) whenever PA10 (UCPD1_DBCC2) is high, which overrides the weak pull-up; that conditional pull is not listed"
 [models.pin_capability.reset_mode.pads]
 "37" = "pull_up"  # pa13_swdio
 "38" = "pull_down"  # pa14_swclk
@@ -6476,7 +6476,7 @@ bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   
 cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
 
 [models.pin_capability.reset_mode]
-basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
+basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; GPIO20 is USB_PU (pulled up by the USB function; not on this card); the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
 [models.pin_capability.reset_mode.pads]
 "16" = "pull_down"  # gpio46
 "26" = "pull_down"  # gpio45
@@ -6665,7 +6665,7 @@ bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   
 cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
 
 [models.pin_capability.reset_mode]
-basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
+basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; GPIO20 is USB_PU (pulled up by the USB function; not on this card); the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
 [models.pin_capability.reset_mode.pads]
 "5" = "pull_up"  # gpio0
 "51" = "pull_down"  # gpio45
@@ -7518,8 +7518,9 @@ basis = "ESP32-C6 TRM v1.2 PDF p.375 (section 9.2.2 Boot Mode Control): \"In Dow
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
 [models.pin_capability.reset_mode]
-basis = "ESP32-C6 Series Datasheet v1.5, Table 2-1 QFN40 Pin Overview, column 'At Reset' (PDF pp.16-17): IE, WPU on GPIO9; WPU on SPICS0, SPIQ, SPIWP, SPIHD, SPICLK, SPID (GPIO24-GPIO26, GPIO28-GPIO30) and SDIO_CMD, SDIO_CLK, SDIO_DATA0-3 (GPIO18-GPIO23); GPIO13 shows USB_PU only and U0TXD/U0RXD (GPIO16/GPIO17) are blank at reset (WPU only after reset), so they are left out; the other pads have IE or nothing, no pull"
+basis = "ESP32-C6 Series Datasheet v1.5, Table 2-1 QFN40 Pin Overview, column 'At Reset' (PDF pp.16-17): IE, WPU on GPIO9; WPU on SPICS0, SPIQ, SPIWP, SPIHD, SPICLK, SPID (GPIO24-GPIO26, GPIO28-GPIO30) and SDIO_CMD, SDIO_CLK, SDIO_DATA0-3 (GPIO18-GPIO23); GPIO13 shows USB_PU only and U0TXD/U0RXD (GPIO16/GPIO17) are blank at reset (WPU only after reset), so they are left out; the other pads have IE or nothing, no pull; USB_PU on GPIO13 (USB_D+), which Note 4 (PDF p.18) explains: the USB Serial/JTAG function is on by default and its USB pull-up sets the pin's pull, so GPIO13 is pulled up during reset"
 [models.pin_capability.reset_mode.pads]
+"18" = "pull_up"  # gpio13_usb_dp
 "23" = "pull_up"  # gpio9
 "24" = "pull_up"  # gpio18
 "25" = "pull_up"  # gpio19
@@ -8852,7 +8853,7 @@ protocol = "usb_only"
 cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
 
 [models.pin_capability.reset_mode]
-basis = "RP2040 Datasheet (build 2025-02-20), section 5.5.2.2 Pin List: Table 615 GPIO pins (GPIO0-GPIO29 'Reset State' Pull-Down), Table 616 QSPI pins (QSPI_SCLK Pull-Down, QSPI_CSn Pull-Up; QSPI_SD0-SD3 state no reset state), Table 618 Serial wire debug pins (SWCLK and SWD Pull-Up) (PDF pp.613-614)"
+basis = "RP2040 Datasheet (build 2025-02-20), section 5.5.2.2 Pin List: Table 615 GPIO pins (GPIO0-GPIO29 'Reset State' Pull-Down), Table 616 QSPI pins (QSPI_SCLK Pull-Down, QSPI_CSn Pull-Up; QSPI_SD0-SD3 state no reset state), Table 618 Serial wire debug pins (SWCLK and SWD Pull-Up) (PDF pp.613-614); Table 619 Miscellaneous pins (PDF pp.613-614): RUN Pull-Up, TESTEN Pull-Down"
 [models.pin_capability.reset_mode.pads]
 "2" = "pull_down"  # gpio0
 "3" = "pull_down"  # gpio1
@@ -8870,8 +8871,10 @@ basis = "RP2040 Datasheet (build 2025-02-20), section 5.5.2.2 Pin List: Table 61
 "16" = "pull_down"  # gpio13
 "17" = "pull_down"  # gpio14
 "18" = "pull_down"  # gpio15
+"19" = "pull_down"  # testen
 "24" = "pull_up"  # swclk
 "25" = "pull_up"  # swd
+"26" = "pull_up"  # run
 "27" = "pull_down"  # gpio16
 "28" = "pull_down"  # gpio17
 "29" = "pull_down"  # gpio18
