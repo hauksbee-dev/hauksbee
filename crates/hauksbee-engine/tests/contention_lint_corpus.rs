@@ -243,6 +243,8 @@ fn contention_lint_fires_on_a_real_board_with_an_injected_fight() {
         "exactly one finding for the injected fight: {findings:?}"
     );
     let f = &findings[0];
-    assert_eq!(f.nets, vec![net.name.clone()]);
+    // The finding names the whole line the fight is on: the injected net first,
+    // then any net joined to it through a single small series resistor.
+    assert_eq!(f.nets.first(), Some(&net.name), "{f:?}");
     assert!(f.refs.contains(&"U901".to_string()) && f.refs.contains(&"U902".to_string()));
 }
