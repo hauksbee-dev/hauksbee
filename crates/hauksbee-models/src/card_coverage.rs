@@ -348,6 +348,66 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
     }
     open_input_needs(entry, text, &mut out);
     analog_input_needs(entry, text, &mut out);
+    out.extend(pin_rating_needs(entry, text));
+    out
+}
+
+/// What the datasheet calls a pin tolerant of more than its supply.
+const TOLERANT_WORDING: &str = r"(?i)\b(5|five)[\s-]*v(olts?)?[\s-]*tolerant";
+
+/// The per-pin ratings a card must carry as an `input_tolerance` row: a pin whose own absolute
+/// maximum a characteristic row prints, a VBUS-sense pin, and the pins a datasheet calls 5 V-tolerant.
+///
+/// Each stands for a pin a check would otherwise judge by its supply: a 1.4 V sense pin fed
+/// from 5 V is missed, and a 5 V-tolerant pin pulled up to 5 V is called back-powering.
+fn pin_rating_needs(entry: &ModelEntry, text: &str) -> Vec<Need> {
+    let mut roles: Vec<String> = crate::validation::unrated_pin_abs_max(entry)
+        .into_iter()
+        .map(|row| row.role)
+        .collect();
+    let signal = |r: &String| {
+        crate::pin_roles::power_pin(r, entry.kind).is_none()
+            && !r.to_ascii_lowercase().starts_with("nc")
+    };
+    roles.extend(
+        entry
+            .pins
+            .values()
+            .filter(|r| crate::validation::is_vbus_sense_role(r) && signal(r))
+            .filter(|r| crate::declared_pin_ceiling_v(&entry.envelope, r).is_none())
+            .map(|r| r.to_ascii_lowercase()),
+    );
+    roles.sort();
+    roles.dedup();
+    let mut out: Vec<Need> = roles
+        .into_iter()
+        .map(|role| Need {
+            key: format!("input_tolerance:{role}"),
+            ask: format!(
+                "[[models.envelope]] kind = \"input_tolerance\" for {role} (its own ground-referenced \
+                 maximum input voltage, max_v and abs_max_v, so a check holds the pin to it and a \
+                 rail under it is no back-powering)"
+            ),
+            look: LOOK_ABS,
+        })
+        .collect();
+    let tolerant = regex::Regex::new(TOLERANT_WORDING).is_ok_and(|re| re.is_match(text));
+    let signals = entry.pins.values().any(signal);
+    let passive = matches!(
+        entry.kind,
+        ComponentKind::Passive | ComponentKind::Connector | ComponentKind::Ignore
+    );
+    if tolerant && signals && !passive {
+        out.push(Need {
+            key: "input_tolerance:tolerant_pins".into(),
+            ask: "[[models.envelope]] kind = \"input_tolerance\" for each pin the datasheet calls \
+                  5 V-tolerant (pins = those roles, max_v and abs_max_v from the pin-definition \
+                  table or the absolute maximum VI row), so a pull-up to 5 V is read against the \
+                  pin's own rating"
+                .into(),
+            look: "Pin definitions / Absolute maximum ratings / I/O static characteristics",
+        });
+    }
     out
 }
 
@@ -602,10 +662,13 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
         ("theta_ja", _) => entry.ratings.theta_ja_c_per_w.is_some(),
         ("footprint_re", _) => entry.r#match.footprint_re.is_some() || entry.variant_of.is_some(),
         ("internal_clock" | "i_shdn_a", _) => entry.params.0.contains_key(need.key.as_str()),
-        ("input_tolerance", role) => entry.envelope.iter().any(|e| {
-            matches!(e, OperatingEnvelope::InputTolerance { pins, .. }
-                if pins.iter().any(|p| p.eq_ignore_ascii_case(role)))
-        }),
+        ("input_tolerance", role) => {
+            let any_row = role == "tolerant_pins";
+            entry.envelope.iter().any(|e| {
+                matches!(e, OperatingEnvelope::InputTolerance { pins, .. }
+                    if any_row || pins.iter().any(|p| p.eq_ignore_ascii_case(role)))
+            }) || crate::declared_pin_ceiling_v(&entry.envelope, role).is_some()
+        }
         ("backend", _) => entry.params.get_str("backend").is_some(),
         ("pulled_inputs", _) => !entry.logic.pulled_inputs.is_empty(),
         ("input_dc_path", _) => !entry.input_dc_path.is_empty(),
@@ -646,6 +709,7 @@ fn evidence(key: &str) -> Option<&'static str> {
         "pulled_inputs" => {
             r"(?i)\b(?:[HL]\s+or\s+open|open\s+or\s+[HL])\b|internal(?:ly)?\s+(?:weak\s+)?pull[- ]?(?:up|down)"
         }
+        "input_tolerance:tolerant_pins" => TOLERANT_WORDING,
         _ => return None,
     })
 }
@@ -1666,5 +1730,66 @@ value_re = "(?i)^PGLDO$"
             &bare,
             "the power-good output is high when the rail is in regulation."
         ));
+    }
+
+    /// A hub card: a VBUS-sense pin, a clock input and a GPIO; `rest` is appended.
+    fn hub(rest: &str) -> ModelEntry {
+        entry(&format!(
+            "[[models]]\nid = \"hub\"\nkind = \"digital\"\n[models.pins]\n\"1\" = \"vdd\"\n\
+             \"2\" = \"gnd\"\n\"3\" = \"usb_vbus\"\n\"4\" = \"xi\"\n\"5\" = \"pb1\"\n\
+             [models.source]\ntier = \"datasheet-derived\"\n\
+             [[models.source.characteristic]]\nparameter = \"XI pins, absolute maximum\"\n\
+             max = 2.45\nunit = \"V\"\nconditions = \"\"\nbasis = \"Table 5-1\"\n{rest}"
+        ))
+    }
+
+    fn unmet(entry: &ModelEntry, text: &str) -> Vec<String> {
+        needs(entry, text, &[])
+            .into_iter()
+            .filter(|n| !satisfied(entry, n))
+            .map(|n| n.key)
+            .filter(|k| k.starts_with("input_tolerance"))
+            .collect()
+    }
+
+    /// A per-pin absolute maximum left as a characteristic row, a VBUS-sense pin
+    /// and a datasheet that calls pins 5 V-tolerant each need an `input_tolerance`
+    /// row (or a record saying the sheet has none); a rated card needs nothing.
+    #[test]
+    fn pin_ratings_are_needs_until_an_input_tolerance_row_carries_them() {
+        let bare = hub("");
+        assert_eq!(
+            unmet(&bare, "PB1 (USB0VBUS) is a 5-V tolerant signal"),
+            [
+                "input_tolerance:usb_vbus",
+                "input_tolerance:xi",
+                "input_tolerance:tolerant_pins"
+            ]
+        );
+        // No tolerance wording: only the pin rows.
+        assert_eq!(
+            unmet(&bare, "plain text"),
+            ["input_tolerance:usb_vbus", "input_tolerance:xi"]
+        );
+        let rated = hub(
+            "[[models.envelope]]\nkind = \"input_tolerance\"\npins = [\"usb_vbus\", \"xi\", \"pb1\"]\n\
+             max_v = 2.45\nabs_max_v = 2.45\nbasis = \"Table 5-3\"\nabs_max_basis = \"Table 5-1\"\n",
+        );
+        assert!(unmet(&rated, "PB1 is five-volt tolerant").is_empty());
+        // A record naming the pin settles it as the sheet having no row.
+        let recorded = hub(
+            "[[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"input_tolerance:usb_vbus\"\n\
+             reason = \"not printed\"\n",
+        );
+        assert!(
+            unmet(&recorded, "x").is_empty(),
+            "{:?}",
+            unmet(&recorded, "x")
+        );
+        // A plain card with no such row, role or wording is asked for nothing.
+        let plain = entry(
+            "[[models]]\nid = \"p\"\nkind = \"digital\"\n[models.pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n\"3\" = \"a\"\n",
+        );
+        assert!(unmet(&plain, "Table 5-1 absolute maximum ratings").is_empty());
     }
 }

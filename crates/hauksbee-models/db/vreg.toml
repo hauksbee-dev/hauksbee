@@ -9324,6 +9324,17 @@ vref_v = 0.802 # Electrical Characteristics, FB Regulation Voltage, PWM mode, ty
 pin = "en"
 high_threshold_v = 1.215 # Electrical Characteristics, EN/UVLO Threshold VENR rising, typ column (min 1.19 / max 1.24)
 
+# FB, SS and MODE are signal inputs rated to the 6 V of the shared pin row of Absolute Maximum
+# Ratings (the row also lists RESET, VCC and RT/SYNC). The sheet prints no recommended maximum for
+# them, so max_v is that same figure.
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["fb", "ss", "mode"]
+max_v = 6.0
+abs_max_v = 6.0
+basis = "Analog Devices MAX17760 19-100795 Rev 2, Absolute Maximum Ratings p.5 (no Recommended Operating Conditions row exists for these pins): FB, RESET, SS, MODE, VCC, RT/SYNC to SGND -0.3 V to +6 V"
+abs_max_basis = "Analog Devices MAX17760 19-100795 Rev 2, Absolute Maximum Ratings p.5, FB, RESET, SS, MODE, VCC, RT/SYNC to SGND -0.3 V to +6 V"
+
 [models.coverage]
 implements = ["averaged_buck_dc", "board_feedback_divider", "input_supply_range", "output_current_ceiling", "enable_gating"]
 missing = ["switching_ripple", "loop_stability", "soft_start", "pfm_light_load_mode", "current_limit", "hiccup_protection", "thermal_shutdown", "reset_monitoring", "temperature_curves"]

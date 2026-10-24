@@ -53,7 +53,17 @@
 //!   ([`hauksbee_models::declared_pin_ceiling_v`]): a rail at or under it is
 //!   silent (a 5 V-tolerant input takes its 5 V pull-up), and a rail above it
 //!   is a stated absolute maximum exceeded, whatever the clamp does, so there
-//!   is no exception left for the reader to verify.
+//!   is no exception left for the reader to verify. A declared rating below
+//!   the clamp's own reach counts the same way: a sense pin rated 1.4 V on a
+//!   3.3 V part, fed from 5 V (or from a divider that still tops 1.4 V) or
+//!   driven by another part's push-pull output that swings past it (an
+//!   oscillator's 3.3 V output into a 2.45 V clock input), is past its stated
+//!   maximum with no back-power path involved, and the finding says so.
+//! - A VBUS-sense pin (`usb_vbus`, `vbus_sense`) the card does not rate:
+//!   **Low**. The pin exists to see a bus above the part's supply, so the pull
+//!   is the design, not a fault; the note asks to confirm the pin's maximum in
+//!   the datasheet's pin table or to add the `input_tolerance` row, and the
+//!   card's row then decides (silent under it, **High** over it).
 //!
 //! Pins the check deliberately skips: supply and ground roles (they belong on
 //! rails), and roles that are higher-voltage inputs by design (`vin`, `vbus`,
@@ -64,6 +74,7 @@ use std::collections::BTreeSet;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
+use hauksbee_models::validation::is_vbus_sense_role;
 use hauksbee_models::{declared_pin_ceiling_v, ModelEntry, ModelLibrary};
 
 use hauksbee_bind::binder::power_rail_voltage;
@@ -214,30 +225,47 @@ fn user_card_suffix(lib: &ModelLibrary, comp: &Component) -> String {
     }
 }
 
+/// A level within this of a pin's declared ceiling is on it, not over it.
+const CEILING_EPS_V: f64 = 1e-6;
+
+/// Whether `level_v` is past the rating the card declares for the pin.
+fn over_rating(ceiling: Option<f64>, level_v: f64) -> bool {
+    ceiling.is_some_and(|c| level_v > c + CEILING_EPS_V)
+}
+
 /// How bad a pull-up above the part's supply is. A family-router model derives
 /// its pad roles from CAD pin names and carries no per-pin tolerance, so the
 /// "unless tolerant" exception is unverifiable and the finding is only a note
 /// (STM32 FT pins such as PA9 are 5 V tolerant). A pull-up to a rail above a
 /// rating the card states for the pin leaves no exception to verify: High.
-/// Otherwise the exception is for the reader to check: Medium.
-fn pull_up_severity(model: &ModelEntry, ceiling: Option<f64>, rail_v: f64) -> Severity {
+/// A VBUS-sense pin the card does not rate sees a bus above its supply by
+/// design, so it is only a note to confirm the pin's maximum. Otherwise the
+/// exception is for the reader to check: Medium.
+fn pull_up_severity(
+    model: &ModelEntry,
+    ceiling: Option<f64>,
+    level_v: f64,
+    unrated_vbus: bool,
+) -> Severity {
     if model.params.get_str("auto_bind") == Some("family_router") {
         Severity::Low
-    } else if ceiling.is_some_and(|c| rail_v > c) {
+    } else if over_rating(ceiling, level_v) {
         Severity::High
+    } else if unrated_vbus {
+        Severity::Low
     } else {
         Severity::Medium
     }
 }
 
 /// The closing clause of a pull-up finding: the tolerance exception to verify,
-/// or the card's own rating the rail is above.
-fn tolerance_clause(ceiling: Option<f64>, rail_v: f64) -> String {
-    ceiling.filter(|c| rail_v > *c).map_or_else(
+/// or the card's own rating the level is above.
+fn tolerance_clause(ceiling: Option<f64>, level_v: f64) -> String {
+    ceiling.filter(|c| level_v > *c).map_or_else(
         || {
             format!(
                 "unless this pin is explicitly {}-tolerant.",
-                format_volts(rail_v)
+                format_volts(level_v)
             )
         },
         |c| {
@@ -245,32 +273,293 @@ fn tolerance_clause(ceiling: Option<f64>, rail_v: f64) -> String {
                 "and the card rates this pin for only {}, below the {} rail: past its stated \
                  absolute maximum whatever the supply does.",
                 format_volts(c),
-                format_volts(rail_v)
+                format_volts(level_v)
             )
         },
     )
+}
+
+/// What a VBUS-sense pin the card does not rate is told: it sees a bus above
+/// its part's supply by design, and the pin's own maximum is the card's to say.
+fn unrated_vbus_clause(role: &str) -> String {
+    format!(
+        " {role} is a VBUS-sense pin, which sees a bus above its part's supply by design, and the \
+         card states no input_tolerance row for it: confirm the pin's absolute maximum in the \
+         datasheet's pin table, or add the row so this check holds the pin to it."
+    )
+}
+
+/// One pin held past the ground-referenced rating its card declares, by a
+/// level that is not above its supply's clamp: nothing here is a back-power
+/// path, so the finding names the rating and not the clamp.
+struct PastRating<'a> {
+    part: &'a str,
+    pad: &'a str,
+    role: &'a str,
+    net: &'a str,
+    how: String,
+    level_v: f64,
+    ceiling_v: f64,
+    supply: String,
+}
+
+impl PastRating<'_> {
+    fn message(&self) -> String {
+        let Self {
+            part,
+            pad,
+            role,
+            net,
+            how,
+            level_v,
+            ceiling_v,
+            supply,
+        } = self;
+        format!(
+            "{part} pad {pad} ({role}) on \"{net}\" {how}, which holds it at {}, but the card \
+             rates this pin for only {}: past its stated absolute maximum whatever {part}'s \
+             supply {supply} does.",
+            format_volts(*level_v),
+            format_volts(*ceiling_v)
+        )
+    }
+}
+
+/// The first push-pull output of another part on net `id`, with the level it
+/// swings to (its own supply domain): `(reference, role, volts, supply net)`.
+///
+/// An output the card marks open-drain only pulls low and raises nothing.
+fn driver_on_net(
+    board: &ExtractedBoard,
+    parts: &[(&Component, ModelEntry)],
+    skip: &str,
+    id: i64,
+) -> Option<(String, String, f64, String)> {
+    parts
+        .iter()
+        .filter(|(c, _)| c.reference != skip)
+        .find_map(|(c, m)| {
+            let pad = c.pins.iter().find(|p| {
+                p.net == Some(id)
+                    && m.pins.get(&p.number).is_some_and(|role| {
+                        m.logic.outputs.iter().any(|o| o == role) && !m.is_open_drain_pad(&p.number)
+                    })
+            })?;
+            let (volts, rail) = supply_domain(board, c, &m.pins)?;
+            Some((
+                c.reference.clone(),
+                m.pins[&pad.number].clone(),
+                volts,
+                rail,
+            ))
+        })
+}
+
+/// One signal pin under judgement: its part, card, net, supply domain and the
+/// rating its card declares for it.
+struct PinUnderJudgement<'a> {
+    board: &'a ExtractedBoard,
+    lib: &'a ModelLibrary,
+    comp: &'a Component,
+    model: &'a ModelEntry,
+    pad: &'a str,
+    role: &'a str,
+    id: i64,
+    net: &'a str,
+    supply_v: f64,
+    supply_net: &'a str,
+    /// The pin's own ground-referenced ceiling when the card declares one.
+    ceiling: Option<f64>,
+    /// A VBUS-sense pin the card does not rate.
+    unrated_vbus: bool,
+}
+
+/// A finding already reported: (part ref, net id, rail or driver), so a bus
+/// with several pull-ups to one rail, or a part with two pins on the net,
+/// reads once.
+type Seen = (String, i64, String);
+
+impl PinUnderJudgement<'_> {
+    /// Whether `level_v` is a fault for this pin: past the card's rating when it
+    /// states one, whatever the supply, else one clamp drop above the supply.
+    fn judged(&self, level_v: f64) -> bool {
+        self.ceiling
+            .map_or(level_v > self.supply_v + CLAMP_MARGIN_V, |c| {
+                level_v > c + CEILING_EPS_V
+            })
+    }
+
+    /// The rating when `level_v` is past it without the clamp conducting, so the
+    /// finding speaks of the rating and not of back-powering.
+    fn rating_only(&self, level_v: f64) -> Option<f64> {
+        self.ceiling.filter(|_| {
+            over_rating(self.ceiling, level_v) && level_v <= self.supply_v + CLAMP_MARGIN_V
+        })
+    }
+
+    /// The closing words every finding on this pin carries.
+    fn tail(&self) -> String {
+        let vbus = if self.unrated_vbus {
+            unrated_vbus_clause(self.role)
+        } else {
+            String::new()
+        };
+        vbus + &user_card_suffix(self.lib, self.comp)
+    }
+
+    /// The message of a pin held past its card's rating by `how`.
+    fn past_rating(&self, how: String, level_v: f64, ceiling_v: f64) -> String {
+        PastRating {
+            part: &self.comp.reference,
+            pad: self.pad,
+            role: self.role,
+            net: self.net,
+            how,
+            level_v,
+            ceiling_v,
+            supply: format!("{} ({})", self.supply_net, format_volts(self.supply_v)),
+        }
+        .message()
+    }
+
+    /// The pin's own net IS a higher rail.
+    fn direct_tie(&self, rail_v: f64, seen: &mut BTreeSet<Seen>, out: &mut Vec<LintFinding>) {
+        let reference = &self.comp.reference;
+        if !self.judged(rail_v) || !seen.insert((reference.clone(), self.id, self.net.to_string()))
+        {
+            return;
+        }
+        let message = self.rating_only(rail_v).map_or_else(
+            || {
+                format!(
+                    "{reference} pad {} ({}) is wired directly to {} ({}) while {reference}'s \
+                     supply {} is {}: the pin's protection clamp conducts from the higher rail \
+                     into the {} domain with nothing to limit the current (back-powering; past \
+                     the VCC+0.5 V input abs-max).",
+                    self.pad,
+                    self.role,
+                    self.net,
+                    format_volts(rail_v),
+                    self.supply_net,
+                    format_volts(self.supply_v),
+                    format_volts(self.supply_v)
+                )
+            },
+            |c| self.past_rating("is wired directly to a rail".into(), rail_v, c),
+        );
+        out.push(LintFinding {
+            check: LintCheck::BackPower,
+            severity: if self.unrated_vbus {
+                Severity::Low
+            } else {
+                Severity::High
+            },
+            message: message + &self.tail(),
+            refs: vec![reference.clone()],
+            nets: vec![self.net.to_string()],
+        });
+    }
+
+    /// Pull-ups to a higher rail (severity: `pull_up_severity`). A divider that
+    /// holds the pin within its supply at the worst resistor corner is how a
+    /// higher rail is brought to an input: the clamp never conducts while the
+    /// part is powered. A pin the card rates is judged at the divider's level,
+    /// not the rail's. Returns whether such a divider settles the pin.
+    fn pull_ups(&self, seen: &mut BTreeSet<Seen>, out: &mut Vec<LintFinding>) -> bool {
+        let divider = divider_max_v(self.board, self.id);
+        if divider.is_some_and(|v| !self.judged(v)) {
+            return true;
+        }
+        let reference = &self.comp.reference;
+        for (r_ref, rail_net, rail_v) in pullups_to_rails(self.board, self.id) {
+            let level_v = self.ceiling.and(divider).unwrap_or(rail_v);
+            if !self.judged(level_v) || !seen.insert((reference.clone(), self.id, rail_net.clone()))
+            {
+                continue;
+            }
+            let message = self.rating_only(level_v).map_or_else(
+                || {
+                    format!(
+                        "{reference} pad {} ({}) on \"{}\" is pulled up through {r_ref} to \
+                         {rail_net} ({}) while {reference}'s supply {} is {}: current flows \
+                         through the pin clamp into the {} domain, back-powering it when it is \
+                         off and sitting past the VCC+0.5 V input abs-max when it is on, {}",
+                        self.pad,
+                        self.role,
+                        self.net,
+                        format_volts(level_v),
+                        self.supply_net,
+                        format_volts(self.supply_v),
+                        format_volts(self.supply_v),
+                        tolerance_clause(self.ceiling, level_v)
+                    )
+                },
+                |c| {
+                    self.past_rating(
+                        format!("is pulled up through {r_ref} to {rail_net}"),
+                        level_v,
+                        c,
+                    )
+                },
+            );
+            out.push(LintFinding {
+                check: LintCheck::BackPower,
+                severity: pull_up_severity(self.model, self.ceiling, level_v, self.unrated_vbus),
+                message: message + &self.tail(),
+                refs: vec![reference.clone(), r_ref],
+                nets: vec![self.net.to_string(), rail_net],
+            });
+        }
+        false
+    }
+
+    /// A pin the card rates, driven by another part's push-pull output that
+    /// swings past the rating (an oscillator's 3.3 V output into a clock input
+    /// rated 2.45 V): no rail is tied to the net, so the driver's own supply is
+    /// the level it reaches.
+    fn driven(
+        &self,
+        parts: &[(&Component, ModelEntry)],
+        seen: &mut BTreeSet<Seen>,
+        out: &mut Vec<LintFinding>,
+    ) {
+        let Some(c) = self.ceiling else { return };
+        let reference = &self.comp.reference;
+        let Some((driver, out_role, level_v, driver_rail)) =
+            driver_on_net(self.board, parts, reference, self.id)
+                .filter(|(_, _, v, _)| over_rating(Some(c), *v))
+        else {
+            return;
+        };
+        if !seen.insert((reference.clone(), self.id, driver.clone())) {
+            return;
+        }
+        let how =
+            format!("is driven by {driver} {out_role}, which swings to its supply {driver_rail}");
+        out.push(LintFinding {
+            check: LintCheck::BackPower,
+            severity: Severity::High,
+            message: self.past_rating(how, level_v, c) + &user_card_suffix(self.lib, self.comp),
+            refs: vec![reference.clone(), driver],
+            nets: vec![self.net.to_string(), driver_rail],
+        });
+    }
 }
 
 /// Run the back-powering lint over every modelled part on the board.
 #[must_use]
 pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-    // (part ref, net id, rail net) already reported, so a bus with several
-    // pull-ups to one rail, or a part with two pins on the net, reads once.
-    let mut seen: BTreeSet<(String, i64, String)> = BTreeSet::new();
+    let mut seen: BTreeSet<Seen> = BTreeSet::new();
+    let parts: Vec<_> = super::resolved_components(board, lib).collect();
 
-    for (comp, model) in super::resolved_components(board, lib) {
-        // Deterministic pad order for stable finding order.
-        let pins: std::collections::BTreeMap<String, String> = model
-            .pins
-            .iter()
-            .map(|(pad, role)| (pad.clone(), role.clone()))
-            .collect();
-        let Some((supply_v, supply_net)) = supply_domain(board, comp, &pins) else {
+    for (comp, model) in &parts {
+        let Some((supply_v, supply_net)) = supply_domain(board, comp, &model.pins) else {
             continue;
         };
 
-        for (pad, role) in &pins {
+        // Deterministic pad order for stable finding order (`pins` is a BTreeMap).
+        for (pad, role) in &model.pins {
             if is_skipped_role(role) {
                 continue;
             }
@@ -281,86 +570,43 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 continue;
             };
             let Some(net) = board.net(id) else { continue };
-            // A rail at or under the pin's own declared rating is not a clamp
-            // fault; a rail above it still fires.
-            let ceiling = declared_pin_ceiling_v(&model.envelope, role);
-            let clamps = |rail_v: f64| {
-                rail_v > supply_v + CLAMP_MARGIN_V && ceiling.is_none_or(|c| rail_v > c)
-            };
-
             // A signal pin STRAPPED TO GROUND has no clamp path to report, and
-            // the pull-up walk below would misread the board if it looked: a
-            // resistor from ground to a higher rail is a load on that rail (a
+            // the pull-up walk would misread the board if it looked: a resistor
+            // from ground to a higher rail is a load on that rail (a
             // VBUS-present divider's lower leg, a bleeder), not a pull-up on
-            // this pin. Judging it as one fires on every strapped-low pin of
-            // every part on a board that has such a divider, which is a
-            // configuration strap reported as a back-powering fault. The pin's
-            // ROLE being a ground role is already skipped above; this is the
-            // other half, a signal role whose NET is ground (an I2C address
-            // select tied low, a mode pin strapped to 0).
+            // this pin. The pin's ROLE being a ground role is already skipped
+            // above; this is the other half, a signal role whose NET is ground
+            // (an I2C address select tied low, a mode pin strapped to 0).
             if crate::checks::converter::is_ground_net(&net.name) {
                 continue;
             }
-
-            // Direct tie: the signal pin's own net IS a higher rail.
+            // A pin the card rates is judged against that rating, whatever the
+            // supply: a level at or under it is not a fault (a 5 V-tolerant
+            // input takes its 5 V pull-up), a level above it is, even when the
+            // supply's own clamp would not conduct yet (a sense pin rated 1.4 V
+            // on a 3.3 V part). A pin it does not rate is judged against one
+            // clamp drop above its supply.
+            let ceiling = declared_pin_ceiling_v(&model.envelope, role);
+            let pin = PinUnderJudgement {
+                board,
+                lib,
+                comp,
+                model,
+                pad,
+                role,
+                id,
+                net: &net.name,
+                supply_v,
+                supply_net: &supply_net,
+                ceiling,
+                unrated_vbus: ceiling.is_none() && is_vbus_sense_role(role),
+            };
             if let Some(rail_v) = power_rail_voltage(&net.name) {
-                if clamps(rail_v) && seen.insert((comp.reference.clone(), id, net.name.clone())) {
-                    report.findings.push(LintFinding {
-                        check: LintCheck::BackPower,
-                        severity: Severity::High,
-                        message: format!(
-                            "{} pad {pad} ({role}) is wired directly to {} ({}) \
-                             while {}'s supply {} is {}: the pin's protection \
-                             clamp conducts from the higher rail into the {} \
-                             domain with nothing to limit the current (back-powering; past \
-                             the VCC+0.5 V input abs-max).",
-                            comp.reference,
-                            net.name,
-                            format_volts(rail_v),
-                            comp.reference,
-                            supply_net,
-                            format_volts(supply_v),
-                            format_volts(supply_v)
-                        ) + &user_card_suffix(lib, comp),
-                        refs: vec![comp.reference.clone()],
-                        nets: vec![net.name.clone()],
-                    });
-                }
+                pin.direct_tie(rail_v, &mut seen, &mut report.findings);
                 continue; // a rail net has no pull-ups to judge
             }
-
-            // Pull-up to a higher rail (severity: `pull_up_severity`).
-            // A divider that holds the pin within its supply at the worst
-            // resistor corner is how a higher rail is brought to an input: the
-            // clamp never conducts while the part is powered.
-            if divider_max_v(board, id).is_some_and(|v| !clamps(v)) {
-                continue;
-            }
-            for (r_ref, rail_net, rail_v) in pullups_to_rails(board, id) {
-                if clamps(rail_v) && seen.insert((comp.reference.clone(), id, rail_net.clone())) {
-                    report.findings.push(LintFinding {
-                        check: LintCheck::BackPower,
-                        severity: pull_up_severity(&model, ceiling, rail_v),
-                        message: format!(
-                            "{} pad {pad} ({role}) on \"{}\" is pulled up through {r_ref} \
-                             to {rail_net} ({}) while {}'s supply {} is \
-                             {}: current flows through the pin clamp into the \
-                             {} domain, back-powering it when it is off and \
-                             sitting past the VCC+0.5 V input abs-max when it is on, \
-                             {}",
-                            comp.reference,
-                            net.name,
-                            format_volts(rail_v),
-                            comp.reference,
-                            supply_net,
-                            format_volts(supply_v),
-                            format_volts(supply_v),
-                            tolerance_clause(ceiling, rail_v)
-                        ) + &user_card_suffix(lib, comp),
-                        refs: vec![comp.reference.clone(), r_ref],
-                        nets: vec![net.name.clone(), rail_net],
-                    });
-                }
+            if !pin.pull_ups(&mut seen, &mut report.findings) {
+                pin.driven(&parts, &mut seen, &mut report.findings);
             }
         }
     }
@@ -891,6 +1137,259 @@ unlocked_by = "validated behavior"
             Severity::Medium,
             "a pin the card rates only through its supply keeps the tolerance caveat"
         );
+    }
+
+    /// A library holding only the cards of `source`, loaded from a scratch user
+    /// directory named for `tag`.
+    fn card_lib(tag: &str, source: &str) -> ModelLibrary {
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee_back_power_rating_{tag}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.toml"), source).unwrap();
+        let mut lib = ModelLibrary::empty();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "fixture card loads: {errors:?}");
+        lib
+    }
+
+    /// One footprint `reference` of `value` with `(pad, net id, net name)` pads.
+    fn fp(reference: &str, value: &str, pads: &[(&str, i64, &str)]) -> String {
+        use std::fmt::Write as _;
+        let mut pad_text = String::new();
+        for (pad, id, net) in pads {
+            write!(
+                pad_text,
+                r#"(pad "{pad}" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net {id} "{net}"))"#
+            )
+            .unwrap();
+        }
+        let pads = pad_text;
+        let package = if reference.starts_with('R') {
+            "Resistor_SMD:R_0603_1608Metric"
+        } else {
+            "Package_SO:SOIC-8"
+        };
+        format!(
+            r#"(footprint "{package}" (layer "F.Cu") (at 100 100)
+  (property "Reference" "{reference}" (at 0 0)) (property "Value" "{value}" (at 0 2)) {pads})"#
+        )
+    }
+
+    /// The board of `parts` (from [`fp`]) over the declared `(id, name)` nets.
+    fn board_of(nets: &[(i64, &str)], parts: &[String]) -> ExtractedBoard {
+        use std::fmt::Write as _;
+        let mut declared = String::new();
+        for (id, name) in nets {
+            write!(declared, "(net {id} \"{name}\") ").unwrap();
+        }
+        let text = format!(
+            "(kicad_pcb (version 20221018) (generator pcbnew) (net 0 \"\") {declared} {})",
+            parts.join("\n")
+        );
+        ExtractedBoard::from_kicad_pcb(&text).expect("parse")
+    }
+
+    /// A hub-like card with a VBUS-sense pin, a clock input and a plain GPIO on
+    /// a 3.3 V supply; `rows` are its `[[models.envelope]]` rows.
+    fn hub_card(rows: &str) -> String {
+        format!(
+            r#"
+[[models]]
+id = "hub"
+kind = "digital"
+description = "pin-rating fixture"
+[models.match]
+value_re = "^HUB$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vdd"
+"2" = "gnd"
+"3" = "usb_vbus"
+"4" = "xi"
+"5" = "gpio"
+{rows}"#
+        )
+    }
+
+    fn tolerance(role: &str, max_v: f64, abs_max_v: f64) -> String {
+        format!(
+            r#"[[models.envelope]]
+kind = "input_tolerance"
+pins = ["{role}"]
+max_v = {max_v}
+abs_max_v = {abs_max_v}
+basis = "Recommended Operating Conditions, {role}"
+abs_max_basis = "Absolute Maximum Ratings, {role}"
+"#
+        )
+    }
+
+    /// The back-power findings of the hub on +3V3 whose pad `pad` sits on a net
+    /// pulled to `rail` through `up` and, when given, down to ground through `down`.
+    fn hub_findings(
+        lib: &ModelLibrary,
+        pad: &str,
+        rail: &str,
+        up: &str,
+        down: Option<&str>,
+    ) -> Vec<LintFinding> {
+        let nets = [(1, "GND"), (2, rail), (3, "/SENSE"), (4, "+3V3")];
+        let mut parts = vec![
+            fp(
+                "U1",
+                "HUB",
+                &[("1", 4, "+3V3"), ("2", 1, "GND"), (pad, 3, "/SENSE")],
+            ),
+            fp("R1", up, &[("1", 3, "/SENSE"), ("2", 2, rail)]),
+        ];
+        if let Some(down) = down {
+            parts.push(fp("R2", down, &[("1", 3, "/SENSE"), ("2", 1, "GND")]));
+        }
+        let board = board_of(&nets, &parts);
+        back_power_lint(&board, lib)
+            .of_check(LintCheck::BackPower)
+            .cloned()
+            .collect()
+    }
+
+    /// A 5 V-tolerant VBUS-sense pin pulled up to the USB bus is the part working
+    /// as designed: the card's `input_tolerance` row decides, not the supply
+    /// clamp. The same pull on a pin the card does not rate as tolerant is still
+    /// a back-power fault, and a sense pin the card does not rate at all is a
+    /// note to confirm its maximum, never a Medium warning.
+    #[test]
+    fn a_tolerant_vbus_sense_pin_is_not_back_powering() {
+        let tolerant = card_lib("tolerant", &hub_card(&tolerance("usb_vbus", 5.5, 6.0)));
+        assert!(
+            hub_findings(&tolerant, "3", "+5V", "100k", None).is_empty(),
+            "5 V into a pin the card rates for 6 V"
+        );
+        // Control: a plain GPIO of the same card, pulled up to 5 V, is reported.
+        let gpio = hub_findings(&tolerant, "5", "+5V", "100k", None);
+        assert_eq!(gpio.len(), 1, "{gpio:?}");
+        assert_eq!(gpio[0].severity, Severity::Medium);
+        assert!(gpio[0].message.contains("(gpio)"), "{}", gpio[0].message);
+
+        // The sense pin with no rating on the card: a Low note, naming the fix.
+        let unrated = card_lib("unrated", &hub_card(""));
+        let note = hub_findings(&unrated, "3", "+5V", "100k", None);
+        assert_eq!(note.len(), 1, "{note:?}");
+        assert_eq!(note[0].severity, Severity::Low);
+        assert!(
+            note[0].message.contains("VBUS-sense") && note[0].message.contains("input_tolerance"),
+            "{}",
+            note[0].message
+        );
+        // The same unrated pull on a pin that is no sense pin keeps its warning.
+        let plain = hub_findings(&unrated, "5", "+5V", "100k", None);
+        assert_eq!(plain[0].severity, Severity::Medium, "{plain:?}");
+    }
+
+    /// A pin the card rates below the clamp's reach is held to the rating: a
+    /// 1.4 V sense pin on a 3.3 V part fed from the 5 V bus is past its maximum,
+    /// and so is one a divider leaves at 2.5 V; the datasheet's own divider
+    /// (90.9 k over 10 k, 0.5 V) is inside it.
+    #[test]
+    fn a_vbus_sense_pin_fed_past_its_own_maximum_is_reported() {
+        let lib = card_lib("low", &hub_card(&tolerance("usb_vbus", 1.155, 1.4)));
+        let direct = hub_findings(&lib, "3", "+5V", "100R", None);
+        assert_eq!(direct.len(), 1, "{direct:?}");
+        assert_eq!(direct[0].severity, Severity::High);
+        assert!(
+            direct[0].message.contains("rates this pin for only 1.4 V")
+                && direct[0].message.contains("5 V"),
+            "{}",
+            direct[0].message
+        );
+        let halved = hub_findings(&lib, "3", "+5V", "100k", Some("100k"));
+        assert_eq!(halved.len(), 1, "2.5 V is over 1.4 V: {halved:?}");
+        assert!(halved[0].message.contains("2.6"), "{}", halved[0].message);
+        let divided = hub_findings(&lib, "3", "+5V", "90.9k", Some("10k"));
+        assert!(
+            divided.is_empty(),
+            "0.5 V is inside the rating: {divided:?}"
+        );
+        // A pin tied straight to a rail the supply clamp would let through: 3.3 V
+        // on a 2.45 V clock input is past its rating though not above the supply.
+        let clock = card_lib("clock", &hub_card(&tolerance("xi", 2.45, 2.45)));
+        let tied = hub_findings(&clock, "4", "+3V3", "100R", None);
+        assert_eq!(tied.len(), 1, "{tied:?}");
+        assert!(tied[0].message.contains("2.45 V"), "{}", tied[0].message);
+        // Control: the same board on a card that rates the pin at 3.6 V is silent.
+        let roomy = card_lib("roomy", &hub_card(&tolerance("xi", 3.6, 3.9)));
+        assert!(hub_findings(&roomy, "4", "+3V3", "100R", None).is_empty());
+    }
+
+    /// An oscillator's push-pull output swings to its own supply: into a clock
+    /// input rated below that, with no rail on the net, the pin is past its
+    /// maximum. The same oscillator on a lower supply, or an open-drain
+    /// output, leaves the pin alone.
+    #[test]
+    fn a_clock_input_driven_past_its_own_maximum_is_reported() {
+        let source = format!(
+            "{}{}",
+            hub_card(&tolerance("xi", 2.0, 2.45)),
+            r#"
+[[models]]
+id = "osc"
+kind = "digital"
+description = "oscillator fixture"
+[models.match]
+value_re = "^OSC$"
+[models.pins]
+"1" = "en"
+"2" = "gnd"
+"3" = "out"
+"4" = "vdd"
+[models.logic]
+inputs = ["en"]
+outputs = ["out"]
+[models.logic.comb]
+out = "en"
+"#
+        );
+        let lib = card_lib("osc", &source);
+        let run = |osc_rail: &str| {
+            let nets = [(1, "GND"), (2, osc_rail), (3, "/XIN"), (4, "+3V3")];
+            let parts = [
+                fp(
+                    "U1",
+                    "HUB",
+                    &[("1", 4, "+3V3"), ("2", 1, "GND"), ("4", 3, "/XIN")],
+                ),
+                fp(
+                    "U2",
+                    "OSC",
+                    &[
+                        ("1", 2, osc_rail),
+                        ("2", 1, "GND"),
+                        ("3", 3, "/XIN"),
+                        ("4", 2, osc_rail),
+                    ],
+                ),
+            ];
+            let board = board_of(&nets, &parts);
+            back_power_lint(&board, &lib)
+                .of_check(LintCheck::BackPower)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let over = run("+3V3");
+        assert_eq!(over.len(), 1, "{over:?}");
+        assert_eq!(over[0].severity, Severity::High);
+        for says in ["U1 pad 4 (xi)", "U2 out", "3.3 V", "2.45 V"] {
+            assert!(
+                over[0].message.contains(says),
+                "{says:?} in {}",
+                over[0].message
+            );
+        }
+        assert!(run("+1V8").is_empty(), "1.8 V is inside the 2.45 V rating");
     }
 
     /// A part whose supply net the rail table cannot resolve has no domain
