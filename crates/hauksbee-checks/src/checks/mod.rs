@@ -758,6 +758,10 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             report.findings.push(finding);
         }
     }
+    // What the floating-node detector finds that no hand check above did: a
+    // net nothing holds whose level the solve shows moving with leakage alone.
+    let promoted = float_parity::float_promoted(board, lib, &report.findings);
+    report.findings.extend(promoted);
     lint_tick(2);
     // Last, so every check's finding is seen: what rests only on a drafted
     // card's doubtful field is a note to check the card, not a board fault.

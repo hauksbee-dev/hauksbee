@@ -95,7 +95,7 @@ fn symbol_dir(kind: &str) -> Option<Dir> {
 /// microcontroller (`TXD`, `PWM`, `SCK`) typed that way is not an input. "Almost
 /// all" is every pin of a part with six or more, or four in five of the pins of
 /// a part with sixteen or more (the few left are its supply and port pins).
-fn untyped_symbol(comp: &Component) -> bool {
+pub(super) fn untyped_symbol(comp: &Component) -> bool {
     const FEWEST_PINS: usize = 6;
     const FEWEST_PINS_DOMINANT: usize = 16;
     let total = comp.pins.len();
