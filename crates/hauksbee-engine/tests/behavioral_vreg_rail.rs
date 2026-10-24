@@ -630,3 +630,24 @@ fn boost_with_an_unfed_input_stays_sane_and_dead() {
         assert!(v.is_finite() && v.abs() < 1.0, "net '{net}' at {v:.3e} V");
     }
 }
+
+/// A divider whose top leg is two resistors in series through a mid-node
+/// (35k + 10k over 10k) sets the same 3.3 V as one 45k: the rail is the
+/// divider's, never the card's 1.2 V example set point.
+#[test]
+fn a_series_feedback_chain_sets_the_solved_rail() {
+    let lib = lib_with_card("chain", 1.2, "", true);
+    let mut chain = lc_buck_board("+5V", "33R", "22uF", true);
+    chain.components.retain(|c| c.reference != "R2");
+    chain
+        .nets
+        .push(crate::support::net(6, "FB_MID".to_string()));
+    chain.components.push(two("R2", "35k", RES, 2, 6));
+    chain.components.push(two("R4", "10k", RES, 6, 5));
+    let (_, trace) = run_lc_buck(&chain, &lib, 10);
+    let want = 0.6 * (1.0 + 45.0 / 10.0);
+    assert!(
+        trace.iter().all(|v| (v - want).abs() < 0.05 * want),
+        "{want} V wanted, got {trace:?}"
+    );
+}

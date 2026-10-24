@@ -2310,6 +2310,15 @@ pub enum OperatingEnvelope {
         /// empty for a row that holds at every temperature.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         conditions: String,
+        /// The configuration this row is one alternative of (`"5 V input"`,
+        /// `"3.3 V input"`, `"Revision C"`); empty for a row that holds in
+        /// every configuration.
+        ///
+        /// Rows of one pin with different modes are mutually exclusive: the
+        /// board's wiring picks one, so a rail that fits every row of any one
+        /// mode is in range. Untagged rows bind in every mode.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        mode: String,
     },
     RailOrder {
         lower: String,
@@ -2476,11 +2485,29 @@ impl OperatingEnvelope {
         }
     }
 
+    /// The supply mode this row is one alternative of; empty when it holds in
+    /// every mode (see the `mode` field of [`Self::SupplyRange`]).
+    #[must_use]
+    pub fn mode(&self) -> &str {
+        match self {
+            Self::SupplyRange { mode, .. } => mode.trim(),
+            Self::RailOrder { .. } | Self::InputCommonMode { .. } | Self::InputTolerance { .. } => {
+                ""
+            }
+        }
+    }
+
     /// The limit every temperature row of one channel shares; `None` for a
     /// rail order or an input tolerance, which have no rows.
+    ///
+    /// A supply row tagged with a `mode` is its own channel: each alternative
+    /// carries its own temperature rows.
     #[must_use]
     pub fn channel(&self) -> Option<String> {
         match self {
+            Self::SupplyRange { pin, .. } if !self.mode().is_empty() => {
+                Some(format!("supply range of {pin} ({})", self.mode()))
+            }
             Self::SupplyRange { pin, .. } => Some(format!("supply range of {pin}")),
             Self::InputCommonMode { inputs, .. } => Some(format!("{inputs:?} common-mode range")),
             Self::RailOrder { .. } | Self::InputTolerance { .. } => None,
@@ -2844,7 +2871,28 @@ mod tests {
             abs_max_basis: String::new(),
             note: String::new(),
             conditions: String::new(),
+            mode: String::new(),
         }
+    }
+
+    /// A supply row's `mode` tag reads back from a card, and a tagged row is a
+    /// channel of its own, so each alternative keeps its own temperature rows.
+    #[test]
+    fn a_supply_rows_mode_is_its_own_channel() {
+        let card = "kind = \"supply_range\"\npin = \"vregin\"\nmin_v = 3.6\nmax_v = 5.5\n\
+                    basis = \"Table 5.2\"\nmode = \" 5 V input \"\n";
+        let row: OperatingEnvelope = toml::from_str(card).expect("row parses");
+        assert_eq!(row.mode(), "5 V input");
+        assert_eq!(
+            row.channel().as_deref(),
+            Some("supply range of vregin (5 V input)")
+        );
+        let untagged = supply_range("vregin", 3.6, 6.0);
+        assert_eq!(untagged.mode(), "");
+        assert_eq!(
+            untagged.channel().as_deref(),
+            Some("supply range of vregin")
+        );
     }
 
     /// A sense input's `supply_range` is a measurement window, not a pin
