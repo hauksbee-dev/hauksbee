@@ -226,7 +226,11 @@ fn signed_usb_lines(lower: &str) -> BTreeSet<BusLine> {
         }
         // A `D` that is a word of its own, or the tail of `UD` / `USBD`.
         let before = &lower[..i - 1];
-        let starts_word = |s: &str| s.chars().next_back().is_none_or(|p| !p.is_ascii_alphanumeric());
+        let starts_word = |s: &str| {
+            s.chars()
+                .next_back()
+                .is_none_or(|p| !p.is_ascii_alphanumeric())
+        };
         let prefix = before
             .strip_suffix("usb")
             .or_else(|| before.strip_suffix('u'))
@@ -320,11 +324,9 @@ mod tests {
             assert!(c.source.sha256.bytes().all(|b| b.is_ascii_hexdigit()));
             assert!(c.source.url.starts_with("https://"), "{}", c.id);
             assert!(!c.names.is_empty() && c.names.iter().all(|a| !a.is_empty()));
-            assert!(c
-                .names
-                .iter()
-                .flat_map(|a| a.iter())
-                .all(|w| w.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())));
+            assert!(c.names.iter().flat_map(|a| a.iter()).all(|w| w
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())));
         }
         assert_eq!(USB_C_SOURCE.sha256.len(), 64);
     }
@@ -356,7 +358,10 @@ mod tests {
         assert_eq!(ids(4, "qwiic"), ["qwiic"]);
         assert_eq!(ids(4, "stemma qt"), ["stemma_qt"]);
         assert_eq!(ids(4, "stemmaqt"), ["stemma_qt"]);
-        assert!(ids(4, "stemma").is_empty(), "JST PH STEMMA is another order");
+        assert!(
+            ids(4, "stemma").is_empty(),
+            "JST PH STEMMA is another order"
+        );
         assert!(ids(5, "qwiic").is_empty());
         assert_eq!(ids(4, "grove"), ["grove_i2c"]);
     }

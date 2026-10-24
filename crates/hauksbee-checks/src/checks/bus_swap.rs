@@ -48,8 +48,7 @@ use hauksbee_extract::{
     ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
 };
 use hauksbee_ir::connector_pinouts::{
-    bus_connectors_named, bus_line_named, usb_c_line_at, BusLine, ConnectorSource,
-    USB_C_SOURCE,
+    bus_connectors_named, bus_line_named, usb_c_line_at, BusLine, ConnectorSource, USB_C_SOURCE,
 };
 use hauksbee_ir::pin_functions::PeripheralFunction;
 use hauksbee_models::netclass::is_positive_supply;
@@ -403,7 +402,9 @@ pub fn bus_swap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRepor
             if standard.as_ref().is_some_and(|s| s.shared_name) && lines.len() < 2 {
                 continue;
             }
-            report.findings.push(finding(board, conn, standard.as_ref(), &crossed, bus));
+            report
+                .findings
+                .push(finding(board, conn, standard.as_ref(), &crossed, bus));
         }
     }
     report
@@ -561,7 +562,11 @@ mod tests {
         let found = run(vec![usb_c(A, B), r1, r2, bridge("D-", MA, "D+", MB)]);
         assert_eq!(found.len(), 1, "{found:#?}");
         // The same through a choke (pad 1 to 4 is D+, pad 2 to 3 is D-).
-        let mut l = part("FL1", "ACM2012", &[("1", A), ("2", B), ("3", MB), ("4", MA)]);
+        let mut l = part(
+            "FL1",
+            "ACM2012",
+            &[("1", A), ("2", B), ("3", MB), ("4", MA)],
+        );
         l.lib_id = "Device:L_Coupled".into();
         let found = run(vec![usb_c(A, B), l, bridge("D-", MA, "D+", MB)]);
         assert_eq!(found.len(), 1, "{found:#?}");
@@ -610,7 +615,11 @@ mod tests {
 
     /// A 4-pad connector named `value` on SDA/SCL nets `(sda, scl)` at pins 3, 4.
     fn qwiic(value: &str, sda: i64, scl: i64) -> Component {
-        let mut j = part("J2", value, &[("1", GND), ("2", V33), ("3", sda), ("4", scl)]);
+        let mut j = part(
+            "J2",
+            value,
+            &[("1", GND), ("2", V33), ("3", sda), ("4", scl)],
+        );
         j.lib_id = "Connector_Generic:Conn_01x04".into();
         j
     }
@@ -646,7 +655,11 @@ mod tests {
     fn a_grove_socket_is_judged_only_when_both_lines_are_crossed() {
         // Grove pin 1 is SCL and pin 2 SDA: pins 1 and 2 on SDA and SCL nets.
         let grove = |p1: i64, p2: i64| {
-            let mut j = part("J3", "Grove", &[("1", p1), ("2", p2), ("3", V33), ("4", GND)]);
+            let mut j = part(
+                "J3",
+                "Grove",
+                &[("1", p1), ("2", p2), ("3", V33), ("4", GND)],
+            );
             j.lib_id = "Connector_Generic:Conn_01x04".into();
             j
         };
@@ -673,11 +686,7 @@ mod tests {
     fn pull_ups_do_not_join_the_line_to_the_supply() {
         let mut r = part("R5", "4.7k", &[("1", A), ("2", V33)]);
         r.lib_id = "Device:R".into();
-        let found = run(vec![
-            qwiic("Qwiic", A, B),
-            r,
-            bridge("SCL", A, "SDA", B),
-        ]);
+        let found = run(vec![qwiic("Qwiic", A, B), r, bridge("SCL", A, "SDA", B)]);
         assert_eq!(found.len(), 1, "{found:#?}");
     }
 }

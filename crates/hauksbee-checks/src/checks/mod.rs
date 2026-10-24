@@ -172,15 +172,15 @@ pub mod back_power;
 pub mod backup_supply;
 pub mod boot;
 pub mod bus_loading;
+pub mod bus_swap;
 pub(crate) mod card_trust;
+pub mod cc_termination;
 pub mod contention;
 pub mod control_held_off;
 pub mod converter;
 pub mod crystal_caps;
 pub mod datasheet_field;
 pub mod dc_stress;
-pub mod bus_swap;
-pub mod cc_termination;
 pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
@@ -714,6 +714,17 @@ fn extend_with_transmit_contention(
     report.findings.extend(transmit);
 }
 
+/// The part-number field check. A part the solved DC stress pass already
+/// holds over its rating is not judged against its rail a second time by its
+/// part number.
+fn part_field_findings(board: &ExtractedBoard, dc: &NetLintReport) -> Vec<LintFinding> {
+    let overstressed = |r: &str| {
+        (dc.findings.iter())
+            .any(|f| f.check == LintCheck::DcOverstress && f.refs.iter().any(|x| x == r))
+    };
+    part_fields::part_field_lint(board, &overstressed).findings
+}
+
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
@@ -803,13 +814,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(node_drive::node_drive_lint(board, lib).findings);
     extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
-    // A part the solved DC stress pass already holds over its rating is not
-    // judged against its rail a second time by its part number.
-    let overstressed = |r: &str| {
-        (dc.report.findings.iter())
-            .any(|f| f.check == LintCheck::DcOverstress && f.refs.iter().any(|x| x == r))
-    };
-    let fields = part_fields::part_field_lint(board, &overstressed).findings;
+    let fields = part_field_findings(board, &dc.report);
     report.findings.extend(dc.report.findings);
     report.findings.extend(fields);
     lint_tick(14);

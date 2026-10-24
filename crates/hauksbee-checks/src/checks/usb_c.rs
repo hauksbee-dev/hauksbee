@@ -841,7 +841,10 @@ fn audit_one_cc(
 /// / ferrite beads (DC shorts). A CC line often reaches the controller through a
 /// 0 Ω "bridge" resistor placed on its own net, so the controller's CC pin is a
 /// different net id than the receptacle CC pin; this union re-joins them.
-pub(super) fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::HashSet<i64> {
+pub(super) fn nets_bridged_to(
+    board: &ExtractedBoard,
+    start: i64,
+) -> std::collections::HashSet<i64> {
     use std::collections::HashSet;
     let mut set = HashSet::new();
     set.insert(start);
@@ -1464,10 +1467,22 @@ mod tests {
         // The verdict is Info (never Ok, never Serious), whichever Rd is present.
         for discrete in [true, false] {
             for shared in [true, false] {
-                let (lvl, msg) = usbc_verdict(shared, discrete, SinkAttached, Undetermined, RdFit::default());
+                let (lvl, msg) = usbc_verdict(
+                    shared,
+                    discrete,
+                    SinkAttached,
+                    Undetermined,
+                    RdFit::default(),
+                );
                 assert_eq!(lvl, UsbcLevel::Info);
                 assert!(msg.contains("not determined"), "{msg}");
-                let (lvl, _) = usbc_verdict(shared, discrete, Undetermined, Undetermined, RdFit::default());
+                let (lvl, _) = usbc_verdict(
+                    shared,
+                    discrete,
+                    Undetermined,
+                    Undetermined,
+                    RdFit::default(),
+                );
                 assert_eq!(lvl, UsbcLevel::Info);
             }
         }
@@ -1818,7 +1833,13 @@ mod tests {
         assert_eq!(lvl, UsbcLevel::Serious);
         assert!(msg.contains("Raspberry Pi 4"), "{msg}");
         // Correctly-terminated sink: both cables power → Ok.
-        let (lvl, _) = usbc_verdict(false, true, SinkAttached, PoweredCableWithSink, RdFit::default());
+        let (lvl, _) = usbc_verdict(
+            false,
+            true,
+            SinkAttached,
+            PoweredCableWithSink,
+            RdFit::default(),
+        );
         assert_eq!(lvl, UsbcLevel::Ok);
         // Controller-provided termination (no discrete Rd): Info, never Serious.
         let (lvl, _) = usbc_verdict(false, false, Nothing, Nothing, RdFit::default());

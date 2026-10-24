@@ -186,7 +186,11 @@ fn vbus_direction(
         let Some(fitted) = AssemblyState::of(comp).fitted() else {
             continue;
         };
-        for pin in comp.pins.iter().filter(|p| p.net.is_some_and(|n| group.contains(&n))) {
+        for pin in comp
+            .pins
+            .iter()
+            .filter(|p| p.net.is_some_and(|n| group.contains(&n)))
+        {
             let kind = pin.kind.to_ascii_lowercase();
             source |= kind.starts_with("power_out");
             sink |= kind.starts_with("power_in");
@@ -354,7 +358,11 @@ fn pulldown_finding(
 ) -> LintFinding {
     LintFinding {
         check: LintCheck::UsbCcTermination,
-        severity: if high { Severity::High } else { Severity::Medium },
+        severity: if high {
+            Severity::High
+        } else {
+            Severity::Medium
+        },
         message: format!(
             "{} CC pull-down is not 5.1 kΩ ({}). A USB-C sink presents Rd = 5.1 kΩ ±20 % \
              (4.08 to 6.12 kΩ) on each CC pin (USB Type-C R2.0 Table 4-25, p. 236); a source \
@@ -490,7 +498,11 @@ mod tests {
         ]);
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::High);
-        assert!(found[0].message.contains("CC2 10 kΩ"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("CC2 10 kΩ"),
+            "{}",
+            found[0].message
+        );
     }
 
     #[test]
@@ -554,7 +566,11 @@ mod tests {
         let found = run(vec![receptacle(GND, CC2), res("R2", "5.1k", CC2, GND)]);
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::High);
-        assert!(found[0].message.contains("ground net"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("ground net"),
+            "{}",
+            found[0].message
+        );
     }
 
     #[test]
@@ -568,9 +584,20 @@ mod tests {
         ]);
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::Medium);
-        assert!(found[0].message.contains("Table 4-24"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("Table 4-24"),
+            "{}",
+            found[0].message
+        );
         // Standard values to either rail are silent.
-        for (v, rail) in [("56k", VOUT), ("22k", VOUT), ("10k", VOUT), ("36k", V33), ("12k", V33), ("4.7k", V33)] {
+        for (v, rail) in [
+            ("56k", VOUT),
+            ("22k", VOUT),
+            ("10k", VOUT),
+            ("36k", V33),
+            ("12k", V33),
+            ("4.7k", V33),
+        ] {
             let found = run(vec![
                 receptacle(CC1, CC2),
                 res("R1", v, CC1, rail),

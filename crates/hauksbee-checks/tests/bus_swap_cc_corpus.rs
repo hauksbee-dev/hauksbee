@@ -44,7 +44,9 @@ fn bus_swap_and_cc_lints_are_silent_on_the_known_good_corpus() {
     let lib = ModelLibrary::builtin();
     let mut scanned = 0usize;
     let mut found: Vec<(String, String, String)> = Vec::new();
-    for path in hauksbee_testkit::walk_files_with_ext(&root, &["kicad_pcb", "kicad_sch", "net", "brd"]) {
+    for path in
+        hauksbee_testkit::walk_files_with_ext(&root, &["kicad_pcb", "kicad_sch", "net", "brd"])
+    {
         let Some(board) = load(&path) else { continue };
         scanned += 1;
         let name = path
@@ -58,7 +60,10 @@ fn bus_swap_and_cc_lints_are_silent_on_the_known_good_corpus() {
         ];
         for (check, report) in reports {
             for f in report.findings {
-                eprintln!("CORPUS FINDING {name} [{check}] {:?}: {}", f.severity, f.message);
+                eprintln!(
+                    "CORPUS FINDING {name} [{check}] {:?}: {}",
+                    f.severity, f.message
+                );
                 found.push((name.clone(), check.to_string(), f.refs.join(",")));
             }
         }
