@@ -51,12 +51,15 @@ use crate::MutexExt;
 #[path = "scheduler/electrics.rs"]
 mod electrics;
 pub use electrics::{reset_episode_message, ResetCause, ResetEpisode};
+#[path = "sleep_current.rs"]
+mod sleep_current;
 use hauksbee_bind::behavioral::BehavioralDevice;
 use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use hauksbee_bind::digital::{DigitalComponent, PinEdge};
 use hauksbee_bind::power_supply::{PowerSupply, SupplyLeg};
 use hauksbee_bind::stress::{FaultEvent, RegulatorHeat, StressMonitor};
+pub use sleep_current::{LowPathPin, PullUpPin, SleepCurrent};
 
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
@@ -817,6 +820,12 @@ pub struct Scheduler {
     /// [`Scheduler::relayout`], so devices stamped later (peripheral controls,
     /// buttons) are included.
     digital_in_evidence: HashMap<u32, Vec<u32>>,
+    /// The worst sleeping chunk per MCU with an internal pull-up on into a real
+    /// low path ([`sleep_current`]).
+    sleep_current: sleep_current::SleepTracker,
+    /// The run's stated sleep-current budget (A), if any
+    /// ([`Scheduler::set_sleep_budget_a`]).
+    sleep_budget_a: Option<f64>,
     /// Per-frame (one `step`) accumulators that capture INTRA-frame extremes a
     /// consumer reading only the frame's final chunk would miss. `step` runs
     /// many sub-chunks (default 10 per 1 ms frame) each overwriting `node_volts`;
@@ -1688,6 +1697,8 @@ impl Scheduler {
             last_chunk_edges: Vec::new(),
             last_replay_microticks: 0,
             digital_in_evidence: HashMap::new(),
+            sleep_current: sleep_current::SleepTracker::default(),
+            sleep_budget_a: None,
             frame_peak_current: HashMap::new(),
             frame_v_extremes: HashMap::new(),
             step_watch: Vec::new(),
@@ -3988,6 +3999,7 @@ impl Scheduler {
         self.sim_time += chunk;
         if chunk_converged {
             self.update_stats();
+            self.observe_sleep_current();
             self.accumulate_frame_peaks();
 
             // 6. Fault / stress monitor: evaluate every device against its

@@ -74,6 +74,63 @@ pub fn port_toggle_image(delay: u8, pad_to: usize) -> Vec<u8> {
     image
 }
 
+/// `ldi Rd, K` for `d` in `16..=31`.
+fn ldi(d: u8, k: u8) -> u16 {
+    0xE000 | (u16::from(k & 0xF0) << 4) | (u16::from(d - 16) << 4) | u16::from(k & 0x0F)
+}
+
+/// `out A, Rr` for an I/O address `a` in `0..=0x3F`.
+fn out(a: u8, r: u8) -> u16 {
+    0xB800 | (u16::from(a & 0x30) << 5) | (u16::from(r) << 4) | u16::from(a & 0x0F)
+}
+
+/// A megaAVR image that reads `PORTD` pins with their pull-ups on, then
+/// sleeps in power-down.
+///
+/// Same I/O addresses on every ATmega48/88/168/328 (`DDRD` 0x0A, `PORTD` 0x0B,
+/// `SMCR` 0x33). `pull_up_mask` is the set of `PORTD` pins made inputs with the
+/// pull-up on. With `clear_before_sleep` the program then writes `PORTD = 0`,
+/// which is the fix for the leak; without it the pull-ups stay on through the
+/// sleep, which is the fault. `sei` precedes `sleep` because simavr turns a
+/// sleep with interrupts disabled into a finished core.
+///
+/// ```text
+///         ldi  r16, 0x00
+///         out  DDRD, r16        ; port D all inputs
+///         ldi  r17, MASK
+///         out  PORTD, r17       ; pull-ups on
+///         ldi  r17, 0x00        ; (only with clear_before_sleep)
+///         out  PORTD, r17       ; pull-ups off
+///         ldi  r18, 0x05        ; SM2:0 = 010 power-down, SE = 1
+///         out  SMCR, r18
+///         sei
+///         sleep
+/// halt:   rjmp halt
+/// ```
+#[must_use]
+pub fn pull_up_sleep_image(pull_up_mask: u8, clear_before_sleep: bool) -> Vec<u8> {
+    const DDRD: u8 = 0x0A;
+    const PORTD: u8 = 0x0B;
+    const SMCR: u8 = 0x33;
+    let mut words = vec![
+        ldi(16, 0x00),
+        out(DDRD, 16),
+        ldi(17, pull_up_mask),
+        out(PORTD, 17),
+    ];
+    if clear_before_sleep {
+        words.extend([ldi(17, 0x00), out(PORTD, 17)]);
+    }
+    words.extend([
+        ldi(18, 0x05), // SM2:0 = 010 (power-down), SE = 1
+        out(SMCR, 18),
+        0x9478, // sei
+        0x9588, // sleep
+        0xCFFF, // rjmp .-2 (to itself)
+    ]);
+    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
 /// `image` as Intel HEX loaded from address 0.
 ///
 /// 16-byte data records, an extended-linear-address record at each 64 KiB
@@ -153,7 +210,43 @@ pub fn avr_elf(image: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{avr_elf, intel_hex, port_toggle_image, port_toggle_period_cycles};
+    use super::{
+        avr_elf, intel_hex, ldi, out, port_toggle_image, port_toggle_period_cycles,
+        pull_up_sleep_image,
+    };
+
+    #[test]
+    fn the_assembler_helpers_match_the_toggle_program() {
+        // The same encodings `toggle_words` spells out by hand.
+        assert_eq!(ldi(16, 0xFF), 0xEF0F);
+        assert_eq!(out(0x04, 16), 0xB904);
+        assert_eq!(out(0x0B, 17), 0xB91B);
+        // SMCR sits at I/O 0x33: the high address bits land in the opcode.
+        assert_eq!(out(0x33, 18), 0xBF23);
+        assert_eq!(ldi(17, 0x0C), 0xE01C);
+        assert_eq!(ldi(18, 0x05), 0xE025);
+    }
+
+    #[test]
+    fn the_sleep_image_clears_the_pull_ups_only_when_asked() {
+        let words = |image: &[u8]| -> Vec<u16> {
+            image
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect()
+        };
+        let fault = words(&pull_up_sleep_image(0x0C, false));
+        let fixed = words(&pull_up_sleep_image(0x0C, true));
+        // ldi r17,0 / out PORTD,r17 sit between the pull-up write and SMCR.
+        assert_eq!(fixed.len(), fault.len() + 2);
+        assert_eq!(&fixed[4..6], &[0xE010, 0xB91B]);
+        assert!(!fault.windows(2).any(|w| w == [0xE010, 0xB91B]));
+        for p in [&fault, &fixed] {
+            // sei; sleep; rjmp . at the end.
+            assert_eq!(&p[p.len() - 3..], &[0x9478, 0x9588, 0xCFFF]);
+            assert!(p.contains(&0xBF23), "SMCR is written");
+        }
+    }
 
     #[test]
     fn hex_records_checksum_and_cover_the_image() {

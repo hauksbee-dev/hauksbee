@@ -142,6 +142,7 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                 },
             )
             .collect(),
+        sleep_current: Vec::new(),
     }
 }
 

@@ -499,6 +499,14 @@ impl Mcu for DeferredMcu {
         self.core().drive_direction_observable()
     }
 
+    fn internal_pull_ups(&self) -> Option<Vec<PinId>> {
+        self.core().internal_pull_ups()
+    }
+
+    fn sleep_mode(&self) -> Option<crate::traits::SleepMode> {
+        self.core().sleep_mode()
+    }
+
     fn pins_routed_to_peripheral(&self) -> Vec<PinId> {
         self.core().pins_routed_to_peripheral()
     }
