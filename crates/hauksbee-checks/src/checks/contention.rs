@@ -57,12 +57,15 @@
 //!   references are required.
 //! - **Ground, unconnected, and no-net.** Nothing to contend over.
 //! - **DNP parts.** Not assembled, so electrically absent.
-//! - **Series resistors do NOT need an exclusion.** Two outputs separated by a
-//!   series R are on two different nets, and net extraction never merges across
-//!   a two-terminal passive, so the case simply cannot arise inside one net.
-//!   Writing a "is there an R on this net" escape hatch would be dead code that
-//!   suppresses real findings: an R sitting on a net as a pull-up or a load is
-//!   not a series element between the drivers.
+//! - **A series resistor does not separate two drivers.** Net extraction never
+//!   merges across a two-terminal passive, so two outputs behind one small
+//!   series resistor are on two nets. They are still wired to each other: the
+//!   resistor limits the current of the fight, not the fight. A single resistor
+//!   (or one element of a resistor network) of up to a few kilohms between two
+//!   signal nets is read as a wire (`signal_direction::series`), and the two
+//!   nets are one line here. An R on a net as a pull-up, a divider leg or a load
+//!   is not a series element between the drivers and joins nothing, and a net
+//!   that two resistors reach is a junction, not a hop.
 //!
 //! ## What it deliberately does not reach
 //!
@@ -97,6 +100,7 @@
 
 use super::is_unconnected_net;
 use super::pin_mux::{receive_pads, serial_pin, uart_pad, UartPad};
+use super::signal_direction::series::SeriesLinks;
 use super::signal_direction::{classify, Dir, Member};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -275,25 +279,42 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
 #[must_use]
 pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-
-    let net_name: HashMap<i64, &str> = board.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
-
+    let links = SeriesLinks::of(board);
+    // The drivers by line: a net behind a series resistor joins the net on its
+    // other side.
+    let mut by_line: BTreeMap<i64, Vec<Driver>> = BTreeMap::new();
     for (id, drivers) in scan(board, lib).by_net {
+        by_line.entry(links.line(id)).or_default().extend(drivers);
+    }
+
+    for (line, drivers) in by_line {
         let refs: BTreeSet<&str> = drivers.iter().map(|d| d.reference.as_str()).collect();
         if refs.len() < 2 {
             continue; // one part driving its own net is not an inter-part fight
         }
-        let name = net_name.get(&id).copied().unwrap_or("").to_string();
+        let names = links.names(board, line);
+        let name = names.first().cloned().unwrap_or_default();
         let listed: Vec<String> = drivers
             .iter()
             .map(|d| format!("{}.{} ({})", d.reference, d.pad, d.role))
             .collect();
+        let (lead, between) = match (links.link(line), names.as_slice()) {
+            (Some(link), [first, second]) => (
+                format!(
+                    "net '{first}' (wired through the series resistor {} to net '{second}')",
+                    link.describe()
+                ),
+                "only a series resistor between them, which limits the current of the fight \
+                 and does not end it",
+            ),
+            _ => (format!("net '{name}'"), "no series element between them"),
+        };
         report.findings.push(LintFinding {
             check: LintCheck::OutputContention,
             severity: Severity::High,
             message: format!(
-                "net '{name}' is driven by {} modelled push-pull outputs of {} different parts with \
-                 no series element between them: {}. Two outputs driving one net fight: whichever \
+                "{lead} is driven by {} modelled push-pull outputs of {} different parts with \
+                 {between}: {}. Two outputs driving one net fight: whichever \
                  one wins, the net sits at an indeterminate level, both parts pass current well \
                  outside their output ratings, and the simulation reports a mid-rail number that \
                  looks like data. Check the schematic for a genuine short, and check the model \
@@ -305,7 +326,7 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 listed.join(", ")
             ),
             refs: refs.iter().map(std::string::ToString::to_string).collect(),
-            nets: vec![name],
+            nets: names,
         });
     }
 
@@ -364,8 +385,8 @@ fn bound_transmit_pads<'a>(
 
 /// Whether the line is serial: named for a serial port, or a fitted
 /// non-MCU, non-connector part on it has a serial pin.
-fn is_serial_line(name: &str, members: &[(&Component, &Pin)], cards: &Cards<'_>) -> bool {
-    names_a_uart(name)
+fn is_serial_line(names: &[String], members: &[(&Component, &Pin)], cards: &Cards<'_>) -> bool {
+    names.iter().any(|n| names_a_uart(n))
         || members.iter().any(|(c, p)| {
             let card = cards.get(c.reference.as_str()).copied();
             !is_connector_like(c)
@@ -422,8 +443,14 @@ fn other_transmitters(
     (found, released)
 }
 
-/// The finding for a serial line `net` joined by `found` transmitters.
-fn transmit_finding(net: &str, found: &[Transmitter], model: &ModelEntry) -> LintFinding {
+/// The finding for a serial line, opened by `lead` (`net 'A'`), joined by `found`
+/// transmitters.
+fn transmit_finding(
+    lead: &str,
+    nets: Vec<String>,
+    found: &[Transmitter],
+    model: &ModelEntry,
+) -> LintFinding {
     let refs: BTreeSet<&str> = found.iter().map(|t| t.reference.as_str()).collect();
     let listed: Vec<&str> = found.iter().map(|t| t.text.as_str()).collect();
     let receive = receive_pads(model);
@@ -439,7 +466,7 @@ fn transmit_finding(net: &str, found: &[Transmitter], model: &ModelEntry) -> Lin
         check: LintCheck::OutputContention,
         severity: Severity::High,
         message: format!(
-            "net '{net}' joins {} UART transmitters: {}. A UART transmit pad drives its \
+            "{lead} joins {} UART transmitters: {}. A UART transmit pad drives its \
              line push-pull, so two of them on one wire fight whenever their levels \
              differ, and neither hears the other: the link cannot work (TX must go to \
              the other side's RX). {move_to}. If the firmware never enables the hardware \
@@ -449,7 +476,7 @@ fn transmit_finding(net: &str, found: &[Transmitter], model: &ModelEntry) -> Lin
             hauksbee_ir::vocabulary::names_summary(&listed),
         ),
         refs: refs.iter().map(|r| (*r).to_owned()).collect(),
-        nets: vec![net.to_owned()],
+        nets,
     }
 }
 
@@ -496,9 +523,11 @@ fn distinct_parts<'a>(board: &'a ExtractedBoard, found: &'a [Transmitter]) -> Ve
     parts
 }
 
-/// Flag every serial line that carries two transmitters: an MCU pad bound to
-/// UART transmit beside another MCU's transmit pad or another part's transmit
-/// pin typed an output. See the module docs.
+/// Flag every serial line that carries two transmitters.
+///
+/// An MCU pad bound to UART transmit beside another MCU's transmit pad or another
+/// part's transmit pin typed an output. A line includes the net on the far side of
+/// one small series resistor. See the module docs.
 #[must_use]
 pub fn transmit_contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
@@ -507,13 +536,22 @@ pub fn transmit_contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> N
         .iter()
         .map(|(c, m)| (c.reference.as_str(), m))
         .collect();
+    let links = SeriesLinks::of(board);
+    let mut by_line: BTreeMap<i64, Vec<BoundPad<'_>>> = BTreeMap::new();
     for (net, pads) in bound_transmit_pads(&resolved) {
-        let Some(n) = board.net(net) else { continue };
-        if super::is_ground_name(&n.name) || is_unconnected_net(&n.name) {
+        by_line.entry(links.line(net)).or_default().extend(pads);
+    }
+    for (line, pads) in by_line {
+        let names = links.names(board, line);
+        if names.is_empty()
+            || names
+                .iter()
+                .any(|n| super::is_ground_name(n) || is_unconnected_net(n))
+        {
             continue;
         }
-        let members = board.net_members(net);
-        if !is_serial_line(&n.name, &members, &cards) {
+        let members = links.members(board, line);
+        if !is_serial_line(&names, &members, &cards) {
             continue;
         }
         let mut found: Vec<Transmitter> = pads
@@ -534,9 +572,16 @@ pub fn transmit_contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> N
         found.extend(others);
         let parts = distinct_parts(board, &found);
         if parts.len() >= 2 && !released {
+            let lead = match (links.link(line), names.as_slice()) {
+                (Some(link), [first, second]) => format!(
+                    "net '{first}' (wired through the series resistor {} to net '{second}')",
+                    link.describe()
+                ),
+                _ => format!("net '{}'", names[0]),
+            };
             report
                 .findings
-                .push(transmit_finding(&n.name, &found, pads[0].2));
+                .push(transmit_finding(&lead, names, &found, pads[0].2));
         }
     }
     report
@@ -947,5 +992,108 @@ mod tests {
         let mut dnp = gps_tx("output");
         dnp.dnp = true;
         silent(vec![mcu("U1", &[("3", LINK)]), dnp], "dnp");
+    }
+
+    fn resistor(reference: &str, value: &str, a: i64, b: i64) -> Component {
+        Component {
+            lib_id: "Device:R".into(),
+            ..part(reference, value, &[("1", a), ("2", b)])
+        }
+    }
+
+    /// Two push-pull outputs behind one small series resistor are still wired to
+    /// each other: the resistor limits the fight's current, not the fight.
+    #[test]
+    fn two_outputs_behind_a_series_resistor_fight() {
+        let nets = [
+            (1, "A"),
+            (2, "B"),
+            (3, "Y_AND"),
+            (4, "Y_OR"),
+            (5, "+3V3"),
+            (6, "GND"),
+        ];
+        let wired = |value: &str, far: i64| {
+            let b = board(
+                &nets,
+                vec![
+                    comp("U1", "74HC08", &[("1", 1), ("2", 2), ("3", 3)]),
+                    comp("U2", "74HC32", &[("1", 1), ("2", 2), ("3", far)]),
+                    resistor("R1", value, 3, 4),
+                ],
+            );
+            run(&b).findings
+        };
+        let found = wired("100", 4);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].check, LintCheck::OutputContention);
+        assert_eq!(found[0].nets, ["Y_AND", "Y_OR"]);
+        assert_eq!(found[0].refs, ["U1", "U2"]);
+        assert!(
+            found[0].message.contains("R1 (100 Ω)"),
+            "{}",
+            found[0].message
+        );
+        assert!(found[0].message.contains("series resistor"));
+        // Too large to be a series element, or a pull to a rail: not one wire.
+        assert!(wired("47k", 4).is_empty());
+        let pulled = board(
+            &nets,
+            vec![
+                comp("U1", "74HC08", &[("1", 1), ("2", 2), ("3", 3)]),
+                comp("U2", "74HC32", &[("1", 1), ("2", 2), ("3", 4)]),
+                resistor("R1", "100", 3, 5),
+                resistor("R2", "100", 4, 6),
+            ],
+        );
+        assert!(run(&pulled).findings.is_empty());
+    }
+
+    /// An AVR's TXD pad facing a module's TXD pin through 100 ohms: the same
+    /// transmit fight as on a bare wire, found across the resistor.
+    #[test]
+    fn a_transmit_pad_facing_a_transmit_pin_through_a_resistor_is_contention() {
+        let nets = [(LINK, "MCU_TX"), (2, "GPS_TX"), (3, "+3V3"), (4, "GND")];
+        let wired = |value: &str| {
+            let b = board(
+                &nets,
+                vec![
+                    mcu("U1", &[("3", LINK)]),
+                    serial_part("U2", &[("1", "TXD", "output", 2)]),
+                    resistor("R1", value, LINK, 2),
+                ],
+            );
+            transmit(&b)
+        };
+        let found = wired("100");
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].refs, ["U1", "U2"]);
+        assert_eq!(found[0].nets, ["MCU_TX", "GPS_TX"]);
+        assert!(
+            found[0].message.contains("R1 (100 Ω)"),
+            "{}",
+            found[0].message
+        );
+        // Controls: a divider-sized resistor, and the GPS's TXD into the RXD pad.
+        assert!(wired("22k").is_empty());
+        let rx = board(
+            &nets,
+            vec![
+                mcu("U1", &[("2", LINK)]),
+                serial_part("U2", &[("1", "TXD", "output", 2)]),
+                resistor("R1", "100", LINK, 2),
+            ],
+        );
+        assert!(transmit(&rx).is_empty());
+        // A pull-up on the line to a rail is not a hop.
+        let pull = board(
+            &nets,
+            vec![
+                mcu("U1", &[("3", LINK)]),
+                serial_part("U2", &[("1", "TXD", "output", 2)]),
+                resistor("R1", "10k", LINK, 3),
+            ],
+        );
+        assert!(transmit(&pull).is_empty());
     }
 }
