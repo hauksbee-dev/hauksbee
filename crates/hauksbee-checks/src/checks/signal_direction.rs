@@ -491,12 +491,26 @@ fn bind_alternate_functions(
         .collect();
     for (i, want) in wanted.iter().enumerate() {
         let Some(want) = *want else { continue };
+        // A UART table lists what a pad can do, not what the firmware picked: a
+        // pad read as a UART line faces a UART line, never a plain logic input
+        // that a GPIO or timer output on the same pad would drive.
+        let pad = pins[i].1;
+        let ethernet = models
+            .get(pins[i].0.reference.as_str())
+            .and_then(|m| m.pins.get(&pad.number))
+            .is_some_and(|r| ethernet_direction(&r.to_ascii_lowercase()).is_some())
+            || pad
+                .function
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .any(|t| ethernet_direction(t).is_some());
         let facing = pins.iter().any(|(c, p, _)| {
+            let model = models.get(c.reference.as_str());
             c.reference != pins[i].0.reference
-                && models
-                    .get(c.reference.as_str())
-                    .and_then(|m| card_dir(m, &p.number))
-                    == Some(want)
+                && model.and_then(|m| card_dir(m, &p.number)) == Some(want)
+                && (ethernet
+                    || uart_pin_role(p).is_some()
+                    || model
+                        .is_some_and(|m| !matches!(uart_pad(m, &p.number, true), UartPad::Neither)))
         });
         if facing {
             pins[i].2 = want;
@@ -775,6 +789,24 @@ unlocked_by = "validated behavior"
 "3" = "pa0"
 "4" = "gnd"
 "5" = "vdd"
+"6" = "pa10_usart1_rx"
+
+[[models]]
+id = "buffer_x"
+kind = "digital"
+description = "synthetic non-inverting buffer"
+[models.match]
+value_re = "^BUFFER_X$"
+[models.pins]
+"1" = "a"
+"2" = "y"
+"3" = "gnd"
+"4" = "vcc"
+[models.logic]
+inputs = ["a"]
+outputs = ["y"]
+[models.logic.comb]
+"y" = "a"
 "#;
 
     fn card_part(reference: &str, value: &str, pads: &[(&str, i64, &str)]) -> Component {
@@ -969,6 +1001,26 @@ unlocked_by = "validated behavior"
             resistor("R1", "1k", 1, 2),
         ];
         assert!(run_with(&lib, &AVR_NETS, parts).is_empty());
+    }
+
+    /// A pad the card can use as a UART receive line, wired to a buffer's input:
+    /// a GPIO or timer output on the same pad drives it, so nothing is wrong.
+    /// The same pad facing the bridge's `RXD` is RX to RX.
+    #[test]
+    fn a_uart_capable_pad_driving_a_plain_logic_input_is_not_read_as_uart() {
+        let lib = library("uart_gpio", CARDS);
+        let nets = [(1, "BTM_LIGHT")];
+        let mcu = || card_part("U1", "CORTEX_X", &[("6", 1, "PA10")]);
+        let buffer = card_part("U2", "BUFFER_X", &[("1", 1, "A")]);
+        assert!(run_with(&lib, &nets, vec![mcu(), buffer]).is_empty());
+        let bridge = card_part("U2", "BRIDGE_X", &[("2", 1, "RXD")]);
+        let found = run_with(&lib, &nets, vec![mcu(), bridge]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("only inputs"),
+            "{}",
+            found[0].message
+        );
     }
 
     /// A Cortex-M's RMII transmit-enable pad through 22 ohms into a pin the PHY's
