@@ -2613,9 +2613,19 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             // a symbol or description that says TVS) is bidirectional or clamps
             // in a way no one-way signal diode stands in for. Held to a 1N4148
             // curve with a guessed pad map it would read as a diode forward
-            // biased straight across the rail it protects, so it stays unmodelled.
+            // biased straight across the rail it protects. It is bound
+            // high-impedance instead (off below its stand-off, which is where a
+            // working board runs it), so no current path is called unmodelled.
             if marks_tvs_or_esd(comp) {
-                return None;
+                return Some(make_entry(
+                    "esd_protector_fallback",
+                    ComponentKind::Ignore,
+                    "ESD / TVS protector (engine fallback: open circuit below its \
+                     stand-off; the clamp and its rating are not modelled; put the \
+                     ordering code on the component to replace it)",
+                    hauksbee_models::Params::default(),
+                    BTreeMap::new(),
+                ));
             }
             let zener = zener_mark(comp);
             if matches!(zener, ZenerMark::Unstated) {
@@ -13411,18 +13421,22 @@ style = "i2c_pointer"
             ..comp(reference, value)
         };
         // By part number, by symbol, and by description.
+        let inert = |c: &Component| {
+            let entry = fallback_entry(c).expect("a protector binds");
+            assert_eq!(entry.id, "esd_protector_fallback", "{}", c.value);
+            assert_eq!(entry.kind, ComponentKind::Ignore, "{}", c.value);
+        };
         for (reference, value, lib_id) in [
             ("U5", "TPD1E10B06DPYR", "Power_Protection:TPD1E10B06"),
             ("D6", "PESD5V0S1BL", "Device:D"),
             ("D7", "ProtectorX", "Device:D_TVS"),
             ("D8", "ZZ9000", "Device:D_ESD"),
         ] {
-            let found = fallback_entry(&part(reference, value, lib_id));
-            assert!(found.is_none(), "{value}: {found:?}");
+            inert(&part(reference, value, lib_id));
         }
         let mut described = part("D9", "ZZ9000", "Device:D");
         described.properties = vec![("Description".into(), "Bidirectional ESD protection".into())];
-        assert!(fallback_entry(&described).is_none());
+        inert(&described);
         // Controls: a rectifier on the same footprint and a plain diode keep the guess.
         for (reference, value) in [("D1", "SS14"), ("U6", "1N4148W"), ("D2", "D")] {
             let entry = fallback_entry(&part(reference, value, "Device:D"))

@@ -1169,17 +1169,26 @@ fn is_zero_ohm_in_capacitor_position(c: &Component) -> bool {
     if !ohmic || v.si > 0.0 || crate::dnp::is_jumper_or_net_tie(c) {
         return false;
     }
-    let symbol = c
-        .lib_id
-        .rsplit(':')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let resistor_symbol = symbol == "r"
-        || symbol.starts_with("r_")
-        || symbol.contains("resistor")
-        || symbol.starts_with("zero");
-    !(resistor_symbol || footprint_family(&c.footprint) == Some('R'))
+    // A resistor symbol or package in a C-designated slot (`Device:R`,
+    // `resistor:R0603`, `R_0402`) is a deliberate 0 ohm option, not a capacitor.
+    let names_resistor = |name: &str| {
+        let leaf = name
+            .rsplit([':', '/'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut chars = leaf.chars();
+        leaf.contains("resistor")
+            || leaf.starts_with("res")
+            || leaf == "r"
+            || leaf.starts_with("r_")
+            || leaf.starts_with("r-")
+            || (chars.next() == Some('r') && chars.next().is_some_and(|d| d.is_ascii_digit()))
+    };
+    !(names_resistor(&c.lib_id)
+        || c.lib_id.to_ascii_lowercase().contains("resistor")
+        || names_resistor(&c.footprint)
+        || footprint_family(&c.footprint) == Some('R'))
 }
 
 fn footprint_family(footprint: &str) -> Option<char> {
@@ -1400,9 +1409,9 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
                 message: format!(
                     "{} is a capacitor position fitted with a 0 ohm link (value '{}'): a link \
                      ties its two nets together at DC, so it blocks nothing and filters nothing. \
-                     Confirm a link was intended; an AC-coupling, decoupling or filter position \
-                     needs a capacitor. If the position is a deliberate 0 ohm option, mark it \
-                     do-not-populate or draw it as a resistor.",
+                     {REMEDY_MARKER}Fit the capacitor the position needs (AC-coupling, decoupling \
+                     and filter positions need one). If a 0 ohm link is intended, mark the \
+                     position do-not-populate or draw it as a resistor.",
                     c.reference, c.value
                 ),
                 refs: vec![c.reference.clone()],
@@ -4546,6 +4555,9 @@ mod zero_ohm_capacitor_position_tests {
         // A zero-ohm option drawn as a resistor in a C-designated slot is deliberate.
         let resistor = comp("C3", "0R", "Device:R", "Resistor_SMD:R_0402_1005Metric");
         assert!(zero_ohm_findings(vec![resistor]).is_empty());
+        // The same in an Eagle library: a resistor package under a C designator.
+        let eagle = comp("C5", "0R", "resistor:R0603", "R0603");
+        assert!(zero_ohm_findings(vec![eagle]).is_empty());
         // A solder jumper or net tie is a link by class.
         let jumper = comp(
             "C4",
