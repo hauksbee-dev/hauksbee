@@ -16,6 +16,7 @@
 
 mod bexpr;
 pub mod boot;
+pub mod connector_pinouts;
 pub mod debug;
 pub mod docs_url;
 pub mod evidence;

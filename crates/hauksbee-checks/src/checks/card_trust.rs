@@ -82,6 +82,8 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::PartFieldMismatch
         | LintCheck::SignalDirection
         | LintCheck::DebugHeaderPinout
+        | LintCheck::BusLineSwap
+        | LintCheck::UsbCcTermination
         | LintCheck::SwitchShort => None,
     }
 }
