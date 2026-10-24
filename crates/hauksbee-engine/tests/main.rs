@@ -128,6 +128,8 @@ mod failed_chunk_reason;
 mod faults;
 #[path = "findings_complete.rs"]
 mod findings_complete;
+#[path = "floating_pad_cosim.rs"]
+mod floating_pad_cosim;
 #[path = "generic_led_corners.rs"]
 mod generic_led_corners;
 #[path = "generic_mosfet_corner_check.rs"]

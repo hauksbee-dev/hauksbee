@@ -23,6 +23,7 @@
 
 pub mod boot;
 pub mod engine;
+pub mod envelope;
 pub mod error_budget;
 pub mod execution;
 mod influence;
