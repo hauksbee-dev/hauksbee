@@ -172,6 +172,12 @@ pub struct ModelEntry {
     /// the supply-capacitance check against the capacitors on that net.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supply_cap: Vec<SupplyCap>,
+    /// `[[models.input_dc_path]]`: an analog input pin the part biases
+    /// internally, so a coupling capacitor in front of it still has a DC level
+    /// (a class-D or audio amplifier input, an instrumentation amplifier's
+    /// bias network). Read by the no-DC-path check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_dc_path: Vec<InputDcPath>,
     /// `[models.strap_latch]`, `[models.reset_input]`, `[[models.boot_inputs]]`,
     /// `[[models.boot_modes]]`, `[models.qemu_boot]`: the vendor's boot-mode
     /// table, which the co-simulator resolves against the solved board at
@@ -2089,6 +2095,41 @@ pub struct SupplyCap {
     /// What the capacitor is for and its type or voltage-rating conditions.
     #[serde(default)]
     pub note: String,
+    /// The load the datasheet states this figure for ("for the USB application,
+    /// each downstream facing port requires at least 120 uF"). The row is judged
+    /// only when the pin's net reaches such a load; unset, it applies to every
+    /// board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_when: Option<hauksbee_ir::load_class::LoadClass>,
+}
+
+/// Where an analog input's internal DC path goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DcPathTo {
+    /// To an internal bias voltage (a mid-supply reference).
+    #[default]
+    Bias,
+    /// To ground.
+    Ground,
+    /// To a supply rail.
+    Supply,
+}
+
+/// The internal DC path an analog input pin has (see [`ModelEntry::input_dc_path`]).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputDcPath {
+    /// Pin role of the input.
+    pub role: String,
+    /// What the input is biased to.
+    #[serde(default)]
+    pub to: DcPathTo,
+    /// The path's resistance, ohms, when the datasheet gives an input impedance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ohms: Option<f64>,
+    /// The datasheet table or sentence, with page, the path is read from.
+    pub basis: String,
 }
 
 /// The internal (on-die) pull a strap pin has, which determines whether leaving

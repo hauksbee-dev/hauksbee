@@ -25,7 +25,12 @@
 //!
 //! An explicit no-connect flag is not an excuse: a CMOS input marked NC still
 //! floats. The exception is an input the card lists in `logic.pulled_inputs`,
-//! which the datasheet gives an internal pull, so leaving it open is allowed.
+//! which the datasheet gives an internal pull or a stated default when open
+//! (an isolator's `INx`), so leaving it open, flagged or not, is allowed. A
+//! card-bound input of a two-supply-domain part (an isolator, a level
+//! translator) whose value names no CMOS family, on a card that lists no pulls,
+//! is a Low note instead: a silent card is not the datasheet saying the pin
+//! floats.
 //!
 //! The extract-layer `FloatingControlPin` lint already reports a named
 //! enable/reset/chip-select input alone on its net; such a pin is left to it
@@ -57,9 +62,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    control_role, is_capacitor, is_connector_like, is_ground, is_logic_or_switch_ref,
-    is_plain_resistor, is_test_point_or_hole, is_unconnected_net, pin_is_no_connect, Component,
-    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
+    control_role, drives_a_level, is_capacitor, is_connector_like, is_ground,
+    is_logic_or_switch_ref, is_plain_resistor, is_test_point_or_hole, is_unconnected_net,
+    pin_is_no_connect, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin,
+    Severity,
 };
 use hauksbee_models::netclass::may_be_supply;
 use hauksbee_models::refdes::{designator, RefClass};
@@ -129,6 +135,11 @@ struct InputPin<'a> {
     role: Option<String>,
     /// An op-amp or comparator input: judged only when wholly open.
     analog: bool,
+    /// A card-bound input of a two-supply-domain part (an isolator or level
+    /// translator) whose value names no CMOS family, on a card that lists no
+    /// internal pull: such parts often define an open input, and the silent card
+    /// is not the datasheet saying it floats.
+    unverified: bool,
 }
 
 /// Bipolar logic keeps its TTL pull-up input: 74LS, 74ALS, 74S, 74F, 74ABT,
@@ -144,6 +155,23 @@ fn is_bipolar_value(value: &str) -> bool {
     ]
     .iter()
     .any(|p| core.starts_with(p))
+}
+
+/// Whether the card has two supply domains (`vcc1`/`vcc2`, `vcca`/`vccb`,
+/// `vdd1`/`vdd2`): an isolator or a level translator, whose input defaults when
+/// open are part-specific rather than the CMOS norm.
+fn has_two_supply_domains(model: &ModelEntry) -> bool {
+    let domains: BTreeSet<String> = model
+        .pins
+        .values()
+        .map(|r| r.to_ascii_lowercase())
+        .filter(|r| {
+            r.strip_prefix("vcc")
+                .or_else(|| r.strip_prefix("vdd"))
+                .is_some_and(|tail| matches!(tail, "1" | "2" | "a" | "b"))
+        })
+        .collect();
+    domains.len() >= 2
 }
 
 /// The input pads of a logic part: card `logic.inputs` roles mapped through
@@ -176,6 +204,9 @@ fn input_pins<'a>(
             (Some(m), Some(r)) => m.logic.pulled_inputs.iter().any(|p| p == r),
             _ => false,
         };
+        let unverified = card_only
+            && role.is_some()
+            && card.is_some_and(|m| m.logic.pulled_inputs.is_empty() && has_two_supply_domains(m));
         let label = if !pin.function.trim().is_empty() {
             display_name(&pin.function)
         } else if let Some(r) = role {
@@ -189,6 +220,7 @@ fn input_pins<'a>(
             pull_allowed,
             role: role.cloned(),
             analog: false,
+            unverified,
         });
     }
     out
@@ -215,6 +247,7 @@ fn analog_input_pins<'a>(comp: &'a Component, model: &ModelEntry) -> Vec<InputPi
                 pull_allowed: false,
                 role: Some(role.clone()),
                 analog: true,
+                unverified: false,
             })
         })
         .collect()
@@ -426,7 +459,7 @@ impl Classifier<'_> {
                     return (true, Vec::new());
                 }
                 weak.push(Weak::new(WeakKind::Switch, at));
-            } else if is_connector_like(o) {
+            } else if is_connector_like(o) && !drives_a_level(o, q) {
                 if o.pins.len() <= 3 && self.selects_between_rails(o, q) {
                     return (true, Vec::new());
                 }
@@ -554,6 +587,37 @@ fn open_inputs_finding(
         severity: Severity::High,
         message: format!(
             "{} {}: {} {} {} unconnected (no driver, pull resistor or other connection); CMOS inputs must not float. A floating input reads random levels and can draw shoot-through current; tie each one high or low, or drive it.{nc_note}",
+            comp.reference,
+            comp.value,
+            if open.len() == 1 { "input" } else { "inputs" },
+            names,
+            if open.len() == 1 { "is" } else { "are" },
+        ),
+        refs: vec![comp.reference.clone()],
+        nets,
+    }
+}
+
+/// A card-bound part's inputs left open when its card says nothing about an
+/// internal pull or a default: a note to confirm, not a fault.
+fn open_unverified_finding(
+    board: &ExtractedBoard,
+    comp: &Component,
+    open: &[&InputPin<'_>],
+) -> LintFinding {
+    let names = compress_labels(open.iter().map(|p| p.label.as_str()));
+    let nets: Vec<String> = open
+        .iter()
+        .filter_map(|p| p.pin.net.and_then(|id| board.net(id)))
+        .map(|n| n.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    LintFinding {
+        check: LintCheck::FloatingInput,
+        severity: Severity::Low,
+        message: format!(
+            "{} {}: {} {} {} unconnected, and the part's model card does not say whether the input has an internal pull or a default when open. Some parts (isolators, level translators) define an open input; confirm that in the datasheet, or tie it high or low.",
             comp.reference,
             comp.value,
             if open.len() == 1 { "input" } else { "inputs" },
@@ -795,9 +859,9 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         let mut analog_open: Vec<&InputPin<'_>> = Vec::new();
         let mut may: Vec<(&InputPin<'_>, Vec<Weak>)> = Vec::new();
         for p in pins {
-            if (p.pull_allowed && pin_is_no_connect(p.pin))
-                || control_lint_covers(board, comp, p.pin)
-            {
+            // An input the card gives an internal pull or a stated default when
+            // open is a documented state, flagged no-connect or not.
+            if p.pull_allowed || control_lint_covers(board, comp, p.pin) {
                 continue;
             }
             match classify.hold(comp, p.pin) {
@@ -837,10 +901,17 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
                 .or_default()
                 .push((*comp, assumed));
         }
+        let (unverified, open): (Vec<&InputPin<'_>>, Vec<&InputPin<'_>>) =
+            open.into_iter().partition(|p| p.unverified);
         if !open.is_empty() {
             report
                 .findings
                 .push(open_inputs_finding(board, comp, &open));
+        }
+        if !unverified.is_empty() {
+            report
+                .findings
+                .push(open_unverified_finding(board, comp, &unverified));
         }
         if !may.is_empty() {
             report
@@ -1651,6 +1722,125 @@ mod tests {
             &ModelLibrary::builtin(),
         );
         assert!(driven.is_clean(), "{:?}", driven.findings);
+    }
+
+    /// A two-supply-domain digital isolator card (`vcc1`/`vcc2`), with the
+    /// pull lines in `logic` and the value `ISOTEST`.
+    fn isolator_lib(tag: &str, pulled: &str) -> ModelLibrary {
+        let dir = hauksbee_testkit::fresh_scratch_dir("floating_inputs", tag);
+        let toml_src = format!(
+            r#"
+[[models]]
+id = "iso_test"
+kind = "digital"
+description = "test 2-channel isolator"
+
+[models.match]
+value_re = "(?i)^ISOTEST$"
+
+[models.pins]
+"1" = "vcc1"
+"2" = "ina"
+"3" = "inb"
+"4" = "gnd1"
+"5" = "gnd2"
+"6" = "outa"
+"7" = "outb"
+"8" = "vcc2"
+
+[models.logic]
+inputs = ["ina", "inb"]
+outputs = ["outa", "outb"]
+{pulled}
+[models.logic.comb]
+outa = "ina"
+outb = "inb"
+"#
+        );
+        std::fs::write(dir.join("m.toml"), toml_src).unwrap();
+        let mut lib = ModelLibrary::empty();
+        let errs = lib.load_user_dir(&dir);
+        assert!(errs.is_empty(), "test model must load: {errs:?}");
+        lib
+    }
+
+    /// The isolator with INA on net 9 (left open) and INB driven by an MCU.
+    fn isolator_board(ina_kind: &str) -> ExtractedBoard {
+        let u1 = Component {
+            reference: "U1".into(),
+            value: "ISOTEST".into(),
+            lib_id: "Isolator:ISOTEST".into(),
+            pins: vec![
+                pin("1", Some(2), "VCC1", "power_in"),
+                pin("2", Some(9), "INA", ina_kind),
+                pin("3", Some(4), "INB", "input"),
+                pin("4", Some(1), "GND1", "power_in"),
+                pin("5", Some(1), "GND2", "power_in"),
+                pin("6", Some(5), "OUTA", "output"),
+                pin("7", Some(6), "OUTB", "output"),
+                pin("8", Some(2), "VCC2", "power_in"),
+            ],
+            ..Default::default()
+        };
+        board(
+            vec![u1, mcu_driving(&[4])],
+            &[
+                (4, "DRIVE"),
+                (5, "OA"),
+                (6, "OB"),
+                (9, "unconnected-(U1-INA)"),
+            ],
+        )
+    }
+
+    #[test]
+    fn an_isolator_input_with_a_card_default_may_be_left_open() {
+        // The card lists INA as having an internal default when open: silent,
+        // flagged no-connect or not.
+        for kind in ["input+no_connect", "input"] {
+            let lib = isolator_lib("pulled", "pulled_inputs = [\"ina\"]");
+            let report = floating_input_lint(&isolator_board(kind), &lib);
+            assert!(report.is_clean(), "{kind}: {:?}", report.findings);
+        }
+        // Control: INB is not listed, and a driven INB stays quiet while an
+        // open INB is judged like any other (the card lists pulls, so it is firm).
+        let lib = isolator_lib("pulled-other", "pulled_inputs = [\"inb\"]");
+        let report = floating_input_lint(&isolator_board("input+no_connect"), &lib);
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert_eq!(report.findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn a_silent_two_domain_card_makes_an_open_input_a_note_but_a_74hc_gate_stays_serious() {
+        // The card lists no pulls and the part has two supply domains: the card
+        // does not say what an open input does, so it is a Low note to confirm.
+        let lib = isolator_lib("silent", "");
+        let report = floating_input_lint(&isolator_board("input+no_connect"), &lib);
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        let f = &report.findings[0];
+        assert_eq!(f.severity, Severity::Low);
+        assert!(f.message.contains("does not say"), "{}", f.message);
+        // Control: a 74HC gate with an input left open is still a fault.
+        let gate = Component {
+            reference: "U2".into(),
+            value: "74HC00".into(),
+            lib_id: "74xx:74HC00".into(),
+            pins: vec![
+                pin("1", Some(9), "1A", "input"),
+                pin("2", Some(4), "1B", "input"),
+                pin("3", Some(5), "1Y", "output"),
+                pin("7", Some(1), "GND", "power_in"),
+                pin("14", Some(2), "VCC", "power_in"),
+            ],
+            ..Default::default()
+        };
+        let b = board(
+            vec![gate, mcu_driving(&[4])],
+            &[(4, "DRIVE"), (5, "OA"), (9, "Net-(U2-Pad1)")],
+        );
+        let r = floating_input_lint(&b, &ModelLibrary::builtin());
+        assert_eq!(r.findings.len(), 1, "{:?}", r.findings);
+        assert_eq!(r.findings[0].severity, Severity::High);
     }
 
     #[test]

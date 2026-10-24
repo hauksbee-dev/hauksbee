@@ -335,7 +335,64 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
         ComponentKind::Vreg => vreg_needs(entry, &mut out),
         _ => {}
     }
+    open_input_needs(entry, text, &mut out);
+    analog_input_needs(entry, text, &mut out);
     out
+}
+
+/// The datasheet states what an input does when left open: an internal pull or
+/// a default ("when `INx` is open, the output goes to its default state", "H or
+/// open", "internal pull-up").
+static OPEN_INPUT_STATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)\b(?:[HL]\s+or\s+open|open\s+or\s+[HL])\b|internal(?:ly)?\s+(?:weak\s+)?pull[- ]?(?:up|down)|\bis\s+open\b[^.]{0,120}\bdefault\b|\bdefault\b[^.]{0,120}\b(?:when|if)\b[^.]{0,40}\bopen\b",
+    )
+    .expect("open-input regex")
+});
+
+/// An analog input pin's datasheet table prints an input impedance row.
+static INPUT_IMPEDANCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\binput\s+(?:impedance|resistance)\b").expect("input-impedance regex")
+});
+
+/// An amplifier card with analog inputs must say whether the part biases them
+/// internally (an audio or class-D amplifier input behind a coupling
+/// capacitor), or the no-DC-path check cannot tell it from a bare op-amp input.
+fn analog_input_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
+    let analog = entry.pins.values().any(|r| {
+        let r = r.to_ascii_lowercase();
+        r.starts_with("in_plus") || r.starts_with("in_minus")
+    });
+    if !analog || !INPUT_IMPEDANCE.is_match(text) {
+        return;
+    }
+    out.push(Need {
+        key: "input_dc_path".into(),
+        ask: "[[models.input_dc_path]] role/to/ohms for each analog input the part biases \
+              internally (the datasheet's input impedance is a resistance to a bias, ground or \
+              supply, as for an audio or class-D amplifier); a plain high-impedance op-amp input \
+              needs none, so say that in an `unknown` record whose reason names the row"
+            .into(),
+        look: "Electrical characteristics (input impedance) / application circuit",
+    });
+}
+
+/// A logic card must record which inputs the datasheet gives an internal pull
+/// or a default when open, or the floating-input check calls an isolator's
+/// open `INx` (documented, supported) a fault.
+fn open_input_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
+    if entry.logic.inputs.is_empty() || !OPEN_INPUT_STATE.is_match(text) {
+        return;
+    }
+    out.push(Need {
+        key: "pulled_inputs".into(),
+        ask: "[models.logic] pulled_inputs listing every input that has an internal pull \
+              resistor or a stated default when open (an isolator's INx, an enable that is \
+              \"H or open\"), by the roles named in `inputs`; an empty list only when the \
+              datasheet says every input must be driven"
+            .into(),
+        look: "Pin functions / function table (open-input default)",
+    });
 }
 
 /// What a card of `kind` needs before any draft exists (the checklist's groups).
@@ -526,6 +583,8 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
                 if pins.iter().any(|p| p.eq_ignore_ascii_case(role)))
         }),
         ("backend", _) => entry.params.get_str("backend").is_some(),
+        ("pulled_inputs", _) => !entry.logic.pulled_inputs.is_empty(),
+        ("input_dc_path", _) => !entry.input_dc_path.is_empty(),
         ("straps", _) => !entry.straps.is_empty(),
         ("adc_pins", _) => entry.adc_declared(),
         ("pin_function", key) => hauksbee_ir::pin_functions::PeripheralFunction::ALL
@@ -559,6 +618,9 @@ fn evidence(key: &str) -> Option<&'static str> {
         "abs_max_v" => r"(?i)absolute\s+maximum\s+ratings",
         "internal_clock" => r"(?i)internal\s+(rc\s+)?oscillator|internal\s+clock|\bRC\s+oscillator",
         "i_shdn_a" => r"(?i)shutdown\s+(supply\s+)?current|\bI\s*_?\s*(SHDN|SD)\b",
+        "pulled_inputs" => {
+            r"(?i)\b(?:[HL]\s+or\s+open|open\s+or\s+[HL])\b|internal(?:ly)?\s+(?:weak\s+)?pull[- ]?(?:up|down)"
+        }
         _ => return None,
     })
 }
@@ -1477,5 +1539,75 @@ value_re = "(?i)^PGLDO$"
         assert!(binding(&entry, &facts)
             .iter()
             .all(|f| !f.message.starts_with("footprint_re")));
+    }
+
+    /// A logic card whose datasheet states an open-input default must list it.
+    #[test]
+    fn an_open_input_default_in_the_datasheet_asks_for_pulled_inputs() {
+        let mut card = ModelEntry {
+            id: "iso".into(),
+            kind: ComponentKind::Digital,
+            ..ModelEntry::default()
+        };
+        card.logic.inputs = vec!["ina".into(), "inb".into()];
+        let want = |text: &str| {
+            needs(&card, text, &[])
+                .into_iter()
+                .any(|n| n.key == "pulled_inputs")
+        };
+        for text in [
+            "Default mode: When INx is open, the corresponding channel output goes to the default logic state.",
+            "EN pins are H or open to enable the outputs",
+            "The inputs have an internal pull-down resistor.",
+        ] {
+            assert!(want(text), "{text}");
+        }
+        // Silent control: a datasheet that states nothing about an open input.
+        assert!(!want(
+            "Recommended operating conditions: VCC 3.0 V to 5.5 V"
+        ));
+        // Once the card lists the pulled inputs, or says it has none to record,
+        // the need is met.
+        let need = needs(&card, "H or open", &[])
+            .into_iter()
+            .find(|n| n.key == "pulled_inputs")
+            .expect("need");
+        assert!(!satisfied(&card, &need));
+        card.logic.pulled_inputs = vec!["ina".into()];
+        assert!(satisfied(&card, &need));
+    }
+
+    /// An amplifier card with an input-impedance row must say whether it biases the input.
+    #[test]
+    fn an_input_impedance_row_asks_for_the_inputs_dc_path() {
+        let mut card = ModelEntry {
+            id: "amp".into(),
+            kind: ComponentKind::Opamp,
+            ..ModelEntry::default()
+        };
+        card.pins.insert("3".into(), "in_plus".into());
+        card.pins.insert("4".into(), "in_minus".into());
+        let want = |card: &ModelEntry, text: &str| {
+            needs(card, text, &[])
+                .into_iter()
+                .any(|n| n.key == "input_dc_path")
+        };
+        assert!(want(&card, "Input impedance, all gains: 100 kOhm"));
+        // Silent control: no input-impedance row, or no analog input pin.
+        assert!(!want(&card, "Supply current 2 mA"));
+        let mut gate = ModelEntry::default();
+        gate.pins.insert("1".into(), "a".into());
+        assert!(!want(&gate, "Input impedance 100 kOhm"));
+        card.input_dc_path.push(crate::schema::InputDcPath {
+            role: "in_plus".into(),
+            to: crate::schema::DcPathTo::Bias,
+            ohms: Some(1.0e5),
+            basis: "p.5".into(),
+        });
+        let need = needs(&card, "Input impedance 100 kOhm", &[])
+            .into_iter()
+            .find(|n| n.key == "input_dc_path")
+            .expect("need still listed");
+        assert!(satisfied(&card, &need));
     }
 }

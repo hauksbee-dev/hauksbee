@@ -847,6 +847,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     check_pin_capability(entry, &mut p);
     check_pin_bias(entry, &mut p);
     check_supply_cap(entry, &mut p);
+    check_input_dc_path(entry, &mut p);
     check_peripheral_limits(entry, &mut p);
 
     // A pin map is a stated fact even on an identity-only card.
@@ -2139,7 +2140,10 @@ fn check_supply_cap(entry: &ModelEntry, p: &mut Problems) {
         });
         p.require(
             !entry.supply_cap[..i].iter().any(|earlier| {
-                &earlier.role == r && earlier.side == row.side && earlier.grade == row.grade
+                &earlier.role == r
+                    && earlier.side == row.side
+                    && earlier.grade == row.grade
+                    && earlier.applies_when == row.applies_when
             }),
             || {
                 format!(
@@ -2179,6 +2183,29 @@ fn check_supply_cap(entry: &ModelEntry, p: &mut Problems) {
                  cout_recommended_f: state the output capacitor once, there"
             )
         });
+    }
+}
+
+/// `[[models.input_dc_path]]`: each row names a real pin, a positive finite
+/// resistance when it gives one, and the datasheet place it comes from.
+fn check_input_dc_path(entry: &ModelEntry, p: &mut Problems) {
+    for row in &entry.input_dc_path {
+        let r = &row.role;
+        p.require(has_role(entry, r), || {
+            not_a_role("[[models.input_dc_path]] role", r)
+        });
+        p.require(!row.basis.trim().is_empty(), || {
+            format!(
+                "[[models.input_dc_path]] '{r}' needs a basis citing the datasheet table and page"
+            )
+        });
+        if let Some(ohms) = row.ohms {
+            p.require(positive_finite(ohms), || {
+                format!(
+                    "[[models.input_dc_path]] '{r}' ohms = {ohms} must be a positive resistance"
+                )
+            });
+        }
     }
 }
 
@@ -3198,6 +3225,7 @@ mod tests {
             min_single_f: None,
             basis: "fixture datasheet p.3".into(),
             note: String::new(),
+            applies_when: None,
         }
     }
 

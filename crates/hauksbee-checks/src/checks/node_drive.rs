@@ -40,8 +40,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use hauksbee_bind::binder::{gpio_of_role, names_a_supply_of_unknown_voltage, power_rail_voltage};
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    is_capacitor, is_connector_like, is_ground, is_test_point_or_hole, is_unconnected_net,
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
+    drives_a_level, is_capacitor, is_connector_like, is_ground, is_test_point_or_hole,
+    is_unconnected_net, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin,
+    Severity,
 };
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
@@ -413,6 +414,10 @@ fn list_text(items: &[&str]) -> String {
 enum Load {
     Capacitor,
     HighZ,
+    /// An op-amp or comparator input whose card says nothing about the input
+    /// (no common-mode range, no internal DC path): high impedance by the pin's
+    /// kind, but not shown to be, so it never raises a fault alone.
+    SilentInput,
     /// A diode cathode: it can charge the node but never drains it.
     ChargeOnly,
     /// Anything that may set or drain the node's level.
@@ -429,11 +434,32 @@ fn classify_load(idx: &Index<'_>, c: &Component, p: &Pin) -> Load {
     if model.kind == ComponentKind::Diode && role == "cathode" {
         return Load::ChargeOnly;
     }
+    let analog_input = matches!(model.kind, ComponentKind::Opamp | ComponentKind::Comparator)
+        && (role.starts_with("in_plus") || role.starts_with("in_minus"));
+    if analog_input {
+        // The card gives the input a DC path of its own (an internally biased
+        // amplifier input): it drains the node.
+        if model
+            .input_dc_path
+            .iter()
+            .any(|d| d.role.eq_ignore_ascii_case(role))
+        {
+            return Load::Other;
+        }
+        // A card that states the input's common-mode range describes a true
+        // op-amp or comparator input; a silent one may be a biased amplifier.
+        let described = model.envelope.iter().any(|e| {
+            matches!(e, hauksbee_models::OperatingEnvelope::InputCommonMode { inputs, .. }
+                if inputs.iter().any(|i| i.eq_ignore_ascii_case(role)))
+        });
+        return if described {
+            Load::HighZ
+        } else {
+            Load::SilentInput
+        };
+    }
     let high_z = match model.kind {
         ComponentKind::Nmos | ComponentKind::Pmos => role == "gate" || is_gate_n(role),
-        ComponentKind::Opamp | ComponentKind::Comparator => {
-            role.starts_with("in_plus") || role.starts_with("in_minus")
-        }
         ComponentKind::AnalogSwitch => role.starts_with("ctrl"),
         ComponentKind::Digital | ComponentKind::ShiftRegister => {
             is_cmos_logic_value(&c.value) && model.logic.inputs.iter().any(|i| i == role)
@@ -458,6 +484,10 @@ struct CapNode {
     name: String,
     caps: BTreeSet<String>,
     others: BTreeSet<String>,
+    /// Whether some high-impedance member is firmly so (a gate, a CMOS input, a
+    /// described op-amp input, a diode cathode) and not only an input the card is
+    /// silent about.
+    firm: bool,
     /// Test pads and connectors that are the island's only way to the
     /// outside, when the island reaches no ground or supply on the board.
     off_board: Option<BTreeSet<String>>,
@@ -542,6 +572,7 @@ fn cap_node_findings(idx: &Index<'_>) -> Vec<LintFinding> {
             name: name.to_string(),
             caps: BTreeSet::new(),
             others: BTreeSet::new(),
+            firm: false,
             off_board: islands.get(&net).cloned(),
         };
         let mut shape = vec![format!("off-board:{}", node.off_board.is_some())];
@@ -549,7 +580,11 @@ fn cap_node_findings(idx: &Index<'_>) -> Vec<LintFinding> {
         for (c, p) in idx.members(net) {
             match classify_load(idx, c, p) {
                 Load::Capacitor => node.caps.insert(c.reference.clone()),
-                Load::HighZ | Load::ChargeOnly => node.others.insert(c.reference.clone()),
+                Load::HighZ | Load::ChargeOnly => {
+                    node.firm = true;
+                    node.others.insert(c.reference.clone())
+                }
+                Load::SilentInput => node.others.insert(c.reference.clone()),
                 Load::Other => {
                     open = true;
                     false
@@ -596,6 +631,33 @@ fn cap_group_finding(nodes: &[CapNode]) -> LintFinding {
             )
         },
     );
+    if !first.firm {
+        // Only inputs whose card says nothing about them: the amplifier may bias
+        // them internally, so name the doubt instead of a fault.
+        return LintFinding {
+            check: LintCheck::CapNoDcPath,
+            severity: Severity::Low,
+            message: format!(
+                "{subject} {held}, and the card for the input does not say whether the part biases \
+                 it internally: an internally biased amplifier input sets its own DC level behind a \
+                 coupling capacitor, a plain op-amp or comparator input does not. Confirm the \
+                 input's DC path in the datasheet; if there is none, add a bias resistor to a \
+                 reference or ground.",
+            ),
+            refs: nodes
+                .iter()
+                .flat_map(|n| n.caps.iter().chain(&n.others))
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            nets: names
+                .iter()
+                .take(MAX_NETS)
+                .map(|n| (*n).to_string())
+                .collect(),
+        };
+    }
     let (severity, message) = first.off_board.as_ref().map_or_else(
         || {
             (
@@ -686,13 +748,13 @@ fn sink_of(model: &ModelEntry, role: &str) -> Option<Sink> {
 }
 
 /// What a node feeds, keyed by (net, input kind): the driver pins, the
-/// input-bearing parts, and whether a part is not a regulator.
-type NodeInputs = (BTreeSet<String>, BTreeSet<String>, bool);
+/// input-bearing parts, whether a part is not a regulator, and the pads of a
+/// plug-in module that drive the node (its level at boot is the module's).
+type NodeInputs = (BTreeSet<String>, BTreeSet<String>, bool, BTreeSet<String>);
 
-/// MOSFET gates, analog-switch selects and enable inputs held only by MCU or
-/// connector pins, one finding per node: the inputs a node feeds share one
-/// cause and one fix.
-fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
+/// The nodes whose gate, select or enable inputs only MCU, connector or module
+/// pins hold, keyed by (net, input kind).
+fn floating_gate_nodes(idx: &Index<'_>) -> BTreeMap<(i64, Sink), NodeInputs> {
     let mut nodes: BTreeMap<(i64, Sink), NodeInputs> = BTreeMap::new();
     for c in &idx.board.components {
         let Some(model) = idx.model(c) else { continue };
@@ -708,6 +770,7 @@ fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
                 continue;
             }
             let mut drivers = BTreeSet::new();
+            let mut modules = BTreeSet::new();
             let mut defined = false;
             for (o, q) in idx.members(net) {
                 if std::ptr::eq(*o, c) && std::ptr::eq(*q, p) {
@@ -722,25 +785,35 @@ fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
                         .model(o)
                         .zip(idx.role(o, q))
                         .is_some_and(|(m, r)| sink_of(m, r) == Some(Sink::Enable));
-                if mcu || is_connector_like(o) {
+                if is_connector_like(o) && drives_a_level(o, q) {
+                    modules.insert(format!("{} pin {}", o.reference, q.number));
+                } else if mcu || is_connector_like(o) {
                     drivers.insert(format!("{} pin {}", o.reference, q.number));
                 } else if other_input {
                     // Another enable on the node floats with it.
-                } else if classify_load(idx, o, q) != Load::HighZ {
+                } else if !matches!(classify_load(idx, o, q), Load::HighZ | Load::SilentInput) {
                     defined = true;
                 }
             }
-            if !defined && !drivers.is_empty() {
+            if !defined && (!drivers.is_empty() || !modules.is_empty()) {
                 let entry = nodes.entry((net, sink)).or_default();
                 entry.0.extend(drivers);
+                entry.3.extend(modules);
                 entry.1.insert(c.reference.clone());
                 entry.2 |= model.kind != ComponentKind::Vreg;
             }
         }
     }
     nodes
+}
+
+/// MOSFET gates, analog-switch selects and enable inputs held only by MCU or
+/// connector pins, one finding per node: the inputs a node feeds share one
+/// cause and one fix.
+fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
+    floating_gate_nodes(idx)
         .into_iter()
-        .map(|((net, sink), (drivers, parts, not_regulator))| {
+        .map(|((net, sink), (drivers, parts, not_regulator, modules))| {
             let (what, severity) = match sink {
                 Sink::Gate => ("MOSFET gate", Severity::Low),
                 Sink::Select => ("analog-switch select", Severity::Medium),
@@ -749,6 +822,23 @@ fn floating_gate_findings(idx: &Index<'_>) -> Vec<LintFinding> {
             };
             let name = idx.name(net);
             let plural = if parts.len() == 1 { "" } else { "s" };
+            if drivers.is_empty() {
+                // Only a module drives the node: a driver, but no card states its boot level.
+                return LintFinding {
+                    check: LintCheck::FloatingGate,
+                    severity: Severity::Low,
+                    message: format!(
+                        "net '{name}' drives {} {what}{plural} ({}) and is driven by {}; its level at boot \
+                         is the module's own and no card states it, so confirm it holds the off level \
+                         until the module is up.",
+                        parts.len(),
+                        list_text(&parts.iter().map(String::as_str).collect::<Vec<_>>()),
+                        list_text(&modules.iter().map(String::as_str).collect::<Vec<_>>()),
+                    ),
+                    refs: parts.into_iter().collect(),
+                    nets: vec![name.to_string()],
+                };
+            }
             let (effect, fix) = match sink {
                 Sink::Gate => (
                     "the transistor may conduct or sit half-on",
@@ -932,6 +1022,93 @@ mod tests {
         )
     }
 
+    /// An amplifier card (`value`) with `+IN` on pad 3, `-IN` on pad 4 and
+    /// `extra` TOML lines (a DC path, a common-mode row) under `[models]`.
+    fn amplifier_lib(value: &str, extra: &str) -> ModelLibrary {
+        let dir = hauksbee_testkit::fresh_scratch_dir("node_drive", value);
+        let card = format!(
+            r#"
+[[models]]
+id = "{id}"
+kind = "opamp"
+description = "amplifier fixture"
+[models.match]
+value_re = "^{value}$"
+[models.pins]
+"1" = "out"
+"2" = "vcc"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "gnd"
+[models.params]
+gain = 100000.0
+rail_lo = 0.0
+rail_hi = 5.0
+{extra}
+"#,
+            id = value.to_ascii_lowercase()
+        );
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "test card must load: {errors:?}");
+        lib
+    }
+
+    /// `AUDIO_IN` through a 1 uF series capacitor to the amplifier's `+IN`.
+    fn ac_coupled(lib: &ModelLibrary, value: &str) -> Vec<LintFinding> {
+        let mut amp = part(
+            "U1",
+            value,
+            "Amplifier:X",
+            &[("1", 20), ("2", V5), ("3", 11), ("4", 20), ("5", GND)],
+        );
+        amp.reference = "U1".into();
+        let coupling = part("C1", "1u", "Device:C", &[("1", 10), ("2", 11)]);
+        let jack = part("J1", "AUDIO", "Connector:Conn_01x01", &[("1", 10)]);
+        let nets = [
+            (GND, "GND"),
+            (V5, "+5V"),
+            (10, "AUDIO_IN"),
+            (11, "IN_P"),
+            (20, "OUT"),
+        ];
+        let b = board("t", &nets, vec![amp, coupling, jack]);
+        node_drive_lint(&b, lib).findings
+    }
+
+    #[test]
+    fn an_internally_biased_amplifier_input_behind_a_coupling_capacitor_has_a_dc_path() {
+        // The card gives +IN a 100 kohm path to an internal bias: silent.
+        let biased = amplifier_lib(
+            "AMPBIAS",
+            "[[models.input_dc_path]]\nrole = \"in_plus\"\nto = \"bias\"\nohms = 100000.0\nbasis = \"fixture datasheet: input impedance 100 kohm\"",
+        );
+        let found = ac_coupled(&biased, "AMPBIAS");
+        assert!(of(&found, LintCheck::CapNoDcPath).is_empty(), "{found:#?}");
+        // A card that says nothing about the input: a note to confirm, not a fault.
+        let silent = amplifier_lib("AMPSILENT", "");
+        let found = ac_coupled(&silent, "AMPSILENT");
+        let hits = of(&found, LintCheck::CapNoDcPath);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Low);
+        assert!(
+            hits[0].message.contains("does not say"),
+            "{}",
+            hits[0].message
+        );
+        // A card that describes a true op-amp input (its common-mode range) and
+        // gives no DC path: still a fault.
+        let plain = amplifier_lib(
+            "AMPPLAIN",
+            "[[models.envelope]]\nkind = \"input_common_mode\"\nsupply = \"vcc\"\ninputs = [\"in_plus\", \"in_minus\"]\nheadroom_v = 1.5\nbasis = \"fixture datasheet VCM\"",
+        );
+        let found = ac_coupled(&plain, "AMPPLAIN");
+        let hits = of(&found, LintCheck::CapNoDcPath);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Medium);
+    }
+
     #[test]
     fn a_capacitor_and_a_diode_cathode_ratchet_with_no_way_down() {
         // The diode can only charge MID; nothing ever discharges it.
@@ -1083,6 +1260,35 @@ mod tests {
         let low = part("U3", "LM2596S-5.0", "Regulator:LM2596", &[("5", 10)]);
         let found = run(vec![low, mcu(10)], &[(10, "BUCK_OFF")]);
         assert_eq!(of(&found, LintCheck::FloatingGate).len(), 1, "{found:#?}");
+    }
+
+    /// An LDO enable held only by a board-to-board part whose pad is typed `kind`.
+    fn enable_held_by_connector(value: &str, lib_id: &str, kind: &str) -> Vec<LintFinding> {
+        let mut conn = part("Module1", value, lib_id, &[("75", 10)]);
+        conn.footprint = "Connector_Hirose:Hirose_DF40C-100DS".into();
+        conn.pins[0].kind = kind.into();
+        run(
+            vec![ldo("RT9080-33", 10), conn],
+            &[(10, "LDO_EN"), (22, "OUT")],
+        )
+    }
+
+    #[test]
+    fn a_module_driven_enable_is_a_note_but_a_header_driven_one_stays() {
+        // The compute module's output pad drives the enable: a Low note that
+        // names the module, not a Medium "high-impedance" warning.
+        let found = enable_held_by_connector("CM4", "Module:CM4", "output");
+        let hits = of(&found, LintCheck::FloatingGate);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Low);
+        assert!(hits[0].message.contains("Module1 pin 75"));
+        assert!(!hits[0].message.contains("high-impedance"));
+        // Control: a header pin (passive) is a possible driver that floats unplugged.
+        let found = enable_held_by_connector("Conn_01x02", "Connector:Conn_01x02", "passive");
+        let hits = of(&found, LintCheck::FloatingGate);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Medium);
+        assert!(hits[0].message.contains("high-impedance"));
     }
 
     #[test]

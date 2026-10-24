@@ -938,6 +938,35 @@ pub fn is_connector_like(c: &Component) -> bool {
         || is_module_socket(c)
 }
 
+/// Whether a connector-like part's pad `p` is a driver rather than a bare contact.
+///
+/// A plug or pin header holds no level of its own, but a plug-in module, a
+/// system-on-module or a dev board drives its outputs, though its footprint
+/// reads as a board-to-board connector. A pad counts as a driver when the symbol
+/// types it `output`, `bidirectional`, `tri_state`, `open_collector` or
+/// `open_emitter`, or when the part's value or symbol says it is a module (not
+/// a pad typed `input` or as a supply input). Passive pads of a header are not.
+#[must_use]
+pub fn drives_a_level(c: &Component, p: &Pin) -> bool {
+    let kind = p.kind.to_ascii_lowercase();
+    let kind = kind.split('+').next().unwrap_or_default().trim();
+    if matches!(
+        kind,
+        "output" | "bidirectional" | "tri_state" | "open_collector" | "open_emitter"
+    ) {
+        return true;
+    }
+    if matches!(kind, "input" | "power_in") {
+        return false;
+    }
+    let text = format!("{} {}", c.value, c.lib_id).to_ascii_lowercase();
+    let mut words = text.split(|ch: char| !ch.is_ascii_alphanumeric());
+    words.any(|w| matches!(w, "module" | "som" | "devkit" | "compute"))
+        || text.contains("dev board")
+        || text.contains("dev_board")
+        || text.contains("development board")
+}
+
 /// An IC that plugs into a socket (a DIP or PLCC part in a socket footprint) or
 /// otherwise reads as a connector by its footprint alone: the record itself says
 /// it is a chip. Decided by the symbol, value, part number and pin roles, not by
