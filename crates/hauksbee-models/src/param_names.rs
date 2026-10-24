@@ -227,6 +227,26 @@ static DIGITAL_WITH_BUS_LIMITS: std::sync::LazyLock<Vec<&'static str>> =
 static ADC_WITH_BUS_LIMITS: std::sync::LazyLock<Vec<&'static str>> =
     std::sync::LazyLock::new(|| with_bus_limits(&CONVERTER_AND_DIGITAL[..ADC_TO]));
 
+/// A timer's names. The first half are datasheet quantities; the rest are the
+/// numerical parameters of the composite stamp (see db/timer.toml), on the card
+/// so the paired ngspice deck pins them where a reader can find them.
+const TIMER: &[&str] = &[
+    "threshold_frac",
+    "trigger_frac",
+    "divider_ohms",
+    "rsat_ohms",
+    "vol_v",
+    "voh_drop_v",
+    "reset_threshold_v",
+    "timing_error_frac",
+    "out_ohms",
+    "sense_ohms",
+    "comparator_gain",
+    "latch_von",
+    "latch_voff",
+    "latch_hold",
+];
+
 /// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///
 /// A kind with an empty slice carries no numeric physics at all (a connector
@@ -326,26 +346,23 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "ron_ohms",
             "leak_s",
         ],
-        // The first half are datasheet quantities; the rest are the numerical
-        // parameters of the composite stamp (see db/timer.toml), on the card
-        // so the paired ngspice deck pins them where a reader can find them.
-        ComponentKind::Timer => &[
-            "threshold_frac",
-            "trigger_frac",
-            "divider_ohms",
-            "rsat_ohms",
-            "vol_v",
-            "voh_drop_v",
-            "reset_threshold_v",
-            "timing_error_frac",
-            "out_ohms",
-            "sense_ohms",
-            "comparator_gain",
-            "latch_von",
-            "latch_voff",
-            "latch_hold",
+        ComponentKind::Timer => TIMER,
+        ComponentKind::AnalogSwitch => &[
+            "ron",
+            "ron_s0",
+            "ron_s1",
+            "roff",
+            "vth",
+            // A load switch's enable pin (`ctrl`): the on level, the internal
+            // pull or the open-pin state the datasheet prints, with its quote.
+            "en_on_level",
+            "en_pull_down_ohms",
+            "en_pull_up_ohms",
+            "en_pull_down_a",
+            "en_pull_up_a",
+            "en_open",
+            "en_open_basis",
         ],
-        ComponentKind::AnalogSwitch => &["ron", "ron_s0", "ron_s1", "roff", "vth"],
         ComponentKind::Digital => &DIGITAL_WITH_BUS_LIMITS[..],
         // A shift register is the digital vocabulary plus its stage count.
         ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],
@@ -383,7 +400,7 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     vih V input high threshold; vil V input low threshold; voh V output high level; \
     vol V output low level; ro ohm output resistance; \
     en_on_level - the enable-pin level (high or low) that turns a regulator on; \
-    en_open - the state (off or on) the datasheet states for an open enable pin; \
+    en_open - the state (off, on or undefined) the datasheet states for an open enable pin; \
     en_open_basis - the datasheet's words and page for the open enable pin's state; \
     cout_recommended_type - the output-capacitor type a recommended value names (\"solid tantalum\")";
 

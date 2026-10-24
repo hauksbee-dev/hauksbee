@@ -490,7 +490,28 @@ fn component_crystal_cl(c: &Component) -> Option<(f64, String)> {
             }
         }
     }
+    // Free-text fields that describe the part (description, parameters, comment,
+    // specification) can write the load among the rest ("12MHz 12pF 20ppm").
+    for (key, text) in &c.properties {
+        if is_descriptive_property(key) {
+            if let Some(cl) = stated_crystal_cl(text) {
+                return Some((
+                    cl,
+                    format!("the crystal's {key} property states CL = {cl} pF"),
+                ));
+            }
+        }
+    }
     None
+}
+
+/// Whether a symbol or BOM property is free text that can describe the part, as
+/// opposed to a link, a footprint, a reference or a part number.
+fn is_descriptive_property(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["descr", "param", "comment", "spec", "remark", "note"]
+        .iter()
+        .any(|w| k.contains(w))
 }
 
 /// The crystal's specified CL: its card's first, else what the part states.
@@ -953,8 +974,11 @@ fn judge_without_spec(site: &LoadSite, watch: bool) -> (SiSeverity, String) {
     (
         SiSeverity::Info,
         format!(
-            "board presents CL ~ {cl} pF ({caps}, {stray_note}{on_chip}); \
-             crystal CL spec unknown from value, no judgement"
+            "board presents CL ~ {cl} pF ({caps}, {stray_note}{on_chip}); load capacitance \
+             unknown: crystal CL spec unknown from value, no judgement. Neither the crystal's \
+             value nor its properties state a CL and no part card is bound, so the load caps \
+             cannot be checked against it. State the load capacitance in the value \
+             (\"12MHz 12pF\") or a Load Capacitance property, or give the crystal's part number"
         ),
     )
 }

@@ -1703,6 +1703,14 @@ pub struct PinBias {
     /// something is wired to it (an open-drain flag the design does not use).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub open_ok: bool,
+    /// The requirement matters only on a design that uses the function (a
+    /// ROM-bootloader UART receive pad that is an ordinary port pin the rest of
+    /// the time): only a bias the wrong way round is reported (a pull-down
+    /// where it must idle high, a tie to the wrong rail), at Medium, and a
+    /// pin left open or unbiased is never a finding, since most boards never
+    /// use the function.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opposed_only: bool,
     /// The datasheet table or sentence, with page, the requirement is read from.
     pub basis: String,
     /// What the pin does and why the bias matters, for the finding's message.

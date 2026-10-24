@@ -3622,6 +3622,12 @@ gnd_pin = "3"
 "11" = "vdd"   # AVDD, supply, connected to the main supply
 "12" = "gnd"   # GND4, to the main ground
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: ST VL53L0X DS11555 Rev 6 (June 2024), https://www.st.com/resource/en/datasheet/vl53l0x.pdf, sha256 f0ae51414474d311bc24c60cd77bfff968ea5c2b3765b2fb2a390b3078dd49be.
+[models.pin_capability.open_drain]
+basis = "ST VL53L0X DS11555 Rev 6 PDF p.4 Table 3 pin description: pin 7 GPIO1 (Digital output): \"Interrupt output. Open drain output\""
+[models.pin_capability.open_drain.pads]
+"7" = "GPIO1"
+
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -3946,6 +3952,12 @@ gnd_pin = "1"
 "2" = "dq"   # DQ
 "3" = "vdd"   # VDD
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim DS18B20 19-7487 Rev 6 (7/19), https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf, sha256 066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76.
+[models.pin_capability.open_drain]
+basis = "Maxim DS18B20 19-7487 Rev 6 PDF p.4 Pin Description: DQ: \"Data Input/Output. Open-drain 1-Wire interface pin.\""
+[models.pin_capability.open_drain.pads]
+"2" = "DQ"
+
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -4166,6 +4178,12 @@ gnd_pin = "5"
 "7" = "nc"   # N.C.
 "8" = "nc"   # N.C.
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim DS18B20 19-7487 Rev 6 (7/19), https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf, sha256 066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76.
+[models.pin_capability.open_drain]
+basis = "Maxim DS18B20 19-7487 Rev 6 PDF p.4 Pin Description: DQ: \"Data Input/Output. Open-drain 1-Wire interface pin.\""
+[models.pin_capability.open_drain.pads]
+"4" = "DQ"
+
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -4385,6 +4403,12 @@ gnd_pin = "4"
 "6" = "nc"   # N.C.
 "7" = "nc"   # N.C.
 "8" = "vdd"   # VDD
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim DS18B20 19-7487 Rev 6 (7/19), https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf, sha256 066c8a3c7e9222c49e84488840d5cfe9dd109cf0da6ab4a55480cebac8f97f76.
+[models.pin_capability.open_drain]
+basis = "Maxim DS18B20 19-7487 Rev 6 PDF p.4 Pin Description: DQ: \"Data Input/Output. Open-drain 1-Wire interface pin.\""
+[models.pin_capability.open_drain.pads]
+"1" = "DQ"
 
 [[models.envelope]]
 kind = "supply_range"

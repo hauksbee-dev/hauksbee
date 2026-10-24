@@ -78,7 +78,8 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 use super::envelope::role_net_id;
 use super::indicators::name_suggests_active_low;
 use super::regulator_enable::{
-    decapitalise, judged_enable_pad, ohms, pin_drives, survey_net, unfitted_note, Reg, Survey,
+    decapitalise, is_load_switch, judged_enable_pad, ohms, pin_drives, survey_net, unfitted_note,
+    Reg, Survey,
 };
 
 /// The weakest internal pull-up assumed when a card prints none and does not
@@ -256,7 +257,7 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
                 run_high: true,
             });
         }
-        if enable_role(r) || active_low_enable_role(r) {
+        if enable_role(r) || active_low_enable_role(r) || (r == "ctrl" && is_load_switch(model)) {
             // The card's polarity: `en_on_level = "low"` or a role that names
             // itself active-low runs the part on a low level. A symbol that
             // only hints at the opposite polarity is not enough to judge.
@@ -438,7 +439,7 @@ pub fn control_held_off_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
         // whose card is silent on the open state or pulls it on inside the
         // part, is judged here.
         let theirs = model
-            .filter(|m| m.kind == ComponentKind::Vreg)
+            .filter(|m| m.kind == ComponentKind::Vreg || is_load_switch(m))
             .and_then(|_| judged_enable_pad(board, lib, comp));
         for pin in &comp.pins {
             if theirs.as_deref() == Some(pin.number.as_str()) {
@@ -653,6 +654,36 @@ mod tests {
         let found = lint(vec![ic("CHIP_PU_3", RST), pull_down("R1", "1k")]);
         assert_eq!(found.len(), 1, "{found:#?}");
         says(&found[0], &["CHIP_PU_3 pin 1", "the part is never enabled"]);
+    }
+
+    /// A carded active-high load switch (AP2281: EN is `ctrl`, the card states
+    /// no open-pin behaviour) is an enable like a regulator's: a pull-down is
+    /// all it has, so it never turns on; a pull-up as well releases it.
+    #[test]
+    fn a_load_switch_enable_held_low_by_its_only_pull_is_a_finding() {
+        let switch = || {
+            part(
+                "U1",
+                "AP2281-1WG-7",
+                &[
+                    ("1", GPIO),
+                    ("2", GND),
+                    ("3", RST),
+                    ("4", V3),
+                    ("5", GND),
+                    ("6", V3),
+                ],
+            )
+        };
+        let found = lint(vec![switch(), pull_down("R1", "1k")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        assert_eq!(found[0].nets, ["/RST"]);
+        says(&found[0], &["U1", "pin 3", "never enabled"]);
+        let mut pull_up = pull_down("R2", "10k");
+        pull_up.pins[1].net = Some(V3);
+        assert!(lint(vec![switch(), pull_down("R1", "1k"), pull_up]).is_empty());
+        assert!(lint(vec![switch()]).is_empty());
     }
 
     /// Without a card a bare `EN`, `CE`, `CEN` or `ENABLE` has no known

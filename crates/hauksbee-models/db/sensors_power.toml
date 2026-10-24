@@ -74,6 +74,13 @@ warning = "I2C register map only: time registers read back what was written and 
 "15" = "sda"
 "16" = "scl"
 
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim DS3231 19-5170 Rev 10 (3/15), https://www.analog.com/media/en/technical-documentation/data-sheets/DS3231.pdf, sha256 dc81cd89bee82d0c57b654d6315e03dec913fb8fe753cc80b2a3f1cca71cbb34.
+[models.pin_capability.open_drain]
+basis = "Maxim DS3231 19-5170 Rev 10 PDF p.9 Pin Description: 32kHz: \"32kHz Output. This open-drain pin requires an external pullup resistor.\"; INT/SQW: \"Active-Low Interrupt or Square-Wave Output. This open-drain pin requires an external pullup resistor connected to a supply at 5.5V or less.\" (RST, pin 4, is deliberately not listed: it has an internal 50 kOhm pullup and the sheet says \"No external pullup resistors should be connected.\")"
+[models.pin_capability.open_drain.pads]
+"1" = "32kHz"
+"3" = "INT/SQW"
+
 [models.ratings]
 # Absolute Maximum Ratings: voltage on any pin relative to ground -0.3 V to +6.0 V; theta-JA 73 degC/W and theta-JC 23 degC/W (JESD51-7, four-layer board).
 max_voltage_v = 6.0
@@ -425,6 +432,12 @@ warning = "I2C register map only: time registers read back what was written and 
 "6" = "scl"
 "7" = "sqw_out"  # square wave / output driver, open drain
 "8" = "vcc"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: Maxim DS1307 REV 3/15, https://www.analog.com/media/en/technical-documentation/data-sheets/DS1307.pdf, sha256 c81233053aa1da1571258d117bf4ce7bcef8f6225e6895259add55809189516a.
+[models.pin_capability.open_drain]
+basis = "Maxim DS1307 Rev. 3/15 PDF p.6 Pin Description: SQW/OUT: \"The SQW/OUT pin is open drain and requires an external pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"7" = "SQW/OUT"
 
 [models.ratings]
 # Absolute Maximum Ratings: voltage on any pin relative to ground -0.5 V to +7.0 V. No thermal resistance is printed.
@@ -1226,6 +1239,12 @@ must_not_float_roles = "a0,a1"
 "8" = "vbus"
 "9" = "in_n"
 "10" = "in_p"
+
+# Open-drain pad(s) for the open-drain pull-up check. Source: TI INA226 SBOS547C (June 2011, rev. Aug 2026), https://www.ti.com/lit/ds/symlink/ina226.pdf, sha256 c9b67f886d4a5241a5e070723f7b61867409eeb27eed768b9cdd9cb17e03ca2d.
+[models.pin_capability.open_drain]
+basis = "TI INA226 SBOS547C Rev. C PDF p.3 Table 4-1 Pin Functions: Alert (Digital output): \"Multi-functional alert, open-drain output.\""
+[models.pin_capability.open_drain.pads]
+"3" = "Alert"
 
 [models.ratings]
 # 5.1 Absolute Maximum Ratings: VS 6 V; SDA GND-0.3 V to 6 V; input current into any pin 5 mA; TJ 150 degC. 5.4 Thermal Information, DGS: RthetaJA 144.6, RthetaJC(top) 53.3 degC/W.

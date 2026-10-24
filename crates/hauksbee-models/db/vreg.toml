@@ -9264,6 +9264,14 @@ dropout_v = 2.7e-1  # derived: VCC LDO dropout max 0.27 V (VIN = 4.5V, IVCC = 5m
 "12" = "sw" # LX switching node
 "EP" = "gnd" # Exposed pad; connect to SGND
 
+# Open-drain outputs: Analog Devices MAX17760 19-100795 Rev 2 (8/25)
+# https://www.analog.com/media/en/technical-documentation/data-sheets/MAX17760.pdf
+# sha256 e3fe95f15b01ae26be6926a8871aa0bec73edabeaf746abd6411db28a60a7736
+[models.pin_capability.open_drain]
+basis = "Analog Devices MAX17760 19-100795 Rev 2 PDF p.12 Pin Description: pin 5 RESET \"Open-Drain RESET Output. The RESET output is driven low when FB drops below 92% of its set value.\"; PDF p.16 RESET Output: \"The open-drain RESET output requires an external pullup resistor.\""
+[models.pin_capability.open_drain.pads]
+"5" = "RESET"
+
 # VCC is the internal LDO's output, never a supply the board feeds.
 [[models.optional_supplies]]
 role = "vcc"

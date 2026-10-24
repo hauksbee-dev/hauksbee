@@ -332,9 +332,12 @@ pub(super) fn classify(
     }
     // Another part's own enable or shutdown input sets nothing.
     let input = q.kind.trim().eq_ignore_ascii_case("input");
-    if matches!(role.as_deref(), Some("en" | "shdn"))
-        || (input && matches!(control_role(&q.function), Some("enable" | "reset")))
-    {
+    let is_other_enable = match (role.as_deref(), model.and_then(roles_of)) {
+        (Some(r), Some(roles)) => roles.enable.contains(&r),
+        (Some("en" | "shdn"), None) => true,
+        _ => false,
+    };
+    if is_other_enable || (input && matches!(control_role(&q.function), Some("enable" | "reset"))) {
         return Member::Cannot(format!(
             "{} pin {} (an enable input)",
             o.reference, q.number
@@ -428,26 +431,96 @@ fn confident_model(lib: &ModelLibrary, comp: &Component) -> Option<ModelEntry> {
     res.model
 }
 
-/// A simple linear regulator whose card fits the footprint: this check's
-/// subject.
-fn is_simple_regulator(board: &ExtractedBoard, comp: &Component, model: &ModelEntry) -> bool {
-    model.kind == ComponentKind::Vreg
-        && model.behavioral.converter.is_none()
-        && super::card_fits(board, comp, model)
+/// The card roles of a part this check judges: where its enable, input,
+/// output and ground sit.
+#[derive(Clone, Copy)]
+pub(super) struct Roles {
+    enable: &'static [&'static str],
+    input: &'static str,
+    output: &'static str,
+    gnd: &'static str,
 }
 
-/// The card's enable pad: its role (`en`, else `shdn`), pad number and
-/// whether the pin is on at its high level.
+/// A linear regulator: enable `en` (else `shdn`), input `in`, output `out`.
+const REGULATOR: Roles = Roles {
+    enable: &["en", "shdn"],
+    input: "in",
+    output: "out",
+    gnd: "gnd",
+};
+
+/// A load switch carded as an analog switch: enable `ctrl`, input `in_out_b`,
+/// switched output `in_out_a`.
+const LOAD_SWITCH: Roles = Roles {
+    enable: &["ctrl"],
+    input: "in_out_b",
+    output: "in_out_a",
+    gnd: "vss",
+};
+
+fn has_role(model: &ModelEntry, role: &str) -> bool {
+    model.pins.values().any(|r| r.eq_ignore_ascii_case(role))
+}
+
+/// Whether a card is a load switch: an analog-switch entry that states its
+/// enable is active high (`en_on_level = "high"`, which only a load switch
+/// carries) and maps an enable, an input and a switched output. A signal
+/// switch or multiplexer states no enable level and is never judged here.
+pub(super) fn is_load_switch(model: &ModelEntry) -> bool {
+    model.kind == ComponentKind::AnalogSwitch
+        && model.params.get_str("en_on_level") == Some("high")
+        && [LOAD_SWITCH.enable[0], LOAD_SWITCH.input, LOAD_SWITCH.output]
+            .into_iter()
+            .all(|r| has_role(model, r))
+}
+
+/// The roles this check reads on a card, or `None` for a part it does not judge.
+fn roles_of(model: &ModelEntry) -> Option<Roles> {
+    match model.kind {
+        ComponentKind::Vreg => Some(REGULATOR),
+        ComponentKind::AnalogSwitch if is_load_switch(model) => Some(LOAD_SWITCH),
+        _ => None,
+    }
+}
+
+/// A simple linear regulator or a load switch whose card fits the footprint:
+/// this check's subject.
+fn is_judged_part(board: &ExtractedBoard, comp: &Component, model: &ModelEntry) -> bool {
+    let simple = match model.kind {
+        ComponentKind::Vreg => model.behavioral.converter.is_none(),
+        ComponentKind::AnalogSwitch => is_load_switch(model),
+        _ => false,
+    };
+    simple && super::card_fits(board, comp, model)
+}
+
+/// The card's enable pad: its role (`en`, else `shdn`; a load switch's
+/// `ctrl`), pad number and whether the pin is on at its high level.
 fn enable_pad(model: &ModelEntry) -> Option<(&'static str, String, bool)> {
-    let (role, pad) = ["en", "shdn"].into_iter().find_map(|role| {
+    let roles = roles_of(model)?;
+    let (role, pad) = roles.enable.iter().find_map(|role| {
         model
             .pins
             .iter()
             .find(|(_, r)| r.eq_ignore_ascii_case(role))
-            .map(|(pad, _)| (role, pad.clone()))
+            .map(|(pad, _)| (*role, pad.clone()))
     })?;
     let on_high = model.params.get_str("en_on_level") != Some("low");
     Some((role, pad, on_high))
+}
+
+/// The enable pin's name for a finding when the symbol names none.
+fn enable_label(role: &str) -> String {
+    if role == "ctrl" {
+        "EN".to_string()
+    } else {
+        role.to_ascii_uppercase()
+    }
+}
+
+/// The net of the card role `pick` selects from the part's roles.
+fn net_of(comp: &Component, model: &ModelEntry, pick: fn(&Roles) -> &'static str) -> Option<i64> {
+    role_net_id(comp, model, pick(&roles_of(model)?))
 }
 
 /// The enable pad this check judges on `comp`, when it judges one: a fitted
@@ -463,7 +536,7 @@ pub(super) fn judged_enable_pad(
     comp: &Component,
 ) -> Option<String> {
     let model = confident_model(lib, comp)?;
-    if !is_simple_regulator(board, comp, &model) {
+    if !is_judged_part(board, comp, &model) {
         return None;
     }
     let (_, pad, on_high) = enable_pad(&model)?;
@@ -471,8 +544,8 @@ pub(super) fn judged_enable_pad(
     if !comp.pins.iter().any(|p| p.number == pad) {
         return None;
     }
-    board.net(role_net_id(comp, &model, "in")?)?;
-    board.net(role_net_id(comp, &model, "out")?)?;
+    board.net(net_of(comp, &model, |r| r.input)?)?;
+    board.net(net_of(comp, &model, |r| r.output)?)?;
     Some(pad)
 }
 
@@ -488,7 +561,7 @@ pub fn regulator_enable_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
         let Some(model) = confident_model(lib, comp) else {
             continue;
         };
-        if is_simple_regulator(board, comp, &model) {
+        if is_judged_part(board, comp, &model) {
             regulators.push((comp, model.clone()));
         }
         models.insert(comp.reference.as_str(), model);
@@ -605,20 +678,22 @@ fn output_island(
                 }
                 continue;
             }
-            // Another regulator fed from the island carries it on to its output.
-            if let Some(m) = models
+            // Another regulator or load switch fed from the island carries it on
+            // to its output.
+            if let Some((m, r)) = models
                 .get(o.reference.as_str())
-                .filter(|m| m.kind == ComponentKind::Vreg)
+                .and_then(|m| roles_of(m).map(|r| (m, r)))
             {
                 match role.as_deref() {
-                    Some("in") => {
-                        let next = role_net_id(o, m, "out")?;
+                    Some(x) if x == r.input => {
+                        let next = role_net_id(o, m, r.output)?;
                         if island.insert(next) {
                             queue.push(next);
                         }
                         continue;
                     }
-                    Some("gnd" | "en" | "shdn" | "fb" | "bypass") => continue,
+                    Some(x) if x == r.gnd || r.enable.contains(&x) => continue,
+                    Some("fb" | "bypass") if m.kind == ComponentKind::Vreg => continue,
                     _ => return None,
                 }
             }
@@ -727,7 +802,7 @@ fn self_fed_enable(
     let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
     let (en_name, out_name) = (name(en), name(out));
     let label = if pin.function.trim().is_empty() {
-        role.to_ascii_uppercase()
+        enable_label(role)
     } else {
         pin.function.trim().to_string()
     };
@@ -816,18 +891,19 @@ fn judge(
     let pin = comp.pins.iter().find(|p| p.number == pad)?;
     // Without the rail and its input on the board the finding could not
     // name what stays off; a record that lacks them is not judged.
-    let input = role_net_id(comp, model, "in")?;
-    let out = role_net_id(comp, model, "out")?;
+    let roles = roles_of(model)?;
+    let input = role_net_id(comp, model, roles.input)?;
+    let out = role_net_id(comp, model, roles.output)?;
     let out_name = board.net(out)?.name.clone();
     let in_name = board.net(input)?.name.clone();
     let reg = Reg {
         comp,
         on_high,
         input,
-        gnd: role_net_id(comp, model, "gnd"),
+        gnd: role_net_id(comp, model, roles.gnd),
     };
     let label = if pin.function.trim().is_empty() {
-        role.to_ascii_uppercase()
+        enable_label(role)
     } else {
         pin.function.trim().to_string()
     };
@@ -870,11 +946,16 @@ fn judge(
         .get_f64("vout")
         .map_or_else(String::new, |v| format!(" ({})", format_volts(v)));
     let fix = remedy(&label, on_high, &in_name);
+    let noun = if is_load_switch(model) {
+        "load switch"
+    } else {
+        "regulator"
+    };
     let (severity, message) = if external.is_empty() {
         (
             Severity::High,
             format!(
-                "{} ({}) {label} pad {} {topology}{unfitted}: {}, so the regulator stays off and its \
+                "{} ({}) {label} pad {} {topology}{unfitted}: {}, so the {noun} stays off and its \
                  output '{out_name}'{vout} never comes on; everything powered from '{out_name}' is \
                  unpowered. {REMEDY_MARKER}{fix}",
                 comp.reference,
@@ -893,7 +974,7 @@ fn judge(
             format!(
                 "{} ({}) {label} pad {} {topology}{unfitted}; the only thing on it that can raise \
                  it is {}, an off-board source, so unless that source always drives the pin the \
-                 board holds the regulator off and its output '{out_name}'{vout} never comes on. \
+                 board holds the {noun} off and its output '{out_name}'{vout} never comes on. \
                  {REMEDY_MARKER}If an external enable is meant to switch this rail, confirm it \
                  drives the pin whenever the rail is needed; otherwise {}",
                 comp.reference,
@@ -1366,5 +1447,107 @@ mod tests {
             self_fed("UNTYPED", V3, vec![part("U2", "SomeIC", &[("1", V3)])]).is_empty(),
             "an unknown pin"
         );
+    }
+
+    /// A load switch carded as an analog switch: `value` from `+5V` (IN, role
+    /// `in_out_b`) to `+3V3` (OUT, `in_out_a`) with its enable pad on `en` and
+    /// `extra` parts. `pads` is (OUT, IN, GND, ON).
+    fn card_load_switch(
+        value: &str,
+        pads: [&str; 4],
+        en: Option<i64>,
+        extra: Vec<Component>,
+    ) -> Vec<LintFinding> {
+        let [out, input, gnd, on] = pads;
+        let mut sw = part(
+            "U1",
+            value,
+            &[(out, V3), (input, VIN), (gnd, GND), (on, EN)],
+        );
+        sw.pins[3].net = en;
+        let mut parts = vec![sw, part("C1", "1u", &[("1", VIN), ("2", GND)])];
+        parts.extend(extra);
+        let nets = [
+            (VIN, "+5V"),
+            (V3, "+3V3"),
+            (GND, "GND"),
+            (EN, "/SW_EN"),
+            (GPIO, "/MCU_PA3"),
+        ];
+        regulator_enable_lint(&board(&nets, parts), &ModelLibrary::builtin())
+            .of_check(LintCheck::RegulatorHeldOff)
+            .cloned()
+            .collect()
+    }
+
+    const TPS22916: &str = "TPS22916YFP";
+    const TPS22916_PADS: [&str; 4] = ["A1", "A2", "B1", "B2"];
+
+    /// TPS22916 (SLVSDO5F PDF p.1: smart ON-pin pull-down, 750 kOhm): an ON pin
+    /// nothing can raise holds the switch off for good, as a regulator's does.
+    #[test]
+    fn a_load_switch_enable_nothing_can_raise_holds_it_off() {
+        let found = card_load_switch(TPS22916, TPS22916_PADS, Some(EN), vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["U1"]);
+        says(
+            f,
+            &[
+                "U1 (TPS22916YFP) EN pad B2 is alone on net '/SW_EN'",
+                "internal pull-down (750 kΩ, card 'tps22916')",
+                "so the load switch stays off and its output '+3V3' never comes on",
+            ],
+        );
+        assert!(
+            f.own_remedy().is_some_and(|r| r
+                .starts_with("Pull EN up to the input '+5V' through 10k–100k, or tie it to '+5V'")),
+            "{}",
+            f.message
+        );
+        // A pull-down alone is no better.
+        let down = part("R1", "100k", &[("1", EN), ("2", GND)]);
+        assert_eq!(
+            card_load_switch(TPS22916, TPS22916_PADS, Some(EN), vec![down]).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_load_switch_enable_the_board_can_raise_is_silent() {
+        let silent = |en: Option<i64>, extra: Vec<Component>| {
+            card_load_switch(TPS22916, TPS22916_PADS, en, extra).is_empty()
+        };
+        // Tied to the input rail, pulled up to it, or driven by a GPIO.
+        assert!(silent(Some(VIN), vec![]));
+        assert!(silent(
+            Some(EN),
+            vec![part("R1", "100k", &[("1", EN), ("2", VIN)])]
+        ));
+        let mut mcu = part("U3", "SomeMCU", &[("7", EN)]);
+        mcu.pins[0].kind = "bidirectional".into();
+        assert!(silent(Some(EN), vec![mcu]));
+        // A signal analog switch (a 74LVC1G66) has a `ctrl` pad and no enable
+        // level: it is not a load switch and is never judged here.
+        let sig = card_load_switch("74LVC1G66", ["1", "2", "3", "4"], Some(EN), vec![]);
+        assert!(sig.is_empty(), "{sig:#?}");
+    }
+
+    /// The part's own output is 0 V until it runs: an enable wired to it
+    /// can never rise (AP2553: active-high EN, no open-pin statement).
+    #[test]
+    fn a_load_switch_enable_fed_from_its_own_output_can_never_start() {
+        let ap2553 = |en| card_load_switch("AP2553W6-7", ["6", "1", "2", "3"], Some(en), vec![]);
+        let found = ap2553(V3);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(
+            &found[0],
+            &[
+                "U1 (AP2553W6-7) EN pad 3 is wired straight to its own output '+3V3'",
+                "can never start",
+            ],
+        );
+        assert!(ap2553(VIN).is_empty(), "tied to the input rail");
     }
 }
