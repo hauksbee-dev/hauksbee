@@ -53,7 +53,7 @@ lets a genuine brownout on a weak supply be trusted as a real failure.
 |---|---|---|
 | `boot_gate_pass.toml` / `boot_gate_fail.toml` | `boot_coverage`: does the firmware drive a Hi-Z MOSFET gate in time? | PASS (exit 0) / FAIL (exit 1) |
 | `watchy_v15_display_res.toml` / `_undriven.toml` | `boot_coverage` on the real Watchy v1.5 e-paper RES# net (ESP32 QEMU backend) | PASS (exit 0) / FAIL (exit 1) |
-| `pic_programmer_schematic.toml` | schematic-stage CI: assert a `.kicad_sch` before any PCB exists. Judges the rail ahead of the 7805 and the input diode only; the board's LT1373, 24Cxx and PIC sockets have no model, so VCC and `no_faults` would be INVALID and are left out | PASS (exit 0) |
+| `pic_programmer_schematic.toml` | schematic-stage CI: assert a `.kicad_sch` before any PCB exists. Judges the rail ahead of the 7805 and the input diode only; the board's LT1373, 24Cxx and PIC sockets have no model, so VCC and `no_faults` would be INVALID and are left out. Both assertions pass; the run is RED only on the demo board's own `C4` (a capacitor position with value `0`) | FAIL, expected (exit 1) |
 | `watchy.toml` | the first spec on a fresh clone: the vendored SQFMI Watchy board, intentionally unmodelled parts on +3V3 | INVALID (exit 3) until models are supplied |
 | `power_resistor_cool.toml` / `power_resistor_hot.toml` | `max_temp`: a power resistor within, then past, its thermal limit at 90 C ambient | PASS (exit 0) / FAIL (exit 1) |
 | `tolerance_divider.toml` | a `[[tolerance]]` ensemble: the nominal seed passes, the ensemble goes RED and names the failing seed | FAIL (exit 1) |

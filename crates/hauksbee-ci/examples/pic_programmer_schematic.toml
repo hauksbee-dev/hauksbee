@@ -10,7 +10,11 @@
 #
 #   hauksbee-ci run crates/hauksbee-ci/examples/pic_programmer_schematic.toml
 #
-# EXPECTED RESULT: GREEN, exit 0, both assertions pass.
+# EXPECTED RESULT: both assertions pass; the run as a whole is RED (exit 1)
+# because the board's own static check fails it on C4, a capacitor position
+# whose value is `0` (the same finding `hauksbee check` reports). That is a
+# real flaw in the demo board, and the board belongs to the corpus, so the
+# example neither waives nor hides it.
 #
 # WHAT THIS SPEC DOES NOT JUDGE, ON PURPOSE. Four parts of this board have no
 # model and stay open circuits: U4 (LT1373 boost converter that makes the
@@ -24,7 +28,7 @@
 # `crates/hauksbee-ci/tests/schematic_ci.rs` pins both outcomes. The open
 # parts are listed in the `assumptions` of `--json` output and by
 # `hauksbee run <board> --report`; the human report only names the open parts
-# an assertion depends on, so a green run here does not mean they are gone.
+# an assertion depends on, so passing assertions here do not mean they are gone.
 
 name = "pic_programmer schematic power-up sanity"
 # The path is where `scripts/fetch-corpus.sh` puts it with no arguments:
