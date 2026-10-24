@@ -128,6 +128,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SIMAVR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SIMAVR_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=SIMAVR_COMMIT");
+    // bindgen loads whichever libclang this variable (or the default search) names.
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     // CI and release builds place an immutable source marker beside the exact
     // headers/archive. Make that identity a Cargo input and embed it into the
@@ -207,7 +209,6 @@ fn main() {
     );
 
     // Generate Rust bindings for simavr headers
-    pin_validated_libclang();
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg(format!("-I{include_dir}"))
@@ -257,77 +258,6 @@ fn main() {
         .expect("Couldn't write bindings");
 }
 
-/// The newest libclang major version known to produce correct simavr bindings
-/// through the pinned bindgen. libclang 22 (the newest `/usr/lib/llvm-N` on
-/// GitHub's `ubuntu-26.04` image, next to 20 and 21) makes bindgen 0.71 emit
-/// `avr_t`, `avr_irq_t` and `avr_io_t` as empty placeholders with no clang
-/// diagnostic; clang-sys picks the highest installed libclang by default.
-const MAX_VALIDATED_LIBCLANG_MAJOR: u32 = 21;
-
-/// Find the libclang a Debian/Ubuntu host would otherwise hand to bindgen
-/// (`/usr/lib/llvm-N/lib`) and, when a newer-than-validated one is installed
-/// beside an older one, pin `LIBCLANG_PATH` to the newest validated one.
-///
-/// An explicit `LIBCLANG_PATH` is always respected. Hosts without several
-/// `/usr/lib/llvm-N` trees (macOS, Windows, single-LLVM Linux) are untouched.
-fn pin_validated_libclang() {
-    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
-    if env::var_os("LIBCLANG_PATH").is_some() || !cfg!(target_os = "linux") {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir("/usr/lib") else {
-        return;
-    };
-    let mut installs: Vec<(u32, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let major = entry
-                .file_name()
-                .to_str()?
-                .strip_prefix("llvm-")?
-                .parse::<u32>()
-                .ok()?;
-            let lib_dir = entry.path().join("lib");
-            let has_libclang = std::fs::read_dir(&lib_dir)
-                .ok()?
-                .filter_map(Result::ok)
-                .any(|f| {
-                    let name = f.file_name();
-                    let name = name.to_string_lossy();
-                    name.starts_with("libclang")
-                        && !name.starts_with("libclang-cpp")
-                        && name.contains(".so")
-                });
-            has_libclang.then_some((major, lib_dir))
-        })
-        .collect();
-    installs.sort();
-    let newest_is_unvalidated = installs
-        .last()
-        .is_some_and(|(major, _)| *major > MAX_VALIDATED_LIBCLANG_MAJOR);
-    if !newest_is_unvalidated {
-        return;
-    }
-    if let Some((major, lib_dir)) = installs
-        .iter()
-        .rev()
-        .find(|(major, _)| *major <= MAX_VALIDATED_LIBCLANG_MAJOR)
-    {
-        println!(
-            "cargo:warning=hauksbee-mcu: using libclang {major} from {} for bindgen; a newer \
-             libclang is installed but is not validated against the simavr headers",
-            lib_dir.display()
-        );
-        env::set_var("LIBCLANG_PATH", lib_dir);
-    } else {
-        println!(
-            "cargo:warning=hauksbee-mcu: only libclang newer than {MAX_VALIDATED_LIBCLANG_MAJOR} \
-             was found; if the bindings check below fails, install libclang-{MAX_VALIDATED_LIBCLANG_MAJOR}-dev \
-             and set LIBCLANG_PATH=/usr/lib/llvm-{MAX_VALIDATED_LIBCLANG_MAJOR}/lib"
-        );
-    }
-}
-
 /// Fields the AVR backend reads. A struct that lost its body has none of them.
 const REQUIRED_STRUCT_FIELDS: [(&str, &[&str]); 4] = [
     (
@@ -360,13 +290,12 @@ fn verify_bindings(generated: &str, include_dir: &str) {
         assert!(
             missing.is_empty(),
             "hauksbee-mcu: bindgen produced `{name}` without its fields ({}) from the \
-                 simavr headers under {include_dir}. clang parsed them without an error but \
-                 bindgen could not read the struct body; this is the signature of a libclang \
-                 newer than bindgen supports (validated up to libclang \
-                 {MAX_VALIDATED_LIBCLANG_MAJOR}) or of a header clang could not resolve \
-                 (stddef.h/stdint.h from clang's resource directory). Set \
-                 LIBCLANG_PATH=<dir of a libclang <= {MAX_VALIDATED_LIBCLANG_MAJOR}> or install \
-                 libclang-dev for that version.",
+             simavr headers under {include_dir}. clang parsed them without an error but \
+             bindgen could not read the struct body; this is the signature of a libclang \
+             newer than the pinned bindgen supports (bump bindgen, or point LIBCLANG_PATH at \
+             an older libclang) or of a header clang could not resolve (stddef.h/stdint.h \
+             from clang's resource directory; install the libclang development package that \
+             matches your clang, and check SIMAVR_INCLUDE_DIR).",
             missing.join(", ")
         );
     }
