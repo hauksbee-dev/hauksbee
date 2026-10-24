@@ -530,6 +530,59 @@ fn spawn_and_connect() -> Result<(RenodeProcess, Monitor, u16)> {
     Err(last_err.expect("SPAWN_ATTEMPTS is non-zero, so a failure recorded an error"))
 }
 
+/// How many ports to try for the UART server socket before giving up.
+const UART_BIND_ATTEMPTS: usize = 5;
+
+/// Whether Renode's reply says the requested socket port was already taken.
+///
+/// Renode reports it as `Unable to create '0.0.0.0:35193' socket:
+/// [AddressAlreadyInUse] Address already in use`, which carries none of the
+/// words `monitor::response_failed` looks for, so it is classified here.
+fn address_in_use(resp: &str) -> bool {
+    let lower = resp.to_lowercase();
+    lower.contains("addressalreadyinuse") || lower.contains("address already in use")
+}
+
+/// Create the UART server socket terminal on `first_port`, re-rolling the port
+/// when another process took it between `free_ports` and this bind.
+///
+/// Returns the port and the terminal name that were actually created. Each
+/// attempt uses its own terminal name so a half-registered failure cannot make
+/// the retry collide with it.
+fn create_uart_terminal(monitor: &mut Monitor, first_port: u16) -> Result<(u16, String)> {
+    let mut port = first_port;
+    let mut attempt = 1;
+    loop {
+        let name = if attempt == 1 {
+            "hauksbee_uart".to_owned()
+        } else {
+            format!("hauksbee_uart_{attempt}")
+        };
+        let resp = monitor.command(&format!(
+            "emulation CreateServerSocketTerminal {port} \"{name}\" false"
+        ))?;
+        if !address_in_use(&resp) {
+            if monitor::response_failed(&resp) {
+                bail!(
+                    "Renode command `emulation CreateServerSocketTerminal {port}` failed: {resp}"
+                );
+            }
+            return Ok((port, name));
+        }
+        if attempt == UART_BIND_ATTEMPTS {
+            bail!(
+                "Renode could not bind a UART port in {UART_BIND_ATTEMPTS} attempts \
+                 (last was {port}): {resp}"
+            );
+        }
+        // `free_ports` probes the wildcard address Renode binds, so this only
+        // repeats when another process is racing for ports.
+        let [fresh] = free_ports::<1>()?;
+        port = fresh;
+        attempt += 1;
+    }
+}
+
 /// Per-connection socket read/write timeout for both bridges. A genuinely stuck
 /// peer trips this and the connection handler fails loudly rather than hanging
 /// the emulation forever.
@@ -1141,10 +1194,8 @@ impl RenodeBackend {
         // Optional UART bridge: a server socket terminal on the pre-allocated
         // port (distinct from the monitor port by construction).
         let uart = if let Some(usart) = &config.uart {
-            monitor.run(&format!(
-                "emulation CreateServerSocketTerminal {uart_port} \"hauksbee_uart\" false"
-            ))?;
-            monitor.run(&format!("connector Connect {usart} hauksbee_uart"))?;
+            let (uart_port, terminal) = create_uart_terminal(&mut monitor, uart_port)?;
+            monitor.run(&format!("connector Connect {usart} {terminal}"))?;
             Some(UartSocket::connect(
                 "Renode",
                 uart_port,
@@ -2399,6 +2450,16 @@ fn parse_hex_or_dec(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn address_in_use_recognises_the_renode_bind_failure() {
+        assert!(address_in_use(
+            "Unable to create '0.0.0.0:35193' socket:[AddressAlreadyInUse] Address already in use"
+        ));
+        assert!(address_in_use("socket: address already in use"));
+        assert!(!address_in_use("Unable to create 'hauksbee_uart'"));
+        assert!(!address_in_use(""));
+    }
 
     #[test]
     fn pull_hook_is_one_line_naming_its_registers_and_mask() {

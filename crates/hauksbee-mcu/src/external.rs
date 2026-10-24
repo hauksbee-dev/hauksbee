@@ -174,14 +174,15 @@ pub fn env_override(var: &str) -> Result<Option<PathBuf>> {
 
 // ── Sockets ──────────────────────────────────────────────────────────────────
 
-/// Allocate `N` distinct free loopback TCP ports, holding every listener until
-/// all the numbers are read so the OS cannot reissue one to another. The
-/// emulator binds each shortly after they are released.
+/// Allocate `N` distinct free TCP ports, holding every listener until all the
+/// numbers are read so the OS cannot reissue one to another. The emulator binds
+/// each shortly after they are released.
+///
+/// The probe binds the wildcard address, which is what Renode binds, so a port
+/// held on any interface is never returned; a loopback-only probe would miss it.
 pub fn free_ports<const N: usize>() -> Result<[u16; N]> {
     let listeners: Vec<std::net::TcpListener> = (0..N)
-        .map(|_| {
-            std::net::TcpListener::bind(("127.0.0.1", 0)).context("allocating a loopback port")
-        })
+        .map(|_| std::net::TcpListener::bind(("0.0.0.0", 0)).context("allocating a free port"))
         .collect::<Result<_>>()?;
     let mut ports = [0u16; N];
     for (slot, l) in ports.iter_mut().zip(&listeners) {
