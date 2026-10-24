@@ -156,6 +156,8 @@ mod input_order_stable;
 mod interactive_coverage_parity;
 #[path = "json_finding_public_api.rs"]
 mod json_finding_public_api;
+#[path = "lint_parity_dump.rs"]
+mod lint_parity_dump;
 #[path = "live_divergence_usb_clamp.rs"]
 mod live_divergence_usb_clamp;
 #[path = "live_peripheral_attach.rs"]
