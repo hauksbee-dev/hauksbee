@@ -299,12 +299,30 @@ fn is_bias_part(c: &Component) -> bool {
         )
 }
 
+/// The gate's only bias runs to the FET's own source (`ends` is source then
+/// drain), so Vgs is held at zero and the FET is off: a pull-down on an
+/// N-FET that sits on ground, or a pull-up on a P-FET wired to its own
+/// supply, is a switch held open, not an always-on part.
+fn gate_is_held_off(idx: &Index<'_>, q: &Component, gate: i64, [source, _]: [i64; 2]) -> bool {
+    let mut bias = idx
+        .members(gate)
+        .iter()
+        .filter(|(o, _)| !same(o, q))
+        .flat_map(|(o, _)| o.pins.iter().filter_map(|p| p.net))
+        .filter(|n| *n != 0 && *n != gate)
+        .peekable();
+    bias.peek().is_some() && bias.all(|n| n == source)
+}
+
 /// True when the gate net, and every net one bias part further out, holds
 /// only bias parts (or a ground), ending on ground or the FET's own channel
 /// nets: nothing drives the gate, so the FET sits permanently on.
 fn gate_is_passive(idx: &Index<'_>, q: &Component, gate: i64, ends: [i64; 2]) -> bool {
     let returns = supply_returns(idx, q, (ends[0], ends[1]));
     let stop = |n: i64| ends.contains(&n) || is_ground(idx.name(n)) || returns.contains(&n);
+    if gate_is_held_off(idx, q, gate, ends) {
+        return false;
+    }
     let mut frontier = vec![gate];
     let mut seen = vec![gate];
     for depth in 0..2 {
@@ -504,7 +522,11 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
             continue;
         }
         // Reverse-polarity protection: drain faces the connector.
-        if gate_is_passive(&idx, q, g, [s, d])
+        // A source on ground is not a supply input the body diode must block:
+        // every header on the board sits on that net, and a FET whose source
+        // is on ground is a low-side switch.
+        if !is_ground(idx.name(s))
+            && gate_is_passive(&idx, q, g, [s, d])
             && reaches_connector(&idx, s, q)
             && !reaches_connector(&idx, d, q)
             && !bypassed(&idx, q, (s, d))
@@ -928,5 +950,107 @@ mod tests {
         parts.push(part("R9", "62", "Device:R", &[("1", VFUSED), ("2", VPROT)]));
         let found = lint(parts, RAILS);
         assert!(found.is_empty(), "{found:#?}");
+    }
+
+    const V12: i64 = 60;
+    const LOAD_EN: i64 = 61;
+    const DRAIN: i64 = 62;
+    const LEVEL: i64 = 63;
+    const LOAD_OUT: i64 = 64;
+    const VIN_GATE: i64 = 65;
+    const MID: i64 = 66;
+    const CTRL: i64 = 67;
+    const SHIFT_NETS: &[(i64, &str)] = &[
+        (V12, "+12V"),
+        (LOAD_EN, "LOAD_EN"),
+        (DRAIN, "Net-(Q1-D)"),
+        (LEVEL, "Net-(Q2-G)"),
+        (LOAD_OUT, "LOAD_OUT"),
+        (VIN_GATE, "Net-(Q3-G)"),
+        (MID, "Net-(R7-Pad2)"),
+        (CTRL, "Net-(Q4-G)"),
+    ];
+
+    /// A gate-drive level shifter: a low-side N-FET (source on the board
+    /// ground, gate on an enable that another sheet drives, with a 100k to
+    /// ground) pulls the gate node of a high-side P-FET load switch low
+    /// through 100k, a pull-up and a cap holding that node at the rail.
+    fn level_shifter() -> Vec<Component> {
+        let mut q2 = fet("AO3401A", "Device:Q_PMOS_GSD", (V12, LOAD_OUT, LEVEL));
+        q2.reference = "Q2".into();
+        vec![
+            part(
+                "J1",
+                "Conn_01x06",
+                "Connector:Conn_01x06",
+                &[
+                    ("1", V12),
+                    ("2", GND),
+                    ("3", SW),
+                    ("4", MID),
+                    ("5", CTRL),
+                    ("6", GND),
+                ],
+            ),
+            nfet(GND, DRAIN, LOAD_EN),
+            part("R1", "100k", "Device:R", &[("1", LOAD_EN), ("2", GND)]),
+            part("R2", "100k", "Device:R", &[("1", DRAIN), ("2", LEVEL)]),
+            part("R3", "100k", "Device:R", &[("1", LEVEL), ("2", V12)]),
+            part("C1", "100n", "Device:C", &[("1", LEVEL), ("2", V12)]),
+            q2,
+            part("R4", "1k", "Device:R", &[("1", LOAD_OUT), ("2", GND)]),
+        ]
+    }
+
+    #[test]
+    fn a_low_side_gate_drive_level_shifter_is_not_reverse_polarity_protection() {
+        let found = lint(level_shifter(), SHIFT_NETS);
+        assert!(found.is_empty(), "level shifter: {found:#?}");
+    }
+
+    /// Each of the two reasons the level shifter was misread (a gate held to
+    /// its own source, a source on ground) is enough on its own to keep the
+    /// check silent, and the same wiring with the reason removed is still the
+    /// reversed protection FET it looked like.
+    #[test]
+    fn held_off_gates_and_ground_sources_each_abstain_alone() {
+        let nets = [SHIFT_NETS, RAILS].concat();
+        let rpp_with = |gate: i64, bias_to: i64| {
+            let mut parts = rpp(VFUSED, VPROT);
+            parts.retain(|p| p.reference != "R1");
+            parts[2] = pfet(VFUSED, VPROT, gate);
+            parts.push(part(
+                "R1",
+                "100k",
+                "Device:R",
+                &[("1", gate), ("2", bias_to)],
+            ));
+            parts
+        };
+        // Control: an auto-named gate pulled to ground is the protection FET.
+        let found = lint(rpp_with(VIN_GATE, GND), &nets);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        // (a) The same gate pulled to the FET's own source is held off.
+        let found = lint(rpp_with(VIN_GATE, VFUSED), &nets);
+        assert!(found.is_empty(), "held off: {found:#?}");
+        // A hand-named gate net is still the protection FET: a name is not
+        // evidence that something drives the gate.
+        let found = lint(rpp_with(LOAD_EN, GND), &nets);
+        assert_eq!(found.len(), 1, "named gate: {found:#?}");
+        // (c) A source on ground behind an auto-named two-resistor bias chain
+        // is not a supply input, however many headers share ground.
+        let low = |source: i64| {
+            vec![
+                header(V5),
+                nfet(source, DRAIN, CTRL),
+                part("R5", "100k", "Device:R", &[("1", CTRL), ("2", MID)]),
+                part("R6", "100k", "Device:R", &[("1", MID), ("2", GND)]),
+                part("R8", "100k", "Device:R", &[("1", DRAIN), ("2", GND)]),
+            ]
+        };
+        let found = lint(low(GND), &nets);
+        assert!(found.is_empty(), "ground source: {found:#?}");
+        let found = lint(low(V5), &nets);
+        assert_eq!(found.len(), 1, "source on the connector rail: {found:#?}");
     }
 }
