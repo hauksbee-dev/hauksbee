@@ -80,6 +80,14 @@ const UNIVERSAL: &[&str] = &[
     "i2s_clock_role",
     "mclk_required",
     "dout_hiz",
+    // The envelope check treats a battery pin as a battery net on any card that
+    // states the cell chemistry, not only a `vreg` one ("a charger or
+    // power-path card, or any card that states the chemistry"), and reads the
+    // charge-voltage span beside it, so a power-path part modelled as a
+    // behavioural-law card rather than a regulator still says them.
+    "battery_chemistry",
+    "vout_setpoint_low",
+    "vout_setpoint_high",
 ];
 
 /// The SPICE junction params shared by the diode and the MOSFET body diode.

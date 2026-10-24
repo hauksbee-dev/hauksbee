@@ -54,11 +54,14 @@ use hauksbee_solve::SolverOptions;
 use crate::support::passive_pin as pin;
 
 /// Binder paths whose cards are expected to fail, with why. A path leaves
-/// this list when its fix lands, and the test says so.
+/// this list when its fix lands, and the test says so. The BQ24075 used to sit
+/// here as an identity-only card; it now carries its power path as a
+/// behavioural law and is a `digital` card, outside this matrix.
 const KNOWN_GAP_PATHS: &[(&str, &str)] = &[(
     "no-output",
-    "an identity-only card (bq24075_identity) states no output voltage, reference or \
-         converter, so no power stage is stamped and the part's rail is the board's to supply",
+    "a card that states no output voltage, reference or converter (an identity-only card \
+         such as tps61169_identity or r1218n_identity, or one with no `vout` yet) stamps no \
+         power stage, so the part's rail is the board's to supply",
 )];
 
 /// The relative tolerance of every balance check.
@@ -1894,4 +1897,77 @@ fn a_power_path_card_charges_its_port_and_powers_its_rail_from_the_input() {
         );
     }
     assert!(seen >= 1, "no power-path charger cards found");
+}
+
+/// One BQ24075 on a board: IN on `input`, OUT (pads 10, 11) on `VSYS` loaded
+/// by `load_ohms`, BAT (pads 2, 3) on a declared 3.7 V cell. Returns the
+/// settled scheduler.
+fn settle_bq24075(input: &str, load_ohms: f64) -> Scheduler {
+    let mut rig = Rig::default();
+    let (n_in, n_out) = (rig.net(input), rig.net("VSYS"));
+    let (n_bat, n_gnd) = (rig.net(&rail(3.7)), rig.net("GND"));
+    let pads = [
+        ("13", n_in),
+        ("10", n_out),
+        ("11", n_out),
+        ("2", n_bat),
+        ("3", n_bat),
+        ("8", n_gnd),
+    ];
+    let pins = pads.iter().map(|(p, n)| pin(p, *n)).collect();
+    rig.parts.push(component("U1", "BQ24075", "", pins));
+    rig.load("R1", "VSYS", load_ohms);
+    let lib = ModelLibrary::builtin();
+    let bound = bind_board_with(&rig.board(), &lib, &CustomRegistry::new());
+    let row = bound.report.row("U1");
+    assert_eq!(
+        row.and_then(|r| r.model_id.as_deref()),
+        Some("bq24075"),
+        "U1 bound {row:?}"
+    );
+    let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
+    for _ in 0..40 {
+        sched.step(1e-4);
+    }
+    assert!(sched.analog_valid(), "{:?}", sched.failed_windows());
+    sched
+}
+
+/// The BQ24075 power path (SLUS810N 8.5 p.12, 9.3.3 and 9.3.4 p.21): OUT is
+/// IN less the input FET's 0.3 ohm drop on a USB-class input (not a 5.5 V
+/// source), the regulated 5.4 to 5.6 V on a higher one, and BAT less the
+/// battery FET drop when IN is absent or over the 6.6 V OVP threshold.
+#[test]
+fn bq24075_out_follows_in_regulates_or_falls_back_to_the_battery() {
+    let out = |s: &Scheduler| s.net_voltage("VSYS").unwrap_or(f64::NAN);
+    let within = |got: f64, lo: f64, hi: f64, what: &str| {
+        assert!(
+            (lo..=hi).contains(&got),
+            "{what}: OUT {got:.4} V outside {lo}..{hi} V"
+        );
+    };
+
+    // 5 V USB into 100 ohm (about 50 mA): IN less 0.3 ohm * 50 mA, ~4.985 V.
+    within(
+        out(&settle_bq24075(&rail(5.0), 100.0)),
+        4.95,
+        5.0,
+        "5 V input",
+    );
+    // 6.2 V is above VO(REG) + the dropout: held to the 5.4..5.6 V band.
+    within(
+        out(&settle_bq24075(&rail(6.2), 100.0)),
+        5.4,
+        5.6,
+        "6.2 V input",
+    );
+    // No source on IN: the battery feeds OUT, 3.7 V less the FET drop.
+    within(out(&settle_bq24075("VIN", 100.0)), 3.6, 3.7, "IN absent");
+    // IN over the 6.6 V OVP threshold: OUT is connected to the battery.
+    within(
+        out(&settle_bq24075(&rail(7.0), 100.0)),
+        3.6,
+        3.7,
+        "IN in OVP",
+    );
 }
