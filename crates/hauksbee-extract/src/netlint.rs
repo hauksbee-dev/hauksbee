@@ -1154,6 +1154,34 @@ fn passive_prefix(reference: &str) -> Option<char> {
     }
 }
 
+/// Whether a capacitor-designated part carries a zero-resistance value (`0`,
+/// `0R`, `0 ohm`) and nothing in its record says it is a deliberate link: not a
+/// resistor symbol or footprint, not a jumper or net tie. Such a position is a
+/// wire where a capacitor was meant, or a link option nobody marked.
+fn is_zero_ohm_in_capacitor_position(c: &Component) -> bool {
+    let Some(v) = hauksbee_models::value::parse_value(&c.value) else {
+        return false;
+    };
+    let ohmic = v.unit.as_deref().is_none_or(|u| {
+        let u = u.to_ascii_lowercase();
+        u == "r" || u == "ohm" || u == "ohms" || u == "\u{3a9}"
+    });
+    if !ohmic || v.si > 0.0 || crate::dnp::is_jumper_or_net_tie(c) {
+        return false;
+    }
+    let symbol = c
+        .lib_id
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let resistor_symbol = symbol == "r"
+        || symbol.starts_with("r_")
+        || symbol.contains("resistor")
+        || symbol.starts_with("zero");
+    !(resistor_symbol || footprint_family(&c.footprint) == Some('R'))
+}
+
 fn footprint_family(footprint: &str) -> Option<char> {
     let fp = footprint.to_ascii_lowercase();
     if fp.contains("capacitor") || fp.contains(":c_") || fp.contains("/c_") {
@@ -1363,6 +1391,23 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
                     .findings
                     .push(designator_footprint_finding(c, prefix, family));
             }
+        }
+
+        if prefix == 'C' && is_zero_ohm_in_capacitor_position(c) && !crate::dnp::unbought(c) {
+            report.findings.push(LintFinding {
+                check: LintCheck::ValuePackageSanity,
+                severity: Severity::Medium,
+                message: format!(
+                    "{} is a capacitor position fitted with a 0 ohm link (value '{}'): a link \
+                     ties its two nets together at DC, so it blocks nothing and filters nothing. \
+                     Confirm a link was intended; an AC-coupling, decoupling or filter position \
+                     needs a capacitor. If the position is a deliberate 0 ohm option, mark it \
+                     do-not-populate or draw it as a resistor.",
+                    c.reference, c.value
+                ),
+                refs: vec![c.reference.clone()],
+                nets: Vec::new(),
+            });
         }
 
         if prefix == 'C' {
@@ -4456,5 +4501,66 @@ mod socketed_chip_tests {
             8,
         );
         assert!(is_connector_like(&dip_switch), "a DIP switch");
+    }
+}
+
+#[cfg(test)]
+mod zero_ohm_capacitor_position_tests {
+    use crate::testutil::{board, part};
+    use crate::{Component, LintCheck};
+
+    fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
+        part(reference, value, lib_id, footprint, Vec::new())
+    }
+
+    fn zero_ohm_findings(components: Vec<Component>) -> Vec<String> {
+        board(&[], components)
+            .net_lint()
+            .of_check(LintCheck::ValuePackageSanity)
+            .map(|f| f.message.clone())
+            .collect()
+    }
+
+    const CAP_FP: &str = "Capacitor_SMD:C_0402_1005Metric";
+
+    #[test]
+    fn a_capacitor_position_fitted_with_a_zero_ohm_value_is_flagged() {
+        for value in ["0", "0R", "0 ohm", "0\u{3a9}", "0.0"] {
+            let found = zero_ohm_findings(vec![comp("C40", value, "Device:C", CAP_FP)]);
+            assert_eq!(found.len(), 1, "{value}: {found:?}");
+            assert!(
+                found[0].contains("C40") && found[0].contains("0 ohm link"),
+                "{found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_capacitors_and_deliberate_link_options_are_silent() {
+        // A real capacitor value is silent.
+        assert!(zero_ohm_findings(vec![comp("C1", "100n", "Device:C", CAP_FP)]).is_empty());
+        // A zero-ohm option the designer marked do-not-populate is silent.
+        let mut dnp = comp("C2", "0", "Device:C", CAP_FP);
+        dnp.dnp = true;
+        assert!(zero_ohm_findings(vec![dnp]).is_empty());
+        // A zero-ohm option drawn as a resistor in a C-designated slot is deliberate.
+        let resistor = comp("C3", "0R", "Device:R", "Resistor_SMD:R_0402_1005Metric");
+        assert!(zero_ohm_findings(vec![resistor]).is_empty());
+        // A solder jumper or net tie is a link by class.
+        let jumper = comp(
+            "C4",
+            "0",
+            "Jumper:SolderJumper_2_Open",
+            "Jumper:SolderJumper_2_P1.3mm_Open",
+        );
+        assert!(zero_ohm_findings(vec![jumper]).is_empty());
+        // A zero-ohm resistor in a resistor position is the ordinary link.
+        assert!(zero_ohm_findings(vec![comp(
+            "R5",
+            "0",
+            "Device:R",
+            "Resistor_SMD:R_0402_1005Metric"
+        )])
+        .is_empty());
     }
 }

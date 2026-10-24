@@ -747,6 +747,99 @@ mod tests {
         );
     }
 
+    const V12: i64 = 8;
+
+    /// An MCU with no card: `core` is the function of its pins on `+1V2`, and
+    /// `supply` is the net its ordinary supply pin is on.
+    fn mcu_with_core_node(core: &str, supply: i64) -> Component {
+        let mut mcu = part(
+            "U2",
+            "XYZMCU-9000",
+            &[("1", supply), ("2", GND), ("3", V12), ("4", V12)],
+        );
+        for (i, (function, kind)) in [
+            ("VDD", "power_in"),
+            ("VSS", "power_in"),
+            (core, "power_in"),
+            (core, "power_in"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            mcu.pins[i].function = function.into();
+            mcu.pins[i].kind = kind.into();
+        }
+        mcu
+    }
+
+    fn run_with_core_node(parts: Vec<Component>) -> Vec<LintFinding> {
+        let mut named = nets();
+        named.push((V12, "+1V2"));
+        rail_basis_lint(&board(&named, parts), &ModelLibrary::builtin()).findings
+    }
+
+    fn caps_on_core_node() -> Vec<Component> {
+        vec![
+            part("C1", "1u", &[("1", V12), ("2", GND)]),
+            part("C2", "1u", &[("1", V12), ("2", GND)]),
+            part("C3", "100n", &[("1", V12), ("2", GND)]),
+        ]
+    }
+
+    /// Legal control: a net holding only one chip's pins and capacitors, on a
+    /// chip that is powered from a real rail on another pin, is that chip's own
+    /// regulator node, whatever the pin or the net is called.
+    #[test]
+    fn a_net_of_one_chips_pins_and_capacitors_is_its_own_regulator_node() {
+        for core in ["VDD12", "VDDC", "VDDC_87", "CPU_PWR", "LDO_OUT"] {
+            let mut parts = vec![usb(), ldo(), mcu_with_core_node(core, V3)];
+            parts.extend(caps_on_core_node());
+            let found = run_with_core_node(parts);
+            assert!(
+                found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+                "{core}: {found:#?}"
+            );
+        }
+    }
+
+    /// Faulty: the same net is a real missing supply when the chip's only
+    /// supply pin is on it, when the chip is not powered anywhere else, or when
+    /// something besides capacitors loads it.
+    #[test]
+    fn a_chips_only_supply_net_with_only_capacitors_is_still_unsourced() {
+        // Its one supply pin is on the net.
+        let mut lone = part("U2", "XYZMCU-9000", &[("1", V12), ("2", GND)]);
+        lone.pins[0].function = "VDD".into();
+        lone.pins[0].kind = "power_in".into();
+        let mut parts = vec![usb(), ldo(), lone];
+        parts.extend(caps_on_core_node());
+        let found = run_with_core_node(parts);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+        // A second supply pin, but on a net that is also bare: both are unsourced.
+        let mut parts = vec![usb(), mcu_with_core_node("VDD12", V3)];
+        parts.push(part("C4", "1u", &[("1", V3), ("2", GND)]));
+        parts.extend(caps_on_core_node());
+        let found = run_with_core_node(parts);
+        assert!(!unsourced(&found).is_empty(), "{found:#?}");
+        assert!(
+            unsourced(&found)
+                .iter()
+                .any(|f| f.nets.iter().any(|n| n == "+1V2")),
+            "{found:#?}"
+        );
+        // Another chip draws from the net.
+        let mut parts = vec![usb(), ldo(), mcu_with_core_node("VDD12", V3)];
+        parts.push(sensor("U7", V12));
+        parts.extend(caps_on_core_node());
+        let found = run_with_core_node(parts);
+        assert!(
+            unsourced(&found)
+                .iter()
+                .any(|f| f.nets.iter().any(|n| n == "+1V2")),
+            "{found:#?}"
+        );
+    }
+
     /// Legal control: a connector on the rail brings it in; the rail is a
     /// stated condition, not a finding.
     #[test]

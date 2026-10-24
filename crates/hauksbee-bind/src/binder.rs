@@ -2609,6 +2609,14 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             if let Some(tvs) = hauksbee_models::value::parse_tvs_name(&comp.value) {
                 return tvs_fallback(&tvs);
             }
+            // A surge or ESD protector with no card (`TPD1E10B06`, `PESD5V0S1BL`,
+            // a symbol or description that says TVS) is bidirectional or clamps
+            // in a way no one-way signal diode stands in for. Held to a 1N4148
+            // curve with a guessed pad map it would read as a diode forward
+            // biased straight across the rail it protects, so it stays unmodelled.
+            if marks_tvs_or_esd(comp) {
+                return None;
+            }
             let zener = zener_mark(comp);
             if matches!(zener, ZenerMark::Unstated) {
                 return None;
@@ -3176,6 +3184,45 @@ fn tvs_fallback(
     );
     entry.ratings.max_voltage_v = Some(standoff);
     Some(entry)
+}
+
+/// Part-number families of ESD arrays and TVS diodes whose names say what they
+/// are, as the start of a token of the value or ordering code.
+const TVS_ESD_PART_PREFIXES: [&str; 9] = [
+    "TPD", "ESD", "PESD", "TVS", "PRTR", "USBLC", "SRV05", "SP05", "RCLAMP",
+];
+
+/// Whether a part's record says it is a TVS, ESD protector or surge suppressor:
+/// its value or ordering code starts with a known protector family, or its
+/// value, symbol, description or keywords hold the word `TVS`, `ESD` or
+/// `suppressor`.
+fn marks_tvs_or_esd(comp: &Component) -> bool {
+    let tokens = |s: &str| {
+        s.to_ascii_uppercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let names_word = |s: &str| {
+        tokens(s)
+            .iter()
+            .any(|t| matches!(t.as_str(), "TVS" | "ESD" | "SUPPRESSOR" | "SUPPRESSORS"))
+    };
+    let names_family = |s: &str| {
+        tokens(s)
+            .iter()
+            .any(|t| TVS_ESD_PART_PREFIXES.iter().any(|p| t.starts_with(p)))
+    };
+    let described = comp.properties.iter().any(|(k, v)| {
+        let lower = k.to_ascii_lowercase();
+        ((lower.contains("descr") || lower.contains("keyword")) && names_word(v))
+            || (hauksbee_extract::bom::is_mpn_property_key(k) && names_family(v))
+    });
+    names_family(&comp.value)
+        || names_word(&comp.value)
+        || names_word(symbol_name(&comp.lib_id))
+        || described
 }
 
 /// Whether a diode is marked as a Zener, and the breakdown voltage it states.
@@ -13350,6 +13397,38 @@ style = "i2c_pointer"
         assert!(fallback_entry(&diode("SMBJ6.0CA")).is_none());
         let ss = fallback_entry(&diode("SS14")).map(|e| e.id);
         assert_ne!(ss.as_deref(), Some("tvs_diode_fallback"));
+    }
+
+    /// A protector with no card, however its record says so, gets no one-way
+    /// signal-diode curve: it would read as forward biased across the rail it
+    /// protects. A bare diode footprint with another value keeps the fallback.
+    #[test]
+    fn an_uncarded_tvs_or_esd_part_is_not_bound_as_a_signal_diode() {
+        let part = |reference: &str, value: &str, lib_id: &str| Component {
+            footprint: "Diode_SMD:D_SOD-523".into(),
+            lib_id: lib_id.into(),
+            pins: vec![pin("1", 1), pin("2", 2)],
+            ..comp(reference, value)
+        };
+        // By part number, by symbol, and by description.
+        for (reference, value, lib_id) in [
+            ("U5", "TPD1E10B06DPYR", "Power_Protection:TPD1E10B06"),
+            ("D6", "PESD5V0S1BL", "Device:D"),
+            ("D7", "ProtectorX", "Device:D_TVS"),
+            ("D8", "ZZ9000", "Device:D_ESD"),
+        ] {
+            let found = fallback_entry(&part(reference, value, lib_id));
+            assert!(found.is_none(), "{value}: {found:?}");
+        }
+        let mut described = part("D9", "ZZ9000", "Device:D");
+        described.properties = vec![("Description".into(), "Bidirectional ESD protection".into())];
+        assert!(fallback_entry(&described).is_none());
+        // Controls: a rectifier on the same footprint and a plain diode keep the guess.
+        for (reference, value) in [("D1", "SS14"), ("U6", "1N4148W"), ("D2", "D")] {
+            let entry = fallback_entry(&part(reference, value, "Device:D"))
+                .unwrap_or_else(|| panic!("{value} binds"));
+            assert_eq!(entry.id, "signal_diode_1n4148_fallback", "{value}");
+        }
     }
 
     /// Only a field named for the rated voltage states it; one that merely
