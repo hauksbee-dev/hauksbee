@@ -246,6 +246,25 @@ pub(crate) fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
+/// The net `pin` really shares with other pins, or `None` when it is on no net,
+/// on a `KiCad` `unconnected-` placeholder, or alone on its own net.
+///
+/// A pin with nothing else on its net cannot short, bridge or sense anything,
+/// so a check that judges which nets a part ties together reads it through
+/// this, not through `pin.net`.
+pub(crate) fn shared_net(board: &ExtractedBoard, pin: &hauksbee_extract::Pin) -> Option<i64> {
+    let id = pin.net.filter(|id| *id != 0)?;
+    let named_unconnected = board.net(id).is_some_and(|n| is_unconnected_net(&n.name));
+    let alone = board
+        .components
+        .iter()
+        .flat_map(|c| &c.pins)
+        .filter(|p| p.net == Some(id))
+        .nth(1)
+        .is_none();
+    (!named_unconnected && !alone).then_some(id)
+}
+
 /// Whether `model`'s pin map fits `comp`'s footprint, judged as the binder
 /// judges it ([`hauksbee_bind::package_fit::misfit`]).
 ///
