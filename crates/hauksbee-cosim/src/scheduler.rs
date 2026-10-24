@@ -534,6 +534,8 @@ pub struct Scheduler {
     /// pins: its `Vsource` (the current it delivers is read there) and the legs
     /// set once per chunk (see `hauksbee_bind::drivers::DriverSupply`).
     driver_draws: Vec<(DeviceId, hauksbee_bind::drivers::DriverSupply)>,
+    /// Widest source envelope seen so far (see `Scheduler::envelope`).
+    envelope_hull: std::cell::Cell<Option<crate::envelope::Envelope>>,
     open_parts: Vec<hauksbee_bind::bind_report::OpenPart>,
     reg_supported: Vec<bool>,
     reg_dirty: bool,
@@ -1602,6 +1604,10 @@ impl Scheduler {
         {
             stress.watch_regulator_heat(source, heat);
         }
+        // A pad or supply pin nothing holds, with a current source injecting
+        // into it, would solve at I/gmin volts: clamp it like a real pad.
+        let mut circuit = circuit;
+        crate::envelope::stamp_floating_clamps(&mut circuit);
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
@@ -1621,6 +1627,7 @@ impl Scheduler {
             reg_supported: vec![false; report.regulators.len()],
             regulators: report.regulators,
             driver_draws,
+            envelope_hull: std::cell::Cell::new(None),
             open_parts: report.open_parts,
             reg_dirty: true,
             regulation: Vec::new(),
@@ -3987,7 +3994,9 @@ impl Scheduler {
         // `analog_valid:false` instead.
         self.sim_time += chunk;
         if chunk_converged {
-            self.update_stats();
+            if let Some(reason) = self.update_stats() {
+                self.record_failed_window_at(self.sim_time - chunk, chunk, Some(reason));
+            }
             self.accumulate_frame_peaks();
 
             // 6. Fault / stress monitor: evaluate every device against its
@@ -5034,27 +5043,58 @@ impl Scheduler {
     /// a real answer.
     const NODE_VOLTAGE_SANITY_V: f64 = 1e9;
 
-    /// The first node whose solved voltage is non-finite or beyond
-    /// [`Self::NODE_VOLTAGE_SANITY_V`], with that voltage. `None` for a sane
-    /// state. Only the node block is judged: the branch entries are currents.
+    /// The first node whose solved voltage is not board reality, with that
+    /// voltage: non-finite, beyond [`Self::NODE_VOLTAGE_SANITY_V`], or outside
+    /// the board's [`crate::envelope::Envelope`] (`[min source - 1 V,
+    /// max source + 1 V]`). `None` for a sane state. Only the node block is
+    /// judged: the branch entries are currents.
     fn insane_node_state(&self, x: &[f64]) -> Option<(usize, f64)> {
-        x.iter()
-            .take(self.layout.n_nodes.min(x.len()))
+        let nodes = &x[..self.layout.n_nodes.min(x.len())];
+        nodes
+            .iter()
+            .copied()
             .enumerate()
             .find(|(_, v)| !v.is_finite() || v.abs() > Self::NODE_VOLTAGE_SANITY_V)
-            .map(|(i, &v)| (i, v))
+            .or_else(|| self.envelope()?.first_outside(nodes))
+    }
+
+    /// The source envelope the run has seen so far: the widest
+    /// [`crate::envelope::Envelope`] any chunk's sources have spanned. A source
+    /// re-valued between chunks (a button, a supply dip, a firmware-driven pad)
+    /// leaves the nodes it charged where they were, so the envelope only ever
+    /// widens. `None` when the board cannot be bounded by its sources.
+    fn envelope(&self) -> Option<crate::envelope::Envelope> {
+        let now = crate::envelope::Envelope::of(&self.circuit)?;
+        let widened = self
+            .envelope_hull
+            .get()
+            .map_or(now, |seen| crate::envelope::Envelope {
+                lo: seen.lo.min(now.lo),
+                hi: seen.hi.max(now.hi),
+            });
+        self.envelope_hull.set(Some(widened));
+        Some(widened)
     }
 
     /// The honest refusal for an insane converged state: name the worst net
     /// and the voltage, so the failure reads as the modelling problem it is
     /// rather than a bare "did not converge".
     fn insane_state_reason(&self, unknown: usize, volts: f64) -> String {
-        format!(
-            "converged state is not board reality: {} at {volts:.3e} V \
-             (beyond the {:.0e} V sanity bound); refusing to adopt it",
-            hauksbee_solve::blame::name_node_unknown(&self.circuit, unknown),
-            Self::NODE_VOLTAGE_SANITY_V
-        )
+        let net = hauksbee_solve::blame::name_node_unknown(&self.circuit, unknown);
+        match self.envelope() {
+            Some(env) if volts.is_finite() && volts.abs() <= Self::NODE_VOLTAGE_SANITY_V => {
+                format!(
+                    "solver fault: {net} solved at {volts:.3} V, outside what the board's \
+                     sources can produce ({:.1} V to {:.1} V); refusing to report it as a reading",
+                    env.lo, env.hi
+                )
+            }
+            _ => format!(
+                "converged state is not board reality: {net} at {volts:.3e} V \
+                 (beyond the {:.0e} V sanity bound); refusing to adopt it",
+                Self::NODE_VOLTAGE_SANITY_V
+            ),
+        }
     }
 
     /// Point every regulator's pass draw at the mean current its source
@@ -5412,13 +5452,17 @@ impl Scheduler {
     /// chunk)` is the window this failed chunk covers. Consecutive failed chunks
     /// are merged into one window so a diverged stretch reads as its true extent.
     fn record_failed_chunk(&mut self, chunk: f64, reason: Option<String>) {
+        self.record_failed_window_at(self.sim_time, chunk, reason);
+    }
+
+    /// [`Scheduler::record_failed_chunk`] for a chunk starting at `start`.
+    fn record_failed_window_at(&mut self, start: f64, chunk: f64, reason: Option<String>) {
         self.failed_chunks += 1;
         self.consecutive_failed_chunks += 1;
         self.max_consecutive_failed_chunks = self
             .max_consecutive_failed_chunks
             .max(self.consecutive_failed_chunks);
-        let start = self.sim_time;
-        let end = self.sim_time + chunk;
+        let end = start + chunk;
         // Merge into the previous window when this chunk is contiguous with it (a
         // back-to-back failure). The tolerance is a small fraction of the chunk so
         // ordinary float drift in `sim_time` accumulation does not split a run.
@@ -6112,7 +6156,13 @@ impl Scheduler {
         self.reset_failure.as_deref()
     }
 
-    fn update_stats(&mut self) {
+    /// Fold the settled node voltages into the per-net statistics. A node
+    /// outside the board's source envelope is a solver fault, never a
+    /// reading: it is left out of the statistics and named in the returned
+    /// reason (the caller records the chunk as unsolved).
+    fn update_stats(&mut self) -> Option<String> {
+        let envelope = self.envelope();
+        let mut fault: Option<String> = None;
         // Rail-relative logic thresholds for toggle counting. A fixed 3.0/2.0 V
         // band (a 2.5 V midpoint) is a 5 V-rail assumption: on a 3.3 V board
         // (every renode/qemu external MCU returns logic_high 3.3) a loaded high
@@ -6147,6 +6197,18 @@ impl Scheduler {
         let powered = self.sim_time >= self.powered_from_s;
         for (name, &node) in &self.net_nodes {
             let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
+            // A level the caller forced is theirs by construction, not a solve.
+            let forced = self.forced_node_volts.contains_key(&node);
+            if let Some(env) = envelope.filter(|env| !forced && env.first_outside(&[v]).is_some()) {
+                fault.get_or_insert_with(|| {
+                    format!(
+                        "solver fault: {name} solved at {v:.3} V, outside what the board's \
+                         sources can produce ({:.1} V to {:.1} V); not reported as a reading",
+                        env.lo, env.hi
+                    )
+                });
+                continue;
+            }
             let st = self.stats.entry(name.clone()).or_default();
             st.min_v = st.min_v.min(v);
             st.max_v = st.max_v.max(v);
@@ -6168,6 +6230,7 @@ impl Scheduler {
             }
             st.last_logic = logic;
         }
+        fault
     }
 
     /// Fold this chunk's settled operating point into the per-frame extreme
@@ -7580,6 +7643,9 @@ impl Scheduler {
     /// node/branch state buffers to match. Called after structural edits (a
     /// stamped short bridge) so the solver and fault monitor stay consistent.
     fn relayout(&mut self) {
+        // Devices stamped after construction (peripheral supply legs, pin
+        // drivers) may inject into a node nothing holds.
+        crate::envelope::stamp_floating_clamps(&mut self.circuit);
         self.layout = Layout::new(&self.circuit);
         let n_nodes = self.circuit.node_count();
         self.node_volts.resize(n_nodes, 0.0);
@@ -9312,6 +9378,9 @@ missing = ["measurement_registers"]
 
     #[path = "electrics.rs"]
     mod electrics_tests;
+
+    #[path = "floating_pads.rs"]
+    mod floating_pads_tests;
 
     // ── Shared fixtures ──────────────────────────────────────────────────────
 
