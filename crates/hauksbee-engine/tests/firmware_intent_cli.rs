@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use hauksbee_testkit::avr_firmware::{atmega328p_vector_table, avr_elf};
+
 use crate::pin_function_reasoning::{netlist, Part, Pin};
 use crate::support::{run_board, stdout};
 
@@ -19,41 +21,6 @@ use crate::support::{run_board, stdout};
 const TIMER1_CAPT: usize = 11;
 /// `TIMER0_OVF`.
 const TIMER0_OVF: usize = 17;
-
-/// The 26-slot `jmp` vector table of an `ATmega328P`: every vector to the shared
-/// default routine, except the `handled` ones, each to its own handler.
-fn vector_table(handled: &[usize]) -> Vec<u8> {
-    const DEFAULT: u32 = 0x0070;
-    let mut out = Vec::new();
-    for n in 1..=26 {
-        let target = match handled.iter().position(|&h| h == n) {
-            Some(i) => 0x0100 + 0x10 * u32::try_from(i + 1).unwrap(),
-            None if n == 1 => 0x0080,
-            None => DEFAULT,
-        };
-        // jmp k: 1001 010k kkkk 110k, then the low 16 bits of the word address.
-        let w0 = 0x940C_u16 | u16::try_from((target >> 16) & 1).unwrap();
-        out.extend_from_slice(&w0.to_le_bytes());
-        out.extend_from_slice(&u16::try_from(target & 0xFFFF).unwrap().to_le_bytes());
-    }
-    out
-}
-
-/// A 32-bit little-endian AVR ELF with `flash` loaded at flash address 0.
-fn elf_of(flash: &[u8]) -> Vec<u8> {
-    let len = u32::try_from(flash.len()).unwrap();
-    let mut e = vec![0x7F, b'E', b'L', b'F', 1, 1, 1, 0];
-    e.resize(52, 0);
-    e[0x12] = 83; // EM_AVR
-    e[0x1C..0x20].copy_from_slice(&52u32.to_le_bytes());
-    e[0x2A..0x2C].copy_from_slice(&32u16.to_le_bytes());
-    e[0x2C..0x2E].copy_from_slice(&1u16.to_le_bytes());
-    for v in [1, 84, 0, 0, len, len, 5, 2] {
-        e.extend_from_slice(&u32::to_le_bytes(v));
-    }
-    e.extend_from_slice(flash);
-    e
-}
 
 /// The board and firmware files of one scenario in a fresh directory.
 struct Scenario {
@@ -71,7 +38,7 @@ impl Scenario {
 
     fn firmware(&self, handled: &[usize]) -> PathBuf {
         let path = self.dir.path().join("fw.elf");
-        std::fs::write(&path, elf_of(&vector_table(handled))).expect("write the ELF");
+        std::fs::write(&path, avr_elf(&atmega328p_vector_table(handled))).expect("write the ELF");
         path
     }
 

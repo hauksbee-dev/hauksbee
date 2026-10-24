@@ -190,6 +190,7 @@ fn gather_ci_artifact_findings(
         is_altium,
         lib,
         schematic_ties,
+        cfg.firmware.as_deref(),
     )?;
     findings.retain(|finding| ci_check_selected(surface, finding));
     let bound = bind_board(board, lib);

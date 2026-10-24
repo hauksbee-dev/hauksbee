@@ -25,6 +25,7 @@ mod evidence_spine_ci;
 mod exit3_reachability;
 mod firmware_guard;
 mod firmware_input_ci;
+mod firmware_intent_ci;
 mod flagship_brownout;
 mod floating_net_verdict;
 mod gate_drive;

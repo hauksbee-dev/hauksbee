@@ -208,6 +208,35 @@ pub fn avr_elf(image: &[u8]) -> Vec<u8> {
     elf
 }
 
+/// The 26-slot `jmp` interrupt vector table of an `ATmega328P`, as avr-gcc links it.
+///
+/// Every vector jumps to one shared default routine (`__bad_interrupt`),
+/// except the `handled` ones (1-based vector numbers, reset is 1, so
+/// `TIMER1_CAPT` is 11), each of which jumps to a handler of its own. An image
+/// reader that asks which interrupts the program handles can tell them apart;
+/// the image runs nothing else.
+///
+/// # Panics
+///
+/// Never in practice: every target address fits the 16-bit word it is stored in.
+#[must_use]
+pub fn atmega328p_vector_table(handled: &[usize]) -> Vec<u8> {
+    const DEFAULT: u32 = 0x0070;
+    let mut out = Vec::new();
+    for n in 1..=26 {
+        let target = match handled.iter().position(|&h| h == n) {
+            Some(i) => 0x0100 + 0x10 * u32::try_from(i + 1).unwrap(),
+            None if n == 1 => 0x0080,
+            None => DEFAULT,
+        };
+        // jmp k: 1001 010k kkkk 110k, then the low 16 bits of the word address.
+        let w0 = 0x940C_u16 | u16::try_from((target >> 16) & 1).unwrap();
+        out.extend_from_slice(&w0.to_le_bytes());
+        out.extend_from_slice(&u16::try_from(target & 0xFFFF).unwrap().to_le_bytes());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -791,6 +791,10 @@ fn gate_items(
 ///
 /// Returns an error if the sibling `KiCad` project/custom clearance rules cannot
 /// be loaded, or if the DRC cannot run over the board (`KiCad` or Altium).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the artifact writers hand over the whole normalized input"
+)]
 pub fn gather_findings_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -799,6 +803,7 @@ pub fn gather_findings_with_schematic(
     altium_present: bool,
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+    firmware: Option<&Path>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
     gather_static(
         board_path,
@@ -808,6 +813,7 @@ pub fn gather_findings_with_schematic(
         altium_present,
         lib,
         schematic_ties,
+        firmware,
     )
     .map(|g| g.kept)
 }
@@ -828,6 +834,14 @@ fn finding_key(f: &crate::result::JsonFinding) -> (&str, &str, &str, &str, &[Str
 
 /// [`gather_findings_with_schematic`], keeping what the waivers overruled so a
 /// surface can list it as waived instead of dropping it.
+///
+/// `firmware` is the resolved image the run was given, if any: the program's
+/// own firmware-intent findings join the lint here, as they do on the
+/// `--lint` and `--check` reports.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the artifact writers hand over the whole normalized input"
+)]
 fn gather_static(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -836,6 +850,7 @@ fn gather_static(
     altium_present: bool,
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+    firmware: Option<&Path>,
 ) -> anyhow::Result<GatheredStatic> {
     // The stages a progress bar names, in the web analysis's own words and order.
     hauksbee_ir::progress::begin_copper();
@@ -852,6 +867,8 @@ fn gather_static(
     let geo_text = if altium_present { None } else { Some(text) };
     lint.findings
         .extend(crate::checks::layout_lint(board, geo_text, Some(board_path)).findings);
+    lint.findings
+        .extend(super::firmware_intent::findings(board, lib, firmware));
     hauksbee_ir::progress::begin_untracked(hauksbee_ir::progress::Stage::Signals);
     let mut si = crate::checks::engine_si(board, lib, geo_text);
     let usbc = crate::usb_c_report(board);
@@ -942,7 +959,7 @@ pub struct StaticGate {
 ///
 /// As [`static_gating_findings`].
 pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<StaticGate> {
-    static_gate_as_built(board_path, lib, None)
+    static_gate_as_built(board_path, lib, None, None)
 }
 
 /// [`static_gate`] on the board as reworked by `overlay`, when there is one.
@@ -952,6 +969,10 @@ pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<Stat
 /// so a finding the rework removes is gone and one it creates is found. The
 /// copper (DRC) checks still read the design files.
 ///
+/// `firmware` is the resolved image the run loads, when there is one; its
+/// firmware-intent findings join the lint exactly as `hauksbee check
+/// --firmware` reports them.
+///
 /// # Errors
 ///
 /// As [`static_gating_findings`], and when the overlay does not describe the
@@ -960,6 +981,7 @@ pub fn static_gate_as_built(
     board_path: &Path,
     lib: &ModelLibrary,
     overlay: Option<&crate::asbuilt::AsBuiltOverlay>,
+    firmware: Option<&Path>,
 ) -> anyhow::Result<StaticGate> {
     let norm = crate::board_input::from_path(board_path)?;
     let altium_present = norm.is_binary();
@@ -984,6 +1006,7 @@ pub fn static_gate_as_built(
         altium_present,
         lib,
         ties.as_ref(),
+        firmware,
     )?;
     let mut gating = gathered.kept;
     gating.retain(crate::result::JsonFinding::gates);
