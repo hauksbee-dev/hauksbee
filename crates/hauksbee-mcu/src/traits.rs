@@ -38,6 +38,58 @@ impl PinId {
     }
 }
 
+/// The sleep mode a firmware selected, as the part's sleep-control register
+/// states it.
+///
+/// A backend reports what the register says; whether the core is asleep right
+/// now is [`McuState::sleeping`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SleepMode {
+    Idle,
+    AdcNoiseReduction,
+    PowerDown,
+    PowerSave,
+    Standby,
+    ExtendedStandby,
+    /// A code the part reserves, or a mode this list has no name for.
+    Other(String),
+}
+
+impl SleepMode {
+    /// The datasheet's name for the mode.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Idle => "Idle",
+            Self::AdcNoiseReduction => "ADC Noise Reduction",
+            Self::PowerDown => "Power-down",
+            Self::PowerSave => "Power-save",
+            Self::Standby => "Standby",
+            Self::ExtendedStandby => "Extended Standby",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// Whether the oscillator is stopped (or the part is otherwise in the
+    /// microamp state its sleep-current figure describes). Idle and ADC Noise
+    /// Reduction keep the CPU-adjacent clocks running and draw far more.
+    #[must_use]
+    pub const fn is_deep(&self) -> bool {
+        matches!(
+            self,
+            Self::PowerDown | Self::PowerSave | Self::Standby | Self::ExtendedStandby
+        )
+    }
+
+    /// Whether the card's POWER-DOWN sleep current is the right yardstick for
+    /// this mode: only power-down itself. Power-save and the standbys keep a
+    /// timer or oscillator running and draw more than the power-down figure.
+    #[must_use]
+    pub const fn is_power_down(&self) -> bool {
+        matches!(self, Self::PowerDown)
+    }
+}
+
 /// One synchronous external-input ownership update.
 ///
 /// `Drive` persists until the same responder emits `Release`; release is a
@@ -499,6 +551,21 @@ pub trait Mcu {
     /// field a firmware has programmed. `None` when the backend cannot peek (the
     /// default) or the address is unmapped.
     fn read_register(&mut self, _addr: u32) -> Option<u32> {
+        None
+    }
+
+    /// The pins whose INTERNAL pull-up the firmware has enabled right now (on an
+    /// AVR: `DDRxn = 0`, `PORTxn = 1` and `PUD = 0`). The pull-up is part of the
+    /// chip, not of the analog circuit, so this is how the co-sim learns of a
+    /// current path the circuit itself does not contain. `None` when the backend
+    /// cannot tell (the default); `Some(vec![])` means it can and none is on.
+    fn internal_pull_ups(&self) -> Option<Vec<PinId>> {
+        None
+    }
+
+    /// The sleep mode the firmware has selected, from the part's sleep-control
+    /// register. `None` when the backend cannot read it (the default).
+    fn sleep_mode(&self) -> Option<SleepMode> {
         None
     }
 

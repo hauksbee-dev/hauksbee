@@ -19,6 +19,8 @@ mod avr_at28_atomic_cosim;
 mod avr_cosim_speed;
 #[path = "avr_gpio_release_cosim.rs"]
 mod avr_gpio_release_cosim;
+#[path = "avr_sleep_pull_up_cosim.rs"]
+mod avr_sleep_pull_up_cosim;
 #[path = "behavioral_faults.rs"]
 mod behavioral_faults;
 #[path = "behavioral_framework.rs"]

@@ -55,6 +55,7 @@ pub mod ffi {
 pub mod avr;
 pub mod avr_fuses;
 pub mod avr_image;
+pub mod avr_sleep;
 pub mod backend_id;
 pub mod boot_mode;
 pub mod children;
@@ -76,7 +77,8 @@ pub mod soc;
 
 pub use hostserial::{HostSerial, HostSerialStats, HostSerialTransport, PeerEvent};
 pub use traits::{
-    ExecutionProbe, I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent, PC_SAMPLE_DISTINCT_CAP,
+    ExecutionProbe, I2cEvent, Mcu, McuState, PinDrive, PinId, SleepMode, SpiEvent,
+    PC_SAMPLE_DISTINCT_CAP,
 };
 
 use std::path::{Path, PathBuf};

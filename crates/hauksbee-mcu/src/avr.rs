@@ -1643,6 +1643,32 @@ impl Mcu for AvrMcu {
         true
     }
 
+    /// The pins with their internal pull-up on, read from `DDRx`, `PORTx` and
+    /// `MCUCR.PUD` in simavr's data space (see [`crate::avr_sleep`]). Known only
+    /// for the ATmega48/88/168/328 register map; any other AVR answers `None`.
+    fn internal_pull_ups(&self) -> Option<Vec<PinId>> {
+        use crate::avr_sleep::{is_family_member, port_registers, pull_ups_from_registers};
+        if !is_family_member(&self.part_name()) {
+            return None;
+        }
+        let mcucr = self.read_data(crate::avr_sleep::MCUCR_ADDRESS)?;
+        let mut ports = Vec::new();
+        for port in ['B', 'C', 'D'] {
+            let (ddr, data) = port_registers(port)?;
+            ports.push((port, self.read_data(ddr)?, self.read_data(data)?));
+        }
+        Some(pull_ups_from_registers(mcucr, &ports))
+    }
+
+    /// The sleep mode `SMCR.SM2:0` selects; `None` off the ATmega48/88/168/328.
+    fn sleep_mode(&self) -> Option<crate::traits::SleepMode> {
+        if !crate::avr_sleep::is_family_member(&self.part_name()) {
+            return None;
+        }
+        let smcr = self.read_data(crate::avr_sleep::SMCR_ADDRESS)?;
+        Some(crate::avr_sleep::sleep_mode_from_smcr(smcr))
+    }
+
     /// The AVR's timer compare outputs (PWM) and SPI master outputs reach a pad
     /// only once its `DDR` bit is set (the `ATmega328P` datasheet: "The Data
     /// Direction Register bit for the `OC0x` pin (`DDR_OC0x`) must be set as

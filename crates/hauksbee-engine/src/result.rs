@@ -1123,6 +1123,17 @@ pub struct CosimJson {
     /// timing is clock-truth gated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timing_limitations: Vec<CosimTimingLimitation>,
+    /// Per-MCU sleep-current accounts: a core that went to sleep with an
+    /// internal pull-up still enabled on a pin a real low path holds low (a
+    /// closed switch contact, a resistor to ground) passes `Vdd / R_pu` through
+    /// that path for the whole sleep. The pull-up is inside the chip, not in
+    /// the analog circuit, so nothing else in the run shows this current. Each
+    /// entry states the worst sleeping chunk; `flagged` says whether it
+    /// exceeds the stated sleep budget or ten times the card's power-down
+    /// current. Empty (and omitted) when no core slept with a pull-up into a
+    /// low path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sleep_current: Vec<CosimSleepCurrent>,
     /// What the run looked like from the bench: per-pin state (static or
     /// toggling at f with duty), where each core is parked, the serial lines,
     /// the I2C and SPI transactions with their acknowledgements, and the event
@@ -1130,6 +1141,68 @@ pub struct CosimJson {
     /// app strip draws. Absent when no MCU ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bench: Option<hauksbee_ir::observations::BenchReport>,
+}
+
+/// One MCU's sleep-current account (see [`CosimJson::sleep_current`]).
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimSleepCurrent {
+    pub mcu_ref: String,
+    /// The part the board asked for, e.g. `"ATmega328P"`.
+    pub part: String,
+    /// The datasheet's name of the sleep mode the firmware selected, when the
+    /// core reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// The MCU supply pad voltage (V) in the solve.
+    pub vdd_v: f64,
+    /// Sim time (s) of the chunk this account was taken from.
+    pub t_s: f64,
+    /// Every pin with its pull-up on and a low path under it.
+    pub pins: Vec<CosimSleepPin>,
+    /// Sum over the pins, smallest and largest (A). Absent when the card does
+    /// not state the pull-up resistance, see `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_min_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_max_a: Option<f64>,
+    /// The card's power-down supply current (A), typical and maximum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_sleep_typ_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_sleep_max_a: Option<f64>,
+    /// The sleep budget (A) the run was given, when it was given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_a: Option<f64>,
+    /// Total above the budget.
+    pub over_budget: bool,
+    /// Total above ten times the card's power-down current (power-down only).
+    pub over_card: bool,
+    /// Either of the above: the account is a warning.
+    pub flagged: bool,
+    /// Why the current is unknown (the missing card field), when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown: Option<String>,
+    /// The warning sentence, when `flagged`: what is wrong, why, and the fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// One pin of a [`CosimSleepCurrent`].
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimSleepPin {
+    /// The port pin, e.g. `"PD2"`.
+    pub pin: String,
+    /// The package pad the card maps to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<String>,
+    pub net: String,
+    /// The parts that hold the net low (a closed switch contact, a resistor).
+    pub low_path: Vec<String>,
+    /// Pull-up current through this pin, smallest and largest (A).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_a: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_a: Option<f64>,
 }
 
 /// One backend watchdog-fidelity gap (see [`CosimJson::watchdog_limitations`]).
