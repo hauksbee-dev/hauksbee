@@ -2018,6 +2018,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A UART, SWD, JTAG or ISP header is plugged into a standard adapter whose pin order is fixed by convention. If the board's transmit pin lands on the adapter's transmit pin, or a signal lands on another signal's pin, the cable connects nothing useful and can short a supply to a signal.".to_string(),
                 "Reorder the header to the standard pinout the finding names, or label it as a crossover that needs a matching cable.".to_string(),
             ),
+            LintCheck::BusLineSwap => (
+                format!("The two lines of a bus are crossed between the connector and the part behind it ({parts}). {}", f.message),
+                "A USB receptacle and a Qwiic, STEMMA QT or Grove port fix which pin carries which line. If the connector's D+ lands on the controller's D- pad, or its SDA pin on the SCL pad, the device never enumerates or the bus never answers, and nothing about the supply looks wrong.".to_string(),
+                "Cross the two nets (or the two connector pins) so each line reaches the pad of its own name.".to_string(),
+            ),
+            LintCheck::UsbCcTermination => (
+                format!("The USB-C CC resistors of {parts} do not fit the port's role. {}", f.message),
+                "A USB-C sink announces itself with a 5.1 kOhm pull-down on each CC pin, and a source advertises its current with a pull-up of 56k, 22k or 10k to 5 V (36k, 12k or 4.7k to 3.3 V). Another value is read as the wrong current or no sink at all, and a sink with pull-ups, or a source with pull-downs, is never recognised: the source never applies VBUS.".to_string(),
+                "Fit 5.1 kOhm 1% from each CC pin to ground on a sink, or the standard Rp for the advertised current on a source.".to_string(),
+            ),
             LintCheck::SwitchShort => (
                 format!("A switch or button ({parts}, net \"{net}\") shorts a supply when pressed. {}", f.message),
                 "A switch that joins two supply rails, or a rail and ground, with nothing in series is a dead short while it is closed: the source collapses or the switch and traces burn.".to_string(),

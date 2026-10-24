@@ -373,6 +373,19 @@ pub enum LintCheck {
     /// against the one header table in `hauksbee-ir`. Produced by the
     /// engine-layer `debug_header` check.
     DebugHeaderPinout,
+    /// A two-wire bus crossed between a standard connector and the part behind
+    /// it: a USB receptacle's `D+` on the controller's `D-` pad, a Qwiic or
+    /// STEMMA QT port's `SDA` pin on the controller's `SCL` pad. The connector's
+    /// pin roles come from the one table in `hauksbee-ir`. Produced by the
+    /// engine-layer `bus_swap` check.
+    BusLineSwap,
+    /// A USB-C receptacle whose CC resistors are the wrong value or kind for
+    /// the port's role: a sink pull-down that is not 5.1 kOhm, a source pull-up
+    /// that is not a standard Rp, Rp on a port whose VBUS is an input or Rd on
+    /// one that drives it, a CC pin on ground. Judged against USB Type-C R2.0
+    /// Tables 4-24 and 4-25. Produced by the engine-layer `cc_termination`
+    /// check.
+    UsbCcTermination,
     /// A switch or push button that joins two different supply rails, or a
     /// rail and ground, with no series resistance: a short when pressed. Also
     /// the reset or strap line it serves with no pull resistor. Produced by
@@ -515,7 +528,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 54] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -564,6 +577,8 @@ impl LintCheck {
         Self::MissingOpenDrainPullup,
         Self::SignalDirection,
         Self::DebugHeaderPinout,
+        Self::BusLineSwap,
+        Self::UsbCcTermination,
         Self::SwitchShort,
         Self::PinMuxCapability,
         Self::SymbolCardPinMismatch,
@@ -621,6 +636,8 @@ impl LintCheck {
             Self::MissingOpenDrainPullup => "missing_open_drain_pullup",
             Self::SignalDirection => "signal_direction",
             Self::DebugHeaderPinout => "debug_header_pinout",
+            Self::BusLineSwap => "bus_line_swap",
+            Self::UsbCcTermination => "usb_cc_termination",
             Self::SwitchShort => "switch_short",
             Self::PinMuxCapability => "pin_mux_capability",
             Self::SymbolCardPinMismatch => "symbol_card_pin_mismatch",

@@ -457,7 +457,7 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
 use hauksbee_models::netclass::is_ground as is_ground_name;
 
 /// All net ids that are ground references on the board (see [`is_ground_name`]).
-fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
+pub(super) fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
     board
         .nets
         .iter()
@@ -547,10 +547,10 @@ fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
 /// One USB-C receptacle's CC nets, with the component reference that carries
 /// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReceptacleNets {
-    reference: String,
-    cc1_net: i64,
-    cc2_net: i64,
+pub(super) struct ReceptacleNets {
+    pub(super) reference: String,
+    pub(super) cc1_net: i64,
+    pub(super) cc2_net: i64,
 }
 
 /// Every distinct USB-C *receptacle* on the board, each with its own CC1/CC2
@@ -563,7 +563,7 @@ struct ReceptacleNets {
 /// CC controller / PMIC that merely carries CC pin functions (score 0) is
 /// excluded, exactly as in `receptacle_cc_nets`, so we never read the PMIC-side
 /// net as if it were the connector.
-fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
+pub(super) fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
     let mut out: Vec<(i32, ReceptacleNets)> = Vec::new();
     for comp in &board.components {
         let score = receptacle_score(comp);
@@ -841,7 +841,7 @@ fn audit_one_cc(
 /// / ferrite beads (DC shorts). A CC line often reaches the controller through a
 /// 0 Ω "bridge" resistor placed on its own net, so the controller's CC pin is a
 /// different net id than the receptacle CC pin; this union re-joins them.
-fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::HashSet<i64> {
+pub(super) fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::HashSet<i64> {
     use std::collections::HashSet;
     let mut set = HashSet::new();
     set.insert(start);
@@ -1048,7 +1048,40 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
 
     let passive = classify_attach(term, Rp::Default, Cable::Passive).attach;
     let emarked = classify_attach(term, Rp::Default, Cable::emarked()).attach;
-    let (level, headline) = usbc_verdict(term.shared_net, has_discrete_rd, passive, emarked);
+    // The standard "plug it into a charger" case is a default-Rp source, but a
+    // 1.5 A or 3 A charger advertises with a larger current, and a pull-down
+    // that reads as a sink at 80 uA can read as open at 330 uA (10 kOhm is 0.8 V
+    // at 80 uA, 1.8 V at 180 uA and 3.3 V at 330 uA: Tables 4-28 to 4-30).
+    // A plug goes in either way up, so each CC pin is judged alone: the board
+    // must be detected through whichever pin the cable's CC lands on.
+    let fast_source_misses = [term.cc1_rd_ohms, term.cc2_rd_ohms]
+        .iter()
+        .flatten()
+        .any(|rd| {
+            let one_pin = SinkTermination {
+                cc1_rd_ohms: Some(*rd),
+                cc2_rd_ohms: None,
+                shared_net: false,
+            };
+            [Rp::Med1A5, Rp::High3A].iter().any(|rp| {
+                let r = classify_attach(one_pin, *rp, Cable::Passive);
+                r.is_solved() && !r.powers()
+            })
+        });
+    let rd_off_spec = [term.cc1_rd_ohms, term.cc2_rd_ohms]
+        .iter()
+        .flatten()
+        .any(|ohms| (ohms - RD_NOMINAL_OHMS).abs() > RD_NOMINAL_OHMS * RD_TOLERANCE * 1.000_001);
+    let (level, headline) = usbc_verdict(
+        term.shared_net,
+        has_discrete_rd,
+        passive,
+        emarked,
+        RdFit {
+            fast_source_misses,
+            off_spec: rd_off_spec,
+        },
+    );
     let (level, headline) = apply_double_termination(
         level,
         headline,
@@ -1115,6 +1148,20 @@ fn apply_double_termination(
     }
 }
 
+/// Rd nominal and tolerance, USB Type-C R2.0 Table 4-25 (p. 236): 5.1 kOhm
+/// +-20 % to ground (4.08 to 6.12 kOhm).
+const RD_NOMINAL_OHMS: f64 = 5_100.0;
+const RD_TOLERANCE: f64 = 0.20;
+
+/// How the sink's pull-downs fit the other source advertisements.
+#[derive(Debug, Clone, Copy, Default)]
+struct RdFit {
+    /// A 1.5 A or 3 A source does not read the sink as attached.
+    fast_source_misses: bool,
+    /// A pull-down is outside 5.1 kOhm +-20 %.
+    off_spec: bool,
+}
+
 /// The verdict decision, factored out as a pure function over the two cable
 /// classifications so it can be unit-tested without synthesising a board.
 fn usbc_verdict(
@@ -1122,6 +1169,7 @@ fn usbc_verdict(
     has_discrete_rd: bool,
     passive: Attach,
     emarked: Attach,
+    fit: RdFit,
 ) -> (UsbcLevel, String) {
     let powers_passive = passive.powers();
     let powers_emarked = emarked.powers();
@@ -1132,6 +1180,23 @@ fn usbc_verdict(
             UsbcLevel::Info,
             "The CC network could not be solved, so the USB-C attach state is not determined. \
              No pass or fault is claimed for this receptacle."
+                .to_string(),
+        )
+    } else if powers_passive && powers_emarked && has_discrete_rd && fit.fast_source_misses {
+        (
+            UsbcLevel::Serious,
+            "The sink will not be detected by a 1.5 A or 3 A source: its CC pull-down reads as a \
+             sink from a default-power (80 uA) source but, at the voltage a 180 uA or 330 uA \
+             advertisement drives across it, as open. A sink needs 5.1 kOhm +-20 % (USB Type-C R2.0 \
+             Table 4-25); the VBUS of a fast charger is never applied."
+                .to_string(),
+        )
+    } else if powers_passive && powers_emarked && has_discrete_rd && fit.off_spec {
+        (
+            UsbcLevel::Info,
+            "A CC pull-down is outside 5.1 kOhm +-20 % (USB Type-C R2.0 Table 4-25). Every source \
+             advertisement still reads the sink as attached, but the current it advertises is read \
+             from a voltage the spec does not guarantee."
                 .to_string(),
         )
     } else if powers_passive && powers_emarked {
@@ -1399,10 +1464,10 @@ mod tests {
         // The verdict is Info (never Ok, never Serious), whichever Rd is present.
         for discrete in [true, false] {
             for shared in [true, false] {
-                let (lvl, msg) = usbc_verdict(shared, discrete, SinkAttached, Undetermined);
+                let (lvl, msg) = usbc_verdict(shared, discrete, SinkAttached, Undetermined, RdFit::default());
                 assert_eq!(lvl, UsbcLevel::Info);
                 assert!(msg.contains("not determined"), "{msg}");
-                let (lvl, _) = usbc_verdict(shared, discrete, Undetermined, Undetermined);
+                let (lvl, _) = usbc_verdict(shared, discrete, Undetermined, Undetermined, RdFit::default());
                 assert_eq!(lvl, UsbcLevel::Info);
             }
         }
@@ -1749,18 +1814,18 @@ mod tests {
         use Attach::*;
         // RPi 4 as-designed: passive cable powers (SinkAttached), e-marked does
         // not (AudioAccessory) → Serious, and it must name the RPi 4 fault.
-        let (lvl, msg) = usbc_verdict(true, true, SinkAttached, AudioAccessory);
+        let (lvl, msg) = usbc_verdict(true, true, SinkAttached, AudioAccessory, RdFit::default());
         assert_eq!(lvl, UsbcLevel::Serious);
         assert!(msg.contains("Raspberry Pi 4"), "{msg}");
         // Correctly-terminated sink: both cables power → Ok.
-        let (lvl, _) = usbc_verdict(false, true, SinkAttached, PoweredCableWithSink);
+        let (lvl, _) = usbc_verdict(false, true, SinkAttached, PoweredCableWithSink, RdFit::default());
         assert_eq!(lvl, UsbcLevel::Ok);
         // Controller-provided termination (no discrete Rd): Info, never Serious.
-        let (lvl, _) = usbc_verdict(false, false, Nothing, Nothing);
+        let (lvl, _) = usbc_verdict(false, false, Nothing, Nothing, RdFit::default());
         assert_eq!(lvl, UsbcLevel::Info);
         // Discrete Rd present but neither cable powers (genuinely mis-terminated):
         // Serious, but NOT attributed to the RPi 4 shared-net fault.
-        let (lvl, msg) = usbc_verdict(false, true, Nothing, Nothing);
+        let (lvl, msg) = usbc_verdict(false, true, Nothing, Nothing, RdFit::default());
         assert_eq!(lvl, UsbcLevel::Serious);
         assert!(!msg.contains("Raspberry Pi 4"), "{msg}");
     }
@@ -1830,6 +1895,51 @@ mod tests {
         );
         let v: serde_json::Value = serde_json::from_str(&report.to_json()).unwrap();
         assert!((v["cc1_rd_ohms"].as_f64().unwrap() - 2550.0).abs() < 1.0);
+    }
+
+    /// A sink with a receptacle on nets `CC1`/`CC2` and plain pull-downs
+    /// `rd1` / `rd2` (ohm text) to ground.
+    fn sink_with_pulldowns(rd1: &str, rd2: &str) -> ExtractedBoard {
+        let res = |r: &str, v: &str, net: i64| hauksbee_extract::Component {
+            reference: r.into(),
+            value: v.into(),
+            lib_id: "Device:R".into(),
+            pins: vec![pin("1", net), pin("2", 0)],
+            ..Default::default()
+        };
+        board(
+            "rd",
+            &[(0, "GND"), (1, "CC_A"), (2, "CC_B")],
+            vec![
+                receptacle("J1", "USB_C_Receptacle_HRO", 1, 2),
+                res("R1", rd1, 1),
+                res("R2", rd2, 2),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_ten_kilohm_pulldown_is_serious_because_fast_sources_read_it_as_open() {
+        // 10k x 80 uA = 0.8 V reads as attached from a default source, but
+        // 10k x 180 uA = 1.8 V and 10k x 330 uA = 3.3 V are above the open
+        // thresholds of Tables 4-29 and 4-30.
+        let report = usb_c_report(&sink_with_pulldowns("5.1k", "10k")).expect("receptacle");
+        assert_eq!(report.level, UsbcLevel::Serious, "{}", report.headline);
+        assert!(
+            report.headline.contains("1.5 A or 3 A source"),
+            "{}",
+            report.headline
+        );
+    }
+
+    #[test]
+    fn a_slightly_off_spec_pulldown_is_info_and_a_correct_one_is_ok() {
+        // 3.9k is outside 5.1k +-20 % but every source still sees a sink.
+        let report = usb_c_report(&sink_with_pulldowns("3.9k", "3.9k")).expect("receptacle");
+        assert_eq!(report.level, UsbcLevel::Info, "{}", report.headline);
+        assert!(report.headline.contains("5.1 kOhm"), "{}", report.headline);
+        let report = usb_c_report(&sink_with_pulldowns("5.1k", "5.1k")).expect("receptacle");
+        assert_eq!(report.level, UsbcLevel::Ok, "{}", report.headline);
     }
 
     #[test]

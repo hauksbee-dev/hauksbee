@@ -4010,6 +4010,8 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::MissingOpenDrainPullup => supply_fix_hint(check),
         LintCheck::SignalDirection
         | LintCheck::DebugHeaderPinout
+        | LintCheck::BusLineSwap
+        | LintCheck::UsbCcTermination
         | LintCheck::SwitchShort
         | LintCheck::PinMuxCapability
         | LintCheck::FirmwareUnconnectedPad
@@ -4031,6 +4033,12 @@ const fn wiring_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::DebugHeaderPinout => {
             "Reorder the header to the standard pinout the finding names, or label it as a crossover that needs a matching cable."
+        }
+        LintCheck::BusLineSwap => {
+            "Cross the two nets (or the two connector pins) so each line reaches the pad of its own name."
+        }
+        LintCheck::UsbCcTermination => {
+            "Fit 5.1 kOhm 1% from each CC pin to ground on a sink, or the standard Rp for the advertised current on a source."
         }
         LintCheck::SwitchShort => {
             "Put a resistor in series with the switch, or switch a signal pin that has a pull resistor, not a supply."

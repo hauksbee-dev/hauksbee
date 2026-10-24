@@ -89,6 +89,12 @@
 //!   (FTDI 6-pin, AVR ISP 6/10, ARM Cortex 10-pin) whose pins carry other
 //!   signals than the standard pin order (the board's TX on the cable's TX pin,
 //!   MOSI/MISO exchanged, supply on a ground pin). Pinouts: `hauksbee_ir::header_pinouts`.
+//! - [`bus_swap`]: a USB D+/D- or I2C SDA/SCL pair crossed between a standard
+//!   connector (USB-C receptacle, Qwiic, STEMMA QT, Grove) and the controller
+//!   pads behind it. Pin roles: `hauksbee_ir::connector_pinouts`.
+//! - [`cc_termination`]: a USB-C receptacle whose CC pull-downs are not 5.1 kΩ,
+//!   whose pull-ups are not a standard Rp, or whose resistors are the wrong kind
+//!   for the direction of its VBUS.
 //! - [`pin_mux`]: a bus wired to MCU pads that cannot carry it: SPI, I2C, UART
 //!   or PWM where the card's `[models.pin_capability.<function>]` table lists
 //!   other pads (the intent read from a partner part's pin and the net name).
@@ -161,6 +167,8 @@ pub mod converter;
 pub mod crystal_caps;
 pub mod datasheet_field;
 pub mod dc_stress;
+pub mod bus_swap;
+pub mod cc_termination;
 pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
@@ -607,6 +615,12 @@ fn extend_with_wiring_checks(
     report
         .findings
         .extend(debug_header::debug_header_lint(board, lib).findings);
+    report
+        .findings
+        .extend(bus_swap::bus_swap_lint(board, lib).findings);
+    report
+        .findings
+        .extend(cc_termination::cc_termination_lint(board, lib).findings);
     // A transmit pad facing another transmitter is a contention finding already
     // (it names the pads that can receive), not a second one about the pad.
     let mux: Vec<_> = pin_mux::pin_mux_lint(board, lib)
