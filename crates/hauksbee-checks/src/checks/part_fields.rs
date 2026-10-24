@@ -17,7 +17,10 @@
 //! A part that is not fitted is never
 //! judged. Each part gets at most one finding listing what disagrees: Medium
 //! for a field mismatch, High when the MPN's rated voltage is below the voltage
-//! its two named nets put across it.
+//! its two named nets put across it. A stated voltage the MPN exceeds is a
+//! safe substitute and is not reported. Polarised symbols on unmarked
+//! footprints, usually ceramics drawn with the wrong symbol, share one Low
+//! finding per board.
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
@@ -115,10 +118,11 @@ fn mpn_clauses(
         ));
     }
     let stated_v = decode(&c.value).map_or_else(|| parse_voltage_rating_v(&c.value), |v| v.rated_v);
+    // A part rated above what the schematic asks for is a safe substitute.
     if let (Some(said), Some(rated)) = (stated_v, d.rated_v) {
-        if !same(said, rated) {
+        if rated < said && !same(said, rated) {
             clauses.push(format!(
-                "its Value field says {said} V but its {code} is rated {rated} V"
+                "its Value field says {said} V but its {code} is rated only {rated} V"
             ));
         }
     }
@@ -182,25 +186,14 @@ fn ordering_codes(c: &Component) -> Vec<(String, PassiveMpn)> {
     out
 }
 
-/// The polarity disagreement between a capacitor's footprint and symbol.
+/// A polarised footprint under a symbol that is not.
 fn polarity_clause(c: &Component) -> Option<String> {
-    let (Some(footprint), Some(symbol)) = capacitor_polarity_marks(c) else {
-        return None;
-    };
-    (footprint != symbol).then(|| {
-        if footprint {
-            format!(
-                "its footprint '{}' is polarised (pad 1 is +) but its symbol '{}' is not, so the \
-                 schematic never says which net the + terminal is on",
-                c.footprint, c.lib_id
-            )
-        } else {
-            format!(
-                "its symbol '{}' is polarised but its footprint '{}' has no + mark, so the part \
-                 can be placed either way round",
-                c.lib_id, c.footprint
-            )
-        }
+    matches!(capacitor_polarity_marks(c), (Some(true), Some(false))).then(|| {
+        format!(
+            "its footprint '{}' is polarised (pad 1 is +) but its symbol '{}' is not, so the \
+             schematic never says which net the + terminal is on",
+            c.footprint, c.lib_id
+        )
     })
 }
 
@@ -214,9 +207,13 @@ pub fn part_field_lint(
     rail_reported: &dyn Fn(&str) -> bool,
 ) -> NetLintReport {
     let mut report = NetLintReport::default();
+    let mut unmarked: Vec<String> = Vec::new();
     for c in &board.components {
         if AssemblyState::of(c).fitted().is_none() {
             continue;
+        }
+        if matches!(capacitor_polarity_marks(c), (Some(false), Some(true))) {
+            unmarked.push(c.reference.clone());
         }
         let mut clauses: Vec<String> = Vec::new();
         let mut high = false;
@@ -250,6 +247,21 @@ pub fn part_field_lint(
                 c.reference
             ),
             refs: vec![c.reference.clone()],
+            nets: Vec::new(),
+        });
+    }
+    // Often a ceramic drawn with the polarised symbol, so one Low note for all.
+    if !unmarked.is_empty() {
+        report.findings.push(LintFinding {
+            check: LintCheck::PartFieldMismatch,
+            severity: Severity::Low,
+            message: format!(
+                "{}: polarised capacitor symbol on a footprint with no + mark, so a polarised \
+                 part could be placed either way round. {REMEDY_MARKER}if they are polarised, use a \
+                 footprint that marks +; if not, use the plain capacitor symbol.",
+                unmarked.join(", ")
+            ),
+            refs: unmarked,
             nets: Vec::new(),
         });
     }
@@ -331,7 +343,10 @@ mod tests {
         );
         assert_eq!(found.len(), 1, "{found:?}");
         let m = &found[0].message;
-        assert!(m.contains("says 50 V") && m.contains("rated 25 V"), "{m}");
+        assert!(
+            m.contains("says 50 V") && m.contains("rated only 25 V"),
+            "{m}"
+        );
         assert!(m.contains("0603 part") && m.contains("0402 land"), "{m}");
         assert_eq!(found[0].severity, Severity::Medium);
     }
@@ -362,7 +377,12 @@ mod tests {
         let found = lint(vec![tant, pol], "+3V3");
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found[0].message.contains("is polarised (pad 1 is +)"));
-        assert!(found[1].message.contains("has no + mark"));
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert!(found[1].message.contains("with no + mark"));
+        assert_eq!(
+            (found[1].severity, &found[1].refs[..]),
+            (Severity::Low, &["C6".to_string()][..])
+        );
     }
 
     #[test]
@@ -381,6 +401,13 @@ mod tests {
             vec![
                 cap("C1", "100nF", C0402, "GRM155R71H104KE14D"),
                 cap("C2", "0.1u 50V X7R", C0402, "CL05B104KB5NNNC"),
+                // Rated 50 V where the value asks for 16 V: a safe substitute.
+                cap(
+                    "C7",
+                    "1uF 16V",
+                    "Capacitor_SMD:C_0603_1608Metric",
+                    "CL10A105KB8NNNC",
+                ),
                 cap("C5", "4.7nF", C0402, "XYZ0402-472"),
                 cap(
                     "C6",
