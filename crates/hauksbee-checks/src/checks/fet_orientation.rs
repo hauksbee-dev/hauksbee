@@ -79,7 +79,7 @@ fn names_a_cell(text: &str) -> bool {
 /// clip footprint, or a small non-semiconductor part whose value, symbol or
 /// footprint names a cell (`BAT`, `CR2032`, `18650`). A cell on a net KiCad
 /// named `Net-(BT1-+)` is as much a source as one on `+BATT`.
-fn is_battery_part(c: &Component) -> bool {
+pub(super) fn is_battery_part(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
@@ -571,6 +571,131 @@ fn series_opposed_partner(idx: &Index<'_>, q: &Component, pmos: bool, (s, d): (i
     })
 }
 
+/// A connector pad that names a supply (`VBUS`, `VIN`, `+5V`): a connector
+/// pin carries a rail only when its own name says so.
+fn names_a_supply_pin(p: &Pin) -> bool {
+    let f = p.function.to_ascii_uppercase();
+    ["VBUS", "VIN", "VCC", "VDD", "VSYS", "VBAT", "5V", "3V3"]
+        .iter()
+        .any(|w| f.contains(w))
+}
+
+/// `net` is held by a supply: a positive named rail, a regulator output, a
+/// battery or power-output pin, or a connector pad named for a supply.
+fn is_supply_net(idx: &Index<'_>, net: i64, q: &Component) -> bool {
+    !is_ground(idx.name(net))
+        && (idx.level(net).is_some_and(|v| v > 0.0)
+            || source_tier(idx, &[net], q) == 2
+            || idx
+                .members(net)
+                .iter()
+                .any(|(o, p)| !same(o, q) && is_connector_like(o) && names_a_supply_pin(p)))
+}
+
+/// The supply that steers a P-FET's gate, when the gate is wired to one
+/// instead of being driven: the gate net itself, or one resistor away. A
+/// supply inside either channel side's own cluster does not count (a gate
+/// tied to its own source is a switch held off, not a mux).
+fn gate_steering_supply(
+    idx: &Index<'_>,
+    q: &Component,
+    gate: i64,
+    (near_s, near_d): (&[i64], &[i64]),
+) -> Option<i64> {
+    let mut nets = vec![gate];
+    for (o, _) in idx.members(gate) {
+        if !same(o, q) && o.pins.len() == 2 && RefClass::of(&o.reference) == RefClass::Resistor {
+            nets.extend(
+                o.pins
+                    .iter()
+                    .filter_map(|p| p.net)
+                    .filter(|n| *n != 0 && *n != gate),
+            );
+        }
+    }
+    nets.into_iter()
+        .find(|&n| !near_s.contains(&n) && !near_d.contains(&n) && is_supply_net(idx, n, q))
+}
+
+/// A second source that feeds `net` without going through `q`, and is not the
+/// supply side itself: a diode from a source or rail (power-path OR-ing), or
+/// another power FET whose far channel side is one (a power mux). Returns the
+/// far net. `supply_near` is the supply side's own cluster, so a diode or FET
+/// across `q`'s channel is not a second source.
+fn second_source(idx: &Index<'_>, net: i64, q: &Component, supply_near: &[i64]) -> Option<i64> {
+    let sourced = |far: i64| {
+        far != 0 && far != net && !is_ground(idx.name(far)) && !supply_near.contains(&far) && {
+            let near = cluster(idx, far, q);
+            source_tier(idx, &near, q) > 0 || cluster_level(idx, &near).is_some()
+        }
+    };
+    idx.members(net).iter().find_map(|(o, p)| {
+        if same(o, q) {
+            return None;
+        }
+        let far_of_diode = || {
+            (o.pins.len() == 2 && RefClass::of(&o.reference) == RefClass::Diode)
+                .then(|| {
+                    o.pins
+                        .iter()
+                        .filter(|x| !std::ptr::eq(*x, *p))
+                        .filter_map(|x| x.net)
+                        .find(|&far| sourced(far))
+                })
+                .flatten()
+        };
+        let far_of_fet = || {
+            let m = idx.model(o)?;
+            if !matches!(m.kind, ComponentKind::Pmos | ComponentKind::Nmos) {
+                return None;
+            }
+            let role = idx.role(o, p)?;
+            let other = match role {
+                "source" => "drain",
+                "drain" => "source",
+                _ => return None,
+            };
+            o.pins
+                .iter()
+                .filter(|x| idx.role(o, x) == Some(other))
+                .filter_map(|x| x.net)
+                .find(|&far| sourced(far))
+        };
+        far_of_diode().or_else(far_of_fet)
+    })
+}
+
+/// A source-to-load FET whose load side a second source also feeds (a power
+/// mux or an OR-ing ideal diode) and whose body diode runs from that load
+/// back into the supply side: `(supply, load, other source)`.
+///
+/// The intended role is read from the board: the side that shows a source
+/// (see [`supply_side`]) is the FET's own input, the other side is the shared
+/// output the second source also reaches. In that role the diode must carry
+/// the input into the output (anode on the input) and block the way back; with
+/// the anode on the output, whenever the other source holds the output up the
+/// diode pushes current into the input net (charging a battery through the
+/// diode, back-feeding a connector or a regulator output).
+fn reversed_or_ing(
+    idx: &Index<'_>,
+    q: &Component,
+    anode: i64,
+    (s, d): (i64, i64),
+) -> Option<(i64, i64, i64)> {
+    let supply = supply_side(idx, q, (s, d)).filter(|n| !is_ground(idx.name(*n)))?;
+    if supply == anode || on_inductor(idx, s, q) || on_inductor(idx, d, q) {
+        return None;
+    }
+    let load = if supply == s { d } else { s };
+    // A FET with ground on a channel side is a low-side switch: ground is
+    // nobody's output.
+    if is_ground(idx.name(load)) {
+        return None;
+    }
+    let other = second_source(idx, load, q, &cluster(idx, supply, q))?;
+    Some((supply, load, other))
+}
+
 /// Why a reverse-polarity FET's source is the board's input, if it is: the
 /// source reaches the connector and the drain does not, or (no side shows a
 /// recognised source) the gate is pulled to ground and the source is the
@@ -601,6 +726,146 @@ const fn diode_note(pmos: bool) -> &'static str {
     } else {
         "source to drain"
     }
+}
+
+/// A light-emitting diode or an inductor (a relay or solenoid coil, a
+/// motor winding): a part that is a load, never a gate's bias.
+fn is_load_part(c: &Component) -> bool {
+    RefClass::of(&c.reference) == RefClass::Led
+        || RefClass::of(&c.reference) == RefClass::Inductor
+        || (RefClass::of(&c.reference) == RefClass::Diode
+            && c.lib_id.to_ascii_lowercase().contains("led"))
+}
+
+/// Gate and drain wired to each other's nets: the gate net holds only a load
+/// (an LED, a coil) and bias parts, nothing drives it, while an output pin
+/// drives the drain net that holds no load. A FET switches its load from the
+/// gate, so the output belongs on the gate and the load on the drain.
+/// Returns the pin that drives the drain net.
+fn swapped_gate_drain(idx: &Index<'_>, q: &Component, gate: i64, drain: i64) -> Option<String> {
+    if idx.level(gate).is_some() || idx.level(drain).is_some() {
+        return None;
+    }
+    let others = |net: i64| {
+        idx.members(net)
+            .iter()
+            .filter(|(o, _)| !same(o, q))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let (on_gate, on_drain) = (others(gate), others(drain));
+    let loads_gate = on_gate.iter().any(|(o, _)| is_load_part(o));
+    let only_loads_and_bias = on_gate
+        .iter()
+        .all(|(o, p)| is_load_part(o) || is_bias_part(o) || !drives(idx, o, p));
+    let driver = on_drain
+        .iter()
+        .find(|(o, p)| drives(idx, o, p))
+        .map(|(o, p)| format!("{} pin {}", o.reference, p.number))?;
+    (loads_gate && only_loads_and_bias && !on_drain.iter().any(|(o, _)| is_load_part(o)))
+        .then_some(driver)
+}
+
+/// The finding for a power-mux or OR-ing FET whose body diode runs from the
+/// shared output back into its own input.
+fn or_ing_finding(
+    idx: &Index<'_>,
+    q: &Component,
+    (pmos, (supply, load, other)): (bool, (i64, i64, i64)),
+    how: &str,
+    severity: Severity,
+) -> LintFinding {
+    let channel = if pmos { "P" } else { "N" };
+    let (anode_pin, cathode_pin) = if pmos {
+        ("drain", "source")
+    } else {
+        ("source", "drain")
+    };
+    let name = |n: i64| idx.name(n).to_string();
+    LintFinding {
+        check: LintCheck::PinFunction,
+        severity,
+        message: format!(
+            "{} is a {channel}-channel FET {how} that joins '{}' to '{}', which a second source ('{}') also feeds, but it is wired backwards for that role: its {anode_pin} is on '{}' and its {cathode_pin} on '{}'. The body diode ({}) then conducts from '{}' to '{}' whenever the other source holds '{}' up, feeding '{}' back with the FET off (a battery charged through the diode, a connector or regulator output back-driven), where an OR-ing or mux FET must carry '{}' into '{}' and block the way back. {}swap source and drain so the body diode points from '{}' to '{}'",
+            q.reference,
+            name(supply),
+            name(load),
+            name(other),
+            name(load),
+            name(supply),
+            diode_note(pmos),
+            name(load),
+            name(supply),
+            name(load),
+            name(supply),
+            name(supply),
+            name(load),
+            hauksbee_extract::REMEDY_MARKER,
+            name(supply),
+            name(load),
+        ),
+        refs: vec![q.reference.clone()],
+        nets: vec![name(supply), name(load)],
+    }
+}
+
+/// A low-side N-FET with its drain on ground: the diode clamps the load node
+/// to ground whenever it is above it.
+fn grounded_drain_finding(
+    idx: &Index<'_>,
+    q: &Component,
+    driver: &str,
+    (s, d): (i64, i64),
+) -> LintFinding {
+    let name = |n: i64| idx.name(n).to_string();
+    LintFinding {
+        check: LintCheck::PinFunction,
+        severity: Severity::Medium,
+        message: format!(
+            "{} is an N-channel FET switched by {driver} but its drain is on ground '{}' and its source on '{}': the body diode (source to drain) then holds '{}' within a diode drop of ground whatever the gate does. {}swap source and drain so the source is on ground",
+            q.reference, name(d), name(s), name(s), hauksbee_extract::REMEDY_MARKER
+        ),
+        refs: vec![q.reference.clone()],
+        nets: vec![name(s), name(d)],
+    }
+}
+
+/// A finding for a FET whose gate nothing drives: a P-FET steered by a supply
+/// on a reversed power mux, or a gate and drain swapped.
+fn undriven_gate_finding(
+    idx: &Index<'_>,
+    q: &Component,
+    pmos: bool,
+    (g, s, d): (i64, i64, i64),
+) -> Option<LintFinding> {
+    let name = |n: i64| idx.name(n).to_string();
+    // A P-FET whose gate is wired to a supply, not driven: a power mux.
+    if pmos {
+        let (near_s, near_d) = (cluster(idx, s, q), cluster(idx, d, q));
+        if let Some(rail) = gate_steering_supply(idx, q, g, (&near_s, &near_d)) {
+            if let Some(found) = reversed_or_ing(idx, q, d, (s, d)) {
+                return Some(or_ing_finding(
+                    idx,
+                    q,
+                    (pmos, found),
+                    &format!("steered by the supply '{}' on its gate", name(rail)),
+                    Severity::High,
+                ));
+            }
+        }
+    }
+    let driver = swapped_gate_drain(idx, q, g, d)?;
+    let channel = if pmos { "P" } else { "N" };
+    Some(LintFinding {
+        check: LintCheck::PinFunction,
+        severity: Severity::Medium,
+        message: format!(
+            "{} is a {channel}-channel FET whose gate net '{}' holds only a load (an LED or coil) while {driver} drives its drain net '{}': gate and drain look swapped. Nothing drives the gate, so the FET never switches the load, and the output pin sits on the channel instead. {}swap the gate and drain pins (the symbol's pin numbers against the package's pinout)",
+            q.reference, name(g), name(d), hauksbee_extract::REMEDY_MARKER
+        ),
+        refs: vec![q.reference.clone()],
+        nets: vec![name(g), name(d)],
+    })
 }
 
 /// Run the check.
@@ -644,6 +909,7 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
             let supply = supply_side(&idx, q, (s, d))
                 .filter(|n| *n == anode && !is_ground(idx.name(*n)))
                 .filter(|_| !on_inductor(&idx, s, q) && !on_inductor(&idx, d, q));
+            let or_ing = reversed_or_ing(&idx, q, anode, (s, d));
             if let Some(supply) = supply {
                 let load = if supply == s { d } else { s };
                 if diode_or_fed(&idx, load, q) {
@@ -664,19 +930,22 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
                 && !is_ground(idx.name(s))
                 && idx.level(s).is_none()
             {
-                // A low-side N-FET with drain on ground: the diode clamps the
-                // load node to ground whenever it is above it.
-                report.findings.push(LintFinding {
-                    check: LintCheck::PinFunction,
-                    severity: Severity::Medium,
-                    message: format!(
-                        "{} is an N-channel FET switched by {driver} but its drain is on ground '{}' and its source on '{}': the body diode (source to drain) then holds '{}' within a diode drop of ground whatever the gate does. {}swap source and drain so the source is on ground",
-                        q.reference, name(d), name(s), name(s), hauksbee_extract::REMEDY_MARKER
-                    ),
-                    refs: vec![q.reference.clone()],
-                    nets: vec![name(s), name(d)],
-                });
+                report
+                    .findings
+                    .push(grounded_drain_finding(&idx, q, &driver, (s, d)));
+            } else if let Some(found) = or_ing {
+                report.findings.push(or_ing_finding(
+                    &idx,
+                    q,
+                    (pmos, found),
+                    &format!("switched by {driver}"),
+                    Severity::Medium,
+                ));
             }
+            continue;
+        }
+        if let Some(finding) = undriven_gate_finding(&idx, q, pmos, (g, s, d)) {
+            report.findings.push(finding);
             continue;
         }
         // Reverse-polarity protection: drain faces the connector.
@@ -1387,6 +1656,184 @@ mod tests {
             );
             assert!(passive.is_empty(), "passive only: {passive:#?}");
         }
+    }
+
+    const VBAT: i64 = 90;
+    const SYS: i64 = 91;
+    const MUX_NETS: &[(i64, &str)] = &[(VBAT, "VBAT"), (SYS, "Net-(D1-K)")];
+
+    fn battery() -> Component {
+        part(
+            "BT1",
+            "Battery",
+            "Device:Battery",
+            &[("1", VBAT), ("2", GND)],
+        )
+    }
+
+    /// The USB side feeds the system net through a Schottky diode.
+    fn usb_diode() -> Component {
+        part("D1", "SS14", "Device:D", &[("1", SYS), ("2", V5)])
+    }
+
+    fn mux(q1: Component, extra: Vec<Component>) -> Vec<LintFinding> {
+        let mut parts = vec![header(V5), battery(), usb_diode(), load(SYS), q1];
+        parts.extend(extra);
+        lint(parts, MUX_NETS)
+    }
+
+    #[test]
+    fn a_battery_mux_pfet_steered_by_usb_with_its_diode_the_wrong_way_is_flagged() {
+        // Battery to system through a P-FET whose gate is the USB rail, the
+        // system net also fed from USB through a Schottky. Drain on the battery
+        // and source on the system is the OR-ing orientation: the body diode
+        // carries the battery in and blocks the way back.
+        let ok = mux(pfet(SYS, VBAT, V5), vec![]);
+        assert!(ok.is_empty(), "correct mux: {ok:#?}");
+        // Source on the battery, drain on the system: with USB up the body diode
+        // runs from the system into the battery and charges it uncontrolled.
+        let bad = mux(pfet(VBAT, SYS, V5), vec![]);
+        assert_eq!(bad.len(), 1, "{bad:#?}");
+        assert_eq!(bad[0].severity, Severity::High);
+        assert_eq!(bad[0].refs, ["Q1"]);
+        assert!(
+            bad[0].message.contains("second source ('+5V')")
+                && bad[0].message.contains("steered by the supply '+5V'"),
+            "{}",
+            bad[0].message
+        );
+    }
+
+    #[test]
+    fn a_low_side_nfet_with_a_second_source_on_its_load_is_not_an_or_ing_fet() {
+        // A motor on a connector switched to ground, a clamp diode between the
+        // ground net and the rail: the source is on ground, so there is no
+        // output net for a second source to feed.
+        const COIL: i64 = 96;
+        let parts = vec![
+            header(V5),
+            part(
+                "J2",
+                "Motor",
+                "Connector:Conn_01x02",
+                &[("1", COIL), ("2", V5)],
+            ),
+            part("D4", "TVS", "Device:D", &[("1", GND), ("2", V5)]),
+            nfet(GND, COIL, GATE),
+            mcu(GATE),
+        ];
+        let found = lint(parts, &[(COIL, "COIL")]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_pfet_load_switch_with_no_second_source_on_its_load_is_not_a_mux() {
+        // The same reversed wiring but nothing else feeds the system net: a
+        // plain gate-to-a-rail switch is not an OR-ing role, and not flagged.
+        let parts = vec![header(V5), battery(), load(SYS), pfet(VBAT, SYS, V5)];
+        let found = lint(parts, MUX_NETS);
+        assert!(found.is_empty(), "{found:#?}");
+        // A diode across the FET's own channel is not a second source.
+        let parts = vec![
+            header(V5),
+            battery(),
+            load(SYS),
+            pfet(VBAT, SYS, V5),
+            part("D2", "SS14", "Device:D", &[("1", SYS), ("2", VBAT)]),
+        ];
+        let found = lint(parts, MUX_NETS);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_two_fet_power_mux_fitted_backwards_is_flagged_and_the_right_one_is_not() {
+        const OUT: i64 = 92;
+        let nets = [(VBAT, "VBAT"), (OUT, "Net-(Q1-D)")];
+        let second = |mut q: Component| {
+            q.reference = "Q2".into();
+            q
+        };
+        // Common source on the output: the body diodes oppose (silent).
+        let ok = vec![
+            header(V5),
+            battery(),
+            load(OUT),
+            pfet(OUT, V5, VBAT),
+            second(pfet(OUT, VBAT, V5)),
+        ];
+        assert!(lint(ok, &nets).is_empty());
+        // The same with the output a named rail: still silent.
+        let named = [(VBAT, "VBAT"), (OUT, "+5V_SYS")];
+        let ok = vec![
+            header(V5),
+            battery(),
+            load(OUT),
+            pfet(OUT, V5, VBAT),
+            second(pfet(OUT, VBAT, V5)),
+        ];
+        let found = lint(ok, &named);
+        assert!(found.is_empty(), "{found:#?}");
+        // Both fitted the other way round: common drain on the output, so each
+        // input is fed from the output by its own body diode.
+        let bad = vec![
+            header(V5),
+            battery(),
+            load(OUT),
+            pfet(V5, OUT, VBAT),
+            second(pfet(VBAT, OUT, V5)),
+        ];
+        let found = lint(bad, &nets);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found.iter().all(|f| f.severity == Severity::High));
+    }
+
+    #[test]
+    fn a_driven_or_ing_pfet_with_its_diode_toward_the_input_is_flagged_and_the_right_one_is_not() {
+        let driven = |q: Component| mux(q, vec![mcu(GATE)]);
+        // Driven by an MCU, system also fed from USB through a diode:
+        // source on the battery lets USB charge it through the body diode.
+        let bad = driven(pfet(VBAT, SYS, GATE));
+        assert_eq!(bad.len(), 1, "{bad:#?}");
+        assert_eq!(bad[0].severity, Severity::Medium);
+        let ok = driven(pfet(SYS, VBAT, GATE));
+        assert!(ok.is_empty(), "{ok:#?}");
+    }
+
+    const LED_K: i64 = 95;
+
+    /// An LED from the 5 V rail to `LED_K`, as the FET's load.
+    fn led() -> Component {
+        part("D2", "LED", "Device:LED", &[("1", V5), ("2", LED_K)])
+    }
+
+    #[test]
+    fn a_fet_with_gate_and_drain_swapped_is_flagged_and_the_right_one_is_not() {
+        let nets = [(LED_K, "LED_K")];
+        // Right: the MCU pin on the gate (GATE), the LED on the drain.
+        let ok = lint(
+            vec![header(V5), led(), nfet(GND, LED_K, GATE), mcu(GATE)],
+            &nets,
+        );
+        assert!(ok.is_empty(), "{ok:#?}");
+        // Swapped: the LED on the gate, the MCU pin on the drain.
+        let bad = lint(
+            vec![header(V5), led(), nfet(GND, GATE, LED_K), mcu(GATE)],
+            &nets,
+        );
+        assert_eq!(bad.len(), 1, "{bad:#?}");
+        assert_eq!(bad[0].severity, Severity::Medium);
+        assert!(
+            bad[0].message.contains("gate and drain look swapped")
+                && bad[0].message.contains("U2 pin 2"),
+            "{}",
+            bad[0].message
+        );
+        // A level shifter: the gate on a rail, a pin on the drain: not a swap.
+        let shifter = lint(
+            vec![header(V5), led(), nfet(GND, GATE, V5), mcu(GATE)],
+            &nets,
+        );
+        assert!(shifter.is_empty(), "{shifter:#?}");
     }
 
     #[test]

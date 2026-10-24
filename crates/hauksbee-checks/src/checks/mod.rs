@@ -129,8 +129,14 @@
 //!   and a MOSFET gate, analog-switch select or regulator/driver enable held
 //!   only by MCU or connector pins with no pull.
 //! - [`fet_orientation`]: a power FET wired so its body diode defeats it: a
-//!   gate-driven high-side switch that cannot turn off, or a reverse-polarity
-//!   FET with drain and source inverted.
+//!   gate-driven high-side switch that cannot turn off, a reverse-polarity
+//!   FET with drain and source inverted, or a power-mux / OR-ing FET whose
+//!   diode feeds the shared output back into its own input.
+//! - [`fet_pinout`]: a single FET's symbol numbers gate, source and drain
+//!   differently from the package's pinout (a card's pad table, else the
+//!   package's common default, stated as assumed).
+//! - [`backup_supply`]: a backup-domain part (an RTC, an MCU with `VBAT`) with
+//!   the cell on its main supply and the board's rail on its backup input.
 //! - [`output_release`]: drops an output-contention finding when every driver
 //!   on the net is a card-stated tri-state pad released by its own chip select.
 //! - [`open_drain_pullup`]: a card-stated open-drain output on a net with no
@@ -152,6 +158,7 @@ pub mod ampacity;
 pub mod analog_inputs;
 pub mod audio_bus;
 pub mod back_power;
+pub mod backup_supply;
 pub mod boot;
 pub mod bus_loading;
 pub(crate) mod card_trust;
@@ -165,6 +172,7 @@ pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
 pub mod fet_orientation;
+pub mod fet_pinout;
 pub mod firmware_intent;
 pub mod float_parity;
 pub mod floating_inputs;
@@ -604,6 +612,12 @@ fn extend_with_wiring_checks(
     report
         .findings
         .extend(symbol_card_pins::symbol_card_pin_lint(board, lib).findings);
+    report
+        .findings
+        .extend(fet_pinout::fet_pinout_lint(board, lib).findings);
+    report
+        .findings
+        .extend(backup_supply::backup_supply_lint(board, lib).findings);
     report
         .findings
         .extend(debug_header::debug_header_lint(board, lib).findings);
