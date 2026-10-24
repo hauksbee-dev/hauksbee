@@ -15899,15 +15899,14 @@ basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7 PDF p.6 Pin/Bump Descriptions: AL
 [models.pin_capability.open_drain.pads]
 "5" = "ALRT"
 
-# CELL is rated by its own row of Absolute Maximum Ratings (12 V, the 2-cell MAX17049's pin; the
-# MAX17048 leaves it unconnected). The sheet prints no recommended maximum for it, so max_v is that
-# same figure.
+# CELL is rated by its own row of Absolute Maximum Ratings (12 V; the MAX17048 leaves it
+# unconnected). Its operating limit is the MAX17049's CELL voltage-measurement range, 5 V to 10 V.
 [[models.envelope]]
 kind = "input_tolerance"
 pins = ["cell"]
-max_v = 12.0
+max_v = 10.0
 abs_max_v = 12.0
-basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7, Absolute Maximum Ratings (PDF p.2): CELL to GND -0.3 V to +12 V; the sheet prints no recommended maximum for CELL"
+basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7, Electrical Characteristics (PDF p.2): Voltage-Measurement Range, MAX17049: CELL pin 5 V min to 10 V max"
 abs_max_basis = "Maxim MAX17048/MAX17049 19-6171 Rev 7, Absolute Maximum Ratings (PDF p.2): CELL to GND -0.3 V to +12 V"
 
 [models.coverage]
