@@ -18,7 +18,15 @@
 //! output capacitor at all is outside every condition such a sheet states.
 //! Where stability also depends on the capacitor's type or ESR (the card's
 //! `cout_esr_*` window, or the type the recommendation names), the message
-//! says so: the board does not carry ESR, so that part is never judged.
+//! says so: the board does not carry ESR, so that part is never judged, with one
+//! exception. A card whose ESR window starts above what any ceramic capacitor has
+//! (`cout_esr_min_ohm` over `CERAMIC_ESR_CEILING_OHM`) cannot be satisfied by a
+//! ceramic output capacitor, and a board whose every output capacitor reads as
+//! ceramic (a named dielectric such as X7R, or a plain capacitor in a chip
+//! footprint) is reported for that: the loop can oscillate whatever the
+//! capacitance. A capacitor whose technology cannot be read leaves the part
+//! unjudged, and one non-ceramic capacitor on the output is taken to supply the
+//! ESR.
 //!
 //! What is counted is what the binder counts: fitted capacitors with one pad
 //! on the regulator's output net and the other on its ground (its own `gnd`
@@ -56,6 +64,87 @@ pub(super) fn short_of(found: f64, need: f64) -> bool {
     found < need * (1.0 - 1e-9)
 }
 
+/// The ESR, in ohms, above which no ceramic capacitor of 1 µF or more is found
+/// at the frequencies an LDO loop is compensated at. A card whose ESR window
+/// starts above it needs a capacitor that is not ceramic; a window starting at
+/// or below it (0.02 to 0.05 ohm) can be met by a ceramic, so is not judged.
+pub(super) const CERAMIC_ESR_CEILING_OHM: f64 = 0.05;
+
+/// What a board says about an output capacitor's technology.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Technology {
+    /// Named ceramic (a dielectric code, "MLCC", "ceramic").
+    CeramicNamed,
+    /// A plain capacitor symbol in a chip or disc footprint: ceramic by the
+    /// library's own convention, though the board never says so.
+    CeramicByFootprint,
+    /// Tantalum, electrolytic, polymer, film: a capacitor with real ESR.
+    Other,
+    /// The board does not say.
+    Unknown,
+}
+
+impl Technology {
+    const fn is_ceramic(self) -> bool {
+        matches!(self, Self::CeramicNamed | Self::CeramicByFootprint)
+    }
+}
+
+/// The technology `c` reads as, from its value text, its symbol and footprint
+/// names and its properties. A word for a capacitor with real ESR wins over
+/// every other reading, and nothing is guessed from the capacitance.
+fn technology(c: &Component) -> Technology {
+    let mut text = format!("{} {} {}", c.value, c.lib_id, c.footprint);
+    for (_, v) in &c.properties {
+        text.push(' ');
+        text.push_str(v);
+    }
+    let text = text.to_ascii_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
+    if has(&[
+        "tantalum",
+        "tant",
+        "electrolytic",
+        "c_elec",
+        "polymer",
+        "polariz",
+        "polaris",
+        "cp_",
+        "cpol",
+        "aluminium",
+        "aluminum",
+        "oscon",
+        "film",
+        "c_rect",
+        "supercap",
+    ]) {
+        return Technology::Other;
+    }
+    if has(&[
+        "x5r", "x7r", "x7s", "x7t", "x6s", "x8r", "c0g", "np0", "y5v", "z5u", "mlcc", "ceramic",
+    ]) {
+        return Technology::CeramicNamed;
+    }
+    let lib = c.lib_id.to_ascii_lowercase();
+    let plain = lib.ends_with(":c") || lib.ends_with(":c_small");
+    let chip = [
+        "c_0201", "c_0402", "c_0603", "c_0805", "c_1206", "c_1210", "c_1812", "c_disc",
+    ]
+    .iter()
+    .any(|f| c.footprint.to_ascii_lowercase().contains(f));
+    if plain && chip {
+        Technology::CeramicByFootprint
+    } else {
+        Technology::Unknown
+    }
+}
+
+/// The card's stated ESR window for output-capacitor stability, ohms.
+fn esr_window(model: &ModelEntry) -> Option<(f64, f64)> {
+    let positive = |name| model.params.get_f64(name).filter(|f| *f > 0.0);
+    positive("cout_esr_min_ohm").zip(positive("cout_esr_max_ohm"))
+}
+
 /// What the card states about the output capacitor.
 struct CoutSpec {
     /// The datasheet minimum, which gates.
@@ -78,7 +167,7 @@ impl CoutSpec {
                 .params
                 .get_str("cout_recommended_type")
                 .map(str::to_string),
-            esr: positive("cout_esr_min_ohm").zip(positive("cout_esr_max_ohm")),
+            esr: esr_window(model),
         };
         (spec.min.is_some() || spec.recommended.is_some()).then_some(spec)
     }
@@ -233,7 +322,8 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
                 .find(|f| f.param && f.key.starts_with("cout_"))
         });
         let spec = CoutSpec::of(&model);
-        if spec.is_none() && cout_slip.is_none() {
+        let esr = esr_window(&model).filter(|(lo, _)| *lo > CERAMIC_ESR_CEILING_OHM);
+        if spec.is_none() && cout_slip.is_none() && esr.is_none() {
             continue;
         }
         // A card the binder refuses for this footprint names the wrong pads
@@ -262,8 +352,13 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
                 .findings
                 .push(suspect_card_note(comp, &model.id, &out_net.name, slip));
         }
-        let Some(spec) = spec else { continue };
         let across = caps_across_output(board, out, gnd);
+        if let Some(window) = esr {
+            report
+                .findings
+                .extend(ceramic_esr_finding(comp, &model, window, &out_net.name, &across));
+        }
+        let Some(spec) = spec else { continue };
         let caps: Vec<(&Component, f64)> = across
             .iter()
             .filter_map(|c| Some((*c, capacitance(c)?)))
@@ -296,6 +391,62 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         }
     }
     report
+}
+
+/// The finding for a regulator whose card needs the output capacitor's ESR
+/// above `window.0` ohms while every capacitor across the output reads as
+/// ceramic, or `None` when any of them is another technology or unreadable.
+///
+/// A ceramic's ESR is a few milliohms, so the zero the ESR creates that the
+/// loop is compensated around is never there. One capacitor of another
+/// technology on the output is taken to supply the ESR, and a capacitor whose
+/// technology the board does not state leaves the part unjudged.
+fn ceramic_esr_finding(
+    comp: &Component,
+    model: &ModelEntry,
+    window: (f64, f64),
+    out_name: &str,
+    across: &[&Component],
+) -> Option<LintFinding> {
+    if across.is_empty() {
+        return None;
+    }
+    let techs: Vec<Technology> = across.iter().map(|c| technology(c)).collect();
+    if !techs.iter().all(|t| t.is_ceramic()) {
+        return None;
+    }
+    let named = techs.iter().all(|t| *t == Technology::CeramicNamed);
+    let list = across
+        .iter()
+        .map(|c| format!("{} {}", c.reference, c.value.trim()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let how = if named {
+        "named as ceramic"
+    } else {
+        "plain capacitors in chip footprints, which the library uses for ceramics"
+    };
+    let (lo, hi) = window;
+    Some(LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) output '{out_name}' has only ceramic capacitors ({list}; {how}), but card \
+             '{}' states that loop stability needs the output capacitor's ESR inside \
+             {lo}..{hi} Ω: a ceramic's ESR is a few milliohms, below the {lo} Ω floor, so the \
+             regulator can oscillate whatever the capacitance. {REMEDY_MARKER}Use the \
+             capacitor type the datasheet names (tantalum or a low-ESR polymer with ESR in \
+             that window), or add a series resistor that brings the output capacitor's ESR \
+             into it.",
+            comp.reference,
+            comp.value.trim(),
+            model.id,
+        ),
+        refs: std::iter::once(comp.reference.clone())
+            .chain(across.iter().map(|c| c.reference.clone()))
+            .collect(),
+        nets: vec![out_name.to_string()],
+    })
 }
 
 /// The finding for an output carrying `found` farads (`caps`), short of what
@@ -653,5 +804,78 @@ mod tests {
         let ams = lint_on("AMS1117-3.3", &["4u7"]);
         assert_eq!(ams.len(), 1, "{ams:?}");
         assert_eq!(ams[0].severity, Severity::Low);
+    }
+
+    /// `value` on the LDO's output, one capacitor of `cap` farads text per
+    /// entry of `caps` as (symbol, footprint, extra description).
+    fn typed_caps(value: &str, caps: &[(&str, &str, &str)]) -> Vec<LintFinding> {
+        let mut b = ldo(value, &[]);
+        for (i, (lib, footprint, description)) in caps.iter().enumerate() {
+            let mut c = part(&format!("C{}", i + 1), "10u", &[("1", 2), ("2", 3)]);
+            c.lib_id = (*lib).into();
+            c.footprint = (*footprint).into();
+            if !description.is_empty() {
+                c.properties.push(("Description".into(), (*description).into()));
+            }
+            b.components.push(c);
+        }
+        regulator_cout_lint(&b, &ModelLibrary::builtin()).findings
+    }
+
+    const CHIP: &str = "Capacitor_SMD:C_0805_2012Metric";
+
+    /// LM1117 (SNOS412Q 9.2.2.1.3, "The ESR of the output capacitor should
+    /// range between 0.3 Ω to 22 Ω"): a ceramic output capacitor has no such
+    /// ESR, so 10 µF of it meets the capacitance minimum and still fails.
+    #[test]
+    fn a_ceramic_output_capacitor_on_an_ldo_that_needs_esr_is_flagged() {
+        // A plain capacitor in a chip footprint reads as ceramic.
+        let found = typed_caps("LM1117-3.3", &[("Device:C", CHIP, "")]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert_eq!(found[0].refs, ["U1", "C1"]);
+        says(
+            &found[0],
+            &[
+                "only ceramic capacitors (C1 10u",
+                "plain capacitors in chip footprints",
+                "card 'lm1117_3v3'",
+                "ESR inside 0.3..22 Ω",
+            ],
+        );
+        assert!(found[0].own_remedy().is_some(), "{}", found[0].message);
+        // A named dielectric reads as ceramic whatever the symbol.
+        let named = typed_caps("LM1117-3.3", &[("Device:C", "", "10uF X7R 16V")]);
+        assert_eq!(named.len(), 1, "{named:?}");
+        says(&named[0], &["named as ceramic"]);
+        // Two ceramics are still ceramic.
+        let two = typed_caps("LM1117-3.3", &[("Device:C", CHIP, ""), ("Device:C", CHIP, "")]);
+        assert_eq!(two.len(), 1, "{two:?}");
+    }
+
+    /// The silent controls: a tantalum or polymer capacitor supplies the ESR,
+    /// one capacitor of unreadable technology leaves the part unjudged, and a
+    /// card whose ESR floor a ceramic can meet is not judged for it.
+    #[test]
+    fn esr_is_not_claimed_without_a_ceramic_only_output() {
+        let tantalum = typed_caps("LM1117-3.3", &[("Device:C_Polarized", "Capacitor_Tantalum_SMD:CP_EIA-3528-21_Kemet-B", "")]);
+        assert!(tantalum.is_empty(), "{tantalum:?}");
+        let mixed = typed_caps(
+            "LM1117-3.3",
+            &[("Device:C", CHIP, ""), ("Device:C_Polarized", "", "tantalum")],
+        );
+        assert!(mixed.is_empty(), "{mixed:?}");
+        // A capacitor that says nothing about itself: not judged.
+        let unknown = typed_caps("LM1117-3.3", &[("", "", "")]);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        let one_unknown = typed_caps("LM1117-3.3", &[("Device:C", CHIP, ""), ("", "", "")]);
+        assert!(one_unknown.is_empty(), "{one_unknown:?}");
+        // NCP1117LP states ESR 20 mΩ to 20 Ω (Table 1, Vout): a ceramic can meet
+        // the floor, so a ceramic-only output is not flagged.
+        let low_floor = typed_caps("NCP1117LPST15T3G", &[("Device:C", CHIP, "")]);
+        assert!(low_floor.is_empty(), "{low_floor:?}");
+        // A card with no ESR window at all.
+        let none = typed_caps(MCP1700, &[("Device:C", CHIP, "")]);
+        assert!(none.is_empty(), "{none:?}");
     }
 }

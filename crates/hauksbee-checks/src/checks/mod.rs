@@ -60,6 +60,10 @@
 //!   gated rail or that an unpowered device clamps (bus lock-up).
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
+//! - [`regulator_budget`]: a linear regulator whose output carries more stated
+//!   supply current than its rating, whose input leaves less than its dropout,
+//!   an IC fed through a series resistor below its minimum supply, and a motor
+//!   driver whose programmed current exceeds its supply's rating.
 //! - [`pin_bias`]: a pin whose card requires a pull-up, a pull-down or a defined
 //!   idle level (`[[models.pin_bias]]`, non-strap pins) that the board biases the
 //!   wrong way, leaves open, or pulls with a resistor outside the datasheet range.
@@ -186,6 +190,7 @@ pub mod pullup_effect;
 pub mod rail_basis;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
+pub mod regulator_budget;
 pub mod regulator_cout;
 pub mod regulator_enable;
 pub(crate) mod reset_state;
@@ -733,6 +738,11 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
     report.findings.extend(dc.report.findings);
+    let budget = {
+        let existing: Vec<&LintFinding> = report.findings.iter().collect();
+        regulator_budget::regulator_budget_findings(board, &statics, &existing)
+    };
+    report.findings.extend(budget.findings);
     lint_tick(14);
     add_unsolved_led_findings(&mut report, board, lib);
     // The comparator half of the analog-input check and the logic-level check
