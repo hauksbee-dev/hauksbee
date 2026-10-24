@@ -156,6 +156,8 @@ mod input_order_stable;
 mod interactive_coverage_parity;
 #[path = "json_finding_public_api.rs"]
 mod json_finding_public_api;
+#[path = "lint_parity_dump.rs"]
+mod lint_parity_dump;
 #[path = "live_divergence_usb_clamp.rs"]
 mod live_divergence_usb_clamp;
 #[path = "live_peripheral_attach.rs"]
@@ -228,6 +230,8 @@ mod shorts;
 mod si_ampacity_ripple;
 #[path = "soft_i2c_cosim.rs"]
 mod soft_i2c_cosim;
+#[path = "solved_levels_check.rs"]
+mod solved_levels_check;
 #[path = "spi_sensor_cosim_qemu.rs"]
 mod spi_sensor_cosim_qemu;
 #[path = "spi_sensor_cosim_renode.rs"]

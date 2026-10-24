@@ -266,7 +266,16 @@ pub fn logic_level_lint(
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> NetLintReport {
     let st = super::BoardStatics::of(board, lib);
-    let findings = flags(board, &st, span).into_iter().map(|(f, _)| f);
+    logic_level_lint_in(board, &st, span)
+}
+
+/// [`logic_level_lint`] over statics the caller already holds.
+pub fn logic_level_lint_in(
+    board: &ExtractedBoard,
+    st: &super::BoardStatics<'_>,
+    span: &dyn Fn(&str) -> Option<RailRange>,
+) -> NetLintReport {
+    let findings = flags(board, st, span).into_iter().map(|(f, _)| f);
     NetLintReport {
         findings: findings.collect(),
     }

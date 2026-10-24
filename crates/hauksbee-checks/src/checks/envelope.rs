@@ -42,7 +42,7 @@ pub struct RailRange {
 }
 
 impl RailRange {
-    const fn point(volts: f64) -> Self {
+    pub(crate) const fn point(volts: f64) -> Self {
         Self {
             min_v: volts,
             max_v: volts,
@@ -771,6 +771,12 @@ pub(crate) struct RailResolver<'a> {
     /// Levels a run solved (or a spec forced), each the span the net covered.
     solved: &'a BTreeMap<String, RailRange>,
     rails: &'a Rails,
+    /// Whether a regulator's or battery's declared range stands, with its
+    /// tolerance or state-of-charge corners, on a net a solve put INSIDE it.
+    /// A solve gives the nominal level; the corners are what the rail's own
+    /// model adds, so a static check that judges on the solve keeps them
+    /// while the solve and the model agree.
+    declared_corners: bool,
 }
 
 impl<'a> RailResolver<'a> {
@@ -783,11 +789,47 @@ impl<'a> RailResolver<'a> {
             board,
             solved,
             rails: st.rails(board),
+            declared_corners: false,
         }
+    }
+
+    /// This resolver, keeping a regulator's or battery's declared corners
+    /// where the solve agrees with them (see the field).
+    pub(crate) const fn with_declared_corners(mut self, on: bool) -> Self {
+        self.declared_corners = on;
+        self
     }
 
     fn solved(&self, net_id: i64) -> Option<RailRange> {
         self.solved.get(&self.board.net(net_id)?.name).copied()
+    }
+
+    /// The declared range of a regulator- or battery-defined net that a solved
+    /// level lies inside, when corners are kept. Slack of a millivolt covers
+    /// the solver's own tolerance on a level the model also states.
+    fn agreeing_declared(&self, net_id: i64) -> Option<RailRange> {
+        const SLACK_V: f64 = 1e-3;
+        if !self.declared_corners {
+            return None;
+        }
+        let solved = self.solved(net_id)?;
+        if !self.rails.regulators.contains_key(&net_id)
+            && !self.rails.batteries.contains_key(&net_id)
+        {
+            return None;
+        }
+        let RailKnowledge::Known(declared) = self.declared(net_id) else {
+            return None;
+        };
+        (declared.min_v - SLACK_V <= solved.min_v && solved.max_v <= declared.max_v + SLACK_V)
+            .then_some(declared)
+    }
+
+    /// True when the level judged on `net_id` is the rail model's declared
+    /// range, not a solved span: no solve covered it, or the solve sits inside
+    /// the model's range and the model's corners are kept.
+    fn judged_on_declared(&self, net_id: i64) -> bool {
+        self.solved(net_id).is_none() || self.agreeing_declared(net_id).is_some()
     }
 
     /// Every level a net is judged at: the solved span when a run gave it,
@@ -804,6 +846,9 @@ impl<'a> RailResolver<'a> {
     }
 
     fn range(&self, net_id: i64) -> RailKnowledge {
+        if let Some(declared) = self.agreeing_declared(net_id) {
+            return RailKnowledge::Known(declared);
+        }
         self.solved(net_id)
             .map_or_else(|| self.declared(net_id), RailKnowledge::Known)
     }
@@ -1157,16 +1202,48 @@ fn divider_name_findings(
     out
 }
 
+fn envelope_lint_with_tolerance(
+    board: &ExtractedBoard,
+    st: &BoardStatics<'_>,
+    solved: &BTreeMap<String, RailRange>,
+    tolerance: (f64, f64),
+    ambient_c: Option<f64>,
+) -> NetLintReport {
+    envelope_lint_in(board, st, solved, tolerance, ambient_c, false)
+}
+
+/// The envelope lint of a static surface that holds `solved` levels: every
+/// net a solve covers is judged on that level, every other net on the rail
+/// knowledge the board carries (a regulator, a battery, a divider, the net's
+/// name). With no solved level this is [`envelope_lint`] exactly. A solved
+/// level inside its regulator's or battery's declared range keeps that
+/// range's corners, so a tolerance or charge-state margin the solve cannot
+/// show is not lost to it.
+#[must_use]
+pub(crate) fn envelope_lint_solved(
+    board: &ExtractedBoard,
+    st: &BoardStatics<'_>,
+    solved: &BTreeMap<String, RailRange>,
+    tolerance: (f64, f64),
+) -> NetLintReport {
+    let mut report = envelope_lint_in(board, st, solved, tolerance, None, true);
+    report
+        .findings
+        .extend(divider_name_findings(board, st, &BTreeMap::new()));
+    report
+}
+
 // One match over envelope kinds sharing the resolver and per-net abstention bookkeeping.
 #[allow(clippy::too_many_lines)]
-fn envelope_lint_with_tolerance(
+fn envelope_lint_in(
     board: &ExtractedBoard,
     st: &BoardStatics<'_>,
     solved: &BTreeMap<String, RailRange>,
     (reltol, vntol): (f64, f64),
     ambient_c: Option<f64>,
+    declared_corners: bool,
 ) -> NetLintReport {
-    let resolver = RailResolver::new(board, st, solved);
+    let resolver = RailResolver::new(board, st, solved).with_declared_corners(declared_corners);
     let ties = tied_nets(board);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
@@ -1240,7 +1317,7 @@ fn envelope_lint_with_tolerance(
                     let nominal_inside = nominal >= *min_v - min_tol && nominal <= *max_v + max_tol;
                     // Declared ranges only: a solved span's midpoint is not
                     // a nominal, and a solved excursion is what happened.
-                    let declared_only = resolver.solved(net_id).is_none();
+                    let declared_only = resolver.judged_on_declared(net_id);
                     if declared_only && nominal_inside && !above_abs_max {
                         severity = at_most(severity, Severity::Low);
                     }

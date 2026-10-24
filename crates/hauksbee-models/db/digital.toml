@@ -15494,13 +15494,10 @@ min_v = 1.8
 max_v = 5.5
 basis = "Table 14, VDD chip supply voltage, VCC not shorted to VDD; VCC connected to 0.1 µF decoupling capacitor"
 
-[[models.envelope]]
-kind = "supply_range"
-pin = "vdd"
-min_v = 1.71
-max_v = 1.89
-conditions = "TA = −40 °C to +85 °C; VCC shorted to VDD"
-basis = "Table 14, VDD chip supply voltage, VCC shorted to VDD"
+# Table 14 also prints VDD 1.71..1.89 V for the configuration with VCC shorted to VDD. That
+# is an alternative configuration, not a second limit: the envelope judges every row at once,
+# so the row would call the usual VCC-decoupled design (VDD 1.8..5.5 V above) out of range at
+# any rail over 1.89 V. The shorted configuration's ceiling stays in the VCC_MAX characteristic.
 
 [[models.envelope]]
 kind = "supply_range"

@@ -102,6 +102,10 @@
 //!   crystal whose value states no CL.
 //! - [`logic_levels`]: a CMOS logic input left between its VCC-scaled VIL
 //!   and VIH, where the datasheet guarantees no logic state.
+//! - [`solved_levels`]: the supply-envelope, logic-level and analog-input
+//!   judges on solved levels, one implementation for a CI run's spans and for
+//!   the DC operating point `check` solves; the rail-knowledge tables judge
+//!   only the nets no solve covers.
 //! - [`rail_basis`]: a rail powered by its name alone whose only source is a
 //!   part the board does not fit (with no connector or test point on it)
 //!   never comes up; other name-powered rails are stated verdict conditions,
@@ -186,6 +190,7 @@ pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
 pub mod signal_direction;
+pub mod solved_levels;
 pub mod straps;
 pub mod supply_cap;
 pub mod switch_short;
@@ -646,9 +651,20 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(device_decode::device_decode_lint(board, lib).findings);
-    report
-        .findings
-        .extend(envelope::envelope_lint(board, lib).findings);
+    // One binding serves the checks that need the bound board: the rail
+    // conflicts read its report, the DC stress pass consumes it and solves the
+    // board's operating point once. Binding a large board is not cheap, so it
+    // is done once here, not once per check. The levels that solve gave judge
+    // the supply envelope, the logic levels and the analog inputs below; a net
+    // the solve does not cover is judged on the rail knowledge the board states.
+    let bound = hauksbee_bind::binder::bind_board(board, lib);
+    let conflicts = rail_conflicts::rail_conflict_findings(&bound.report).findings;
+    let bases = hauksbee_bind::rail_basis::rail_bases(board, lib, &bound);
+    let dc = dc_stress::dc_stress_at_corners(board, lib, bound);
+    let statics = BoardStatics::of(board, lib);
+    let rails = |net: &str| hauksbee_bind::binder::power_rail_voltage(net);
+    let judged = dc.levels.lint(board, &statics, &rails);
+    report.findings.extend(judged.envelope);
     lint_tick(12);
     for findings in [
         contention::contention_lint(board, lib).findings,
@@ -693,17 +709,10 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report.findings.extend(held_off);
     report.findings.extend(control);
     lint_tick(4);
-    // One binding serves both checks that need the bound board: the rail
-    // conflicts read its report, the DC stress pass then consumes it. Binding
-    // a large board is not cheap, so it is done once here, not once per check.
-    let bound = hauksbee_bind::binder::bind_board(board, lib);
     lint_tick(16);
-    report
-        .findings
-        .extend(rail_conflicts::rail_conflict_findings(&bound.report).findings);
+    report.findings.extend(conflicts);
     // A rail powered by its name alone whose only source is unfitted never
     // comes up; a run that powered no rail judged no level.
-    let bases = hauksbee_bind::rail_basis::rail_bases(board, lib, &bound);
     report
         .findings
         .extend(rail_basis::rail_basis_findings(&bases).findings);
@@ -719,26 +728,19 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(node_drive::node_drive_lint(board, lib).findings);
     extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
-    report
-        .findings
-        .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
+    report.findings.extend(dc.report.findings);
     lint_tick(14);
     add_unsolved_led_findings(&mut report, board, lib);
-    // Static surfaces have no solved levels, so the comparator half of this
-    // check reads the rail table and abstains on a divider tap; the ADC
+    // The comparator half of the analog-input check and the logic-level check
+    // read the levels the DC solve gave. A net it does not cover (nothing in
+    // the netlist sets it, or its rail is dead) falls back to the rail table:
+    // a divider tap is then an abstention, and a logic input is judged only
+    // where it is tied to a named rail (3.3 V into a 5 V CMOS input). The ADC
     // source-impedance half is pure topology and runs either way.
-    let rails = |net: &str| hauksbee_bind::binder::power_rail_voltage(net);
     lint_tick(12);
-    report
-        .findings
-        .extend(analog_inputs::analog_input_lint(board, lib, &rails).findings);
+    report.findings.extend(judged.analog);
     lint_tick(10);
-    // Likewise a logic input is judged statically only where it is tied to a
-    // named rail (3.3 V into a 5 V CMOS input); solved levels judge the rest.
-    let point = |net: &str| rails(net).map(|v| envelope::RailRange { min_v: v, max_v: v });
-    report
-        .findings
-        .extend(logic_levels::logic_level_lint(board, lib, &point).findings);
+    report.findings.extend(judged.logic);
     lint_tick(12);
     for finding in model_controls::model_control_lint(board, lib).findings {
         // Schematic/netlist extraction can already carry the pin function and
