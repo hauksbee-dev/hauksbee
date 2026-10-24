@@ -9299,10 +9299,10 @@ basis = "Electrical Characteristics, Input Voltage Range; Absolute Maximum Ratin
 [[models.envelope]]
 kind = "supply_range"
 pin = "vcc"
-min_v = 4.75
+min_v = 0.0
 max_v = 5.25
 abs_max_v = 6.0
-basis = "Analog Devices MAX17760 19-100795 Rev 2, Electrical Characteristics p.5, LINEAR REGULATOR (VCC) output voltage range 4.75 V min / 5 V typ / 5.25 V max for 6 V <= VIN <= 76 V"
+basis = "Analog Devices MAX17760 19-100795 Rev 2, Electrical Characteristics p.5, LINEAR REGULATOR (VCC) output voltage 5.25 V max for 6 V <= VIN <= 76 V. VCC is the LDO output (pin table p.12: \"5V LDO Output... LDO doesn't support external loading on VCC\"), so no floor is stated for it: at VIN down to 4.5 V (p.5) with 0.27 V dropout (p.6) it sits near 4.2 V on a correct board, and min_v is 0 so that is never reported"
 abs_max_basis = "Analog Devices MAX17760 19-100795 Rev 2, Absolute Maximum Ratings p.5, FB, RESET, SS, MODE, VCC, RT/SYNC to SGND -0.3 V to +6 V"
 
 [models.behavioral.converter]
