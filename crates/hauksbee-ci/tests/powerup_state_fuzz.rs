@@ -70,6 +70,7 @@ fn boot_state_fuzz(
     seeds: u32,
     asserts: &str,
     open_gap: &[&str],
+    static_flaws: &[&str],
 ) -> hauksbee_ci::CiResult {
     hauksbee_testkit::scanned(&format!("{case} boot-state fuzz (nets found)"), nets.len());
     assert!(
@@ -95,7 +96,9 @@ fn boot_state_fuzz(
         fuzzed.join(", "),
     );
     let result = run_body(&format!("{case}.toml"), &body);
-    if open_gap.is_empty() {
+    if !static_flaws.is_empty() {
+        assert_red_on_static_flaws(&result, static_flaws, case);
+    } else if open_gap.is_empty() {
         support::assert_green(
             &result,
             &format!("{case} boot-state fuzz must be GREEN across all seeds"),
@@ -136,6 +139,41 @@ fn boot_state_fuzz(
     result
 }
 
+/// Assert a fuzz whose own numeric judgement holds is RED because the board's
+/// static check fails it on real flaws, each failing static row naming one of
+/// the `nets`, and every net named by a failing row.
+fn assert_red_on_static_flaws(result: &hauksbee_ci::CiResult, nets: &[&str], case: &str) {
+    use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
+    let report = result.render_human();
+    assert_eq!(result.exit_code(), 1, "{case}: expected RED\n{report}");
+    assert!(
+        result
+            .results
+            .iter()
+            .filter(|r| r.kind != STATIC_CHECK_KIND)
+            .all(|r| r.passed),
+        "{case}: numeric judgement\n{report}"
+    );
+    let failing: Vec<String> = result
+        .results
+        .iter()
+        .filter(|r| r.kind == STATIC_CHECK_KIND && !r.passed && r.waived.is_none())
+        .map(|r| format!("{} {}", r.label, r.detail))
+        .collect();
+    for row in &failing {
+        assert!(
+            nets.iter().any(|n| row.contains(&format!("'{n}'"))),
+            "{case}: unexpected static row {row}"
+        );
+    }
+    for net in nets {
+        assert!(
+            failing.iter().any(|row| row.contains(&format!("'{net}'"))),
+            "{case}: no failing static row on '{net}' in {failing:?}"
+        );
+    }
+}
+
 /// How many members a `seeds`-seed fuzz runs on `board`, and the conditions
 /// its pass rests on: each seed crossed with the board's open same-pinout
 /// variant and corner sets, as `hauksbee-ci` plans them
@@ -158,8 +196,8 @@ fn expected_members(board: &Path, seeds: u32) -> (u32, Vec<String>) {
 }
 
 /// `LumenPnP` motherboard: the low-side AO3400A MOSFET gates are driven by
-/// STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull holds each
-/// gate. We fuzz each gate node directly across its undefined boot level
+/// STM32F407 GPIOs that are Hi-Z at reset, behind a 1k series; the buzzer
+/// and fan gates have no pull at all, which the static check reports. We fuzz each gate node directly across its undefined boot level
 /// (0 / 3.3 V), which is more conservative than fuzzing the GPIO behind the 1k
 /// series, and require the externally-held rails stay up and no part faults on
 /// any seed. `+3.3V` is the AP1117-3.3 (U4) output fed from `+5V`, so it is
@@ -210,6 +248,11 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         // stay critical too: no card states an open part's standoff or
         // polarity, so nothing bounds what it clamps. GREEN once all are modelled.
         &["U6", "U7", "U8", "U9", "U10", "U11", "U16"],
+        // Real flaws the static check reports: the buzzer and fan FET gates
+        // (behind 1k series resistors) and two light-buffer inputs are driven
+        // only by STM32F407 pads, which are floating inputs in reset (RM0090
+        // 8.3.1), and nothing on those nets pulls them, so the board fails.
+        &["Net-(Q5-Pad1)", "Net-(Q6-Pad1)", "BTM_LIGHT", "TOP_LIGHT"],
     );
 }
 
@@ -236,6 +279,7 @@ fn olimex_evb_relay_boot_states_are_safe() {
         8,
         &(rail_holds("+3.3V", 3.2, 3.4) + &rail_holds("+5V", 4.9, 5.1)),
         // Every part binds (the Olimex peripheral cards), so the run is GREEN.
+        &[],
         &[],
     );
 }
@@ -331,6 +375,7 @@ fn reform_supervisor_fuzz(case: &str, seeds: u32) -> Option<hauksbee_ci::CiResul
         // (SP0503BAHT, TPD6E05U06) stay critical too: no card states an open
         // part's standoff or polarity. GREEN once all of them are modelled.
         &["U18", "U7", "U9", "U12", "U14"],
+        &[],
     ))
 }
 
