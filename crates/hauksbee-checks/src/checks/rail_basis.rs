@@ -34,7 +34,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use hauksbee_bind::binder::BoundBoard;
-use hauksbee_bind::rail_basis::{rail_bases, RailBases, RailBasis, Unfitted};
+use hauksbee_bind::rail_basis::{rail_bases, BareRail, RailBases, RailBasis, Unfitted};
 use hauksbee_extract::{
     ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
     REMEDY_MARKER,
@@ -225,6 +225,54 @@ fn no_rail_note(bases: &RailBases) -> LintFinding {
     }
 }
 
+/// The note for a rail named with no voltage whose consumers rule out the level
+/// the name is conventionally taken for.
+fn bare_rail_note(bare: &BareRail) -> LintFinding {
+    let net = &bare.net;
+    let guess = format_volts(bare.conventional);
+    let (lo, hi) = (bare.low_v, bare.high_v);
+    let state = if lo > hi + 1e-6 {
+        format!(
+            "no single supply satisfies every consumer ({} needs at least {}, {} allows at most {})",
+            listed(&bare.low_from),
+            format_volts(lo),
+            listed(&bare.high_from),
+            format_volts(hi),
+        )
+    } else if (hi - lo).abs() <= 1e-6 {
+        format!(
+            "its consumers allow {} only ({} minimum, {} maximum), with no margin",
+            format_volts(lo),
+            listed(&bare.low_from),
+            listed(&bare.high_from),
+        )
+    } else {
+        format!(
+            "its consumers allow {} to {} ({} minimum, {} maximum)",
+            format_volts(lo),
+            format_volts(hi),
+            listed(&bare.low_from),
+            listed(&bare.high_from),
+        )
+    };
+    let message = format!(
+        "'{net}' states no voltage, and {state}, which rules out the {guess} a bare name is \
+         conventionally taken for. The analysis holds no level on '{net}', so the parts on it \
+         ({}) are not judged against a supply level{INFORMATIONAL_MARKER}. {REMEDY_MARKER}Name \
+         the rail with its voltage (+3V3) or declare it with a [[supply]], then re-check.",
+        listed(&bare.consumers),
+    );
+    let mut refs = bare.consumers.clone();
+    refs.truncate(SHOWN);
+    LintFinding {
+        check: LintCheck::RailUnpowered,
+        severity: Severity::Low,
+        message,
+        refs,
+        nets: vec![bare.net.clone()],
+    }
+}
+
 /// The findings for `bases`: a gating finding per rail that never comes up, a
 /// note per rail whose own source is unfitted but may still be powered, and
 /// the not-judged note when no rail is powered at all.
@@ -240,6 +288,7 @@ pub fn rail_basis_findings(bases: &RailBases) -> NetLintReport {
             findings.push(unsourced_finding(rail));
         }
     }
+    findings.extend(bases.unleveled.iter().map(bare_rail_note));
     if !bases.any_powered && !bases.active_parts.is_empty() {
         findings.push(no_rail_note(bases));
     }
@@ -1164,5 +1213,236 @@ mod tests {
             held.contains("'+3V3' at 3.3 V (possible source: U4)"),
             "{held}"
         );
+    }
+
+    /// A library holding the given card text.
+    fn user_lib(cards: &str) -> ModelLibrary {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee_rail_basis_{}_{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.toml"), cards).unwrap();
+        let mut lib = ModelLibrary::empty();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{errors:?}");
+        lib
+    }
+
+    /// A USB-serial bridge in the shape of the dual-mode parts: pin 1 `vregin`
+    /// takes 5 V (or 3.3 V), pin 2 `vccd` is the on-chip regulator's output while
+    /// `vregin` is above 3.6 V and an input otherwise. `when` is the card's
+    /// condition text for the `vccd` row.
+    fn dual_role_lib(when: &str) -> ModelLibrary {
+        user_lib(&format!(
+            "[[models]]\nid = \"dual_role_bridge\"\nkind = \"digital\"\n\
+             description = \"dual-role supply fixture\"\n[models.match]\nvalue_re = \"^DUALBRIDGE$\"\n\
+             [models.params]\nidentity_only = true\nwarning = \"identity only\"\n\
+             unlocked_by = \"validated behavior\"\n\
+             [[models.supply_outputs]]\nrole = \"vccd\"\nnominal = 3.3\nmin = 3.0\nmax = 3.6\n\
+             basis = \"section 6, reference circuit: VCCD becomes an output when VREGIN is 5 V\"\n\
+             {when}\n[models.pins]\n\"1\" = \"vregin\"\n\"2\" = \"vccd\"\n\"3\" = \"gnd\"\n\"4\" = \"io\"\n"
+        ))
+    }
+
+    const WHEN_5V: &str = "[models.supply_outputs.when]\npin = \"vregin\"\nmin_v = 3.6\n";
+
+    /// The bridge: `vregin` on `vregin_net`, `vccd` on +3V3.
+    fn bridge(vregin_net: i64) -> Component {
+        // Four connected pads: a part of three or fewer reads as a series pass
+        // element, which would feed the rail through itself.
+        let mut u = part(
+            "U1",
+            "DUALBRIDGE",
+            &[("1", vregin_net), ("3", GND), ("2", V3), ("4", SDA)],
+        );
+        u.pins[0].function = "VREGIN".into();
+        u.pins[1].function = "GND".into();
+        u.pins[2].function = "VCCD".into();
+        u.pins[2].kind = "power_in".into();
+        u
+    }
+
+    fn run_with(lib: &ModelLibrary, parts: Vec<Component>) -> Vec<LintFinding> {
+        rail_basis_lint(&board(&nets(), parts), lib).findings
+    }
+
+    /// An on-chip regulator's output pin that is an input in another mode is a
+    /// rail source in the mode the board uses: VREGIN on the 5 V supply, VCCD
+    /// the only thing on +3V3 that sources it.
+    #[test]
+    fn a_dual_role_output_pin_in_its_output_mode_sources_the_rail() {
+        let lib = dual_role_lib(WHEN_5V);
+        let found = run_with(&lib, vec![usb(), bridge(VBUS), sensor("U2", V3)]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Silent control: the pin is an input in the other mode, so with VREGIN on
+    /// the 3.3 V rail itself nothing sources +3V3 and it is still reported.
+    #[test]
+    fn a_dual_role_pin_in_its_input_mode_leaves_the_rail_unsourced() {
+        let lib = dual_role_lib(WHEN_5V);
+        let found = run_with(&lib, vec![usb(), bridge(V3), sensor("U2", V3)]);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+        assert!(unsourced(&found)[0].message.contains("'+3V3'"));
+    }
+
+    /// Silent control: the same part with no card row for the pin sources
+    /// nothing, so its rail is reported (a pin named like a supply input is a
+    /// load until a card says it is an output).
+    #[test]
+    fn a_supply_pin_with_no_output_row_is_not_a_source() {
+        let lib = user_lib(
+            "[[models]]\nid = \"plain_bridge\"\nkind = \"digital\"\ndescription = \"fixture\"\n\
+             [models.match]\nvalue_re = \"^DUALBRIDGE$\"\n[models.params]\nidentity_only = true\n\
+             warning = \"identity only\"\nunlocked_by = \"validated behavior\"\n\
+             [models.pins]\n\"1\" = \"vregin\"\n\"2\" = \"vccd\"\n\"3\" = \"gnd\"\n\"4\" = \"io\"\n",
+        );
+        let found = run_with(&lib, vec![usb(), bridge(VBUS), sensor("U2", V3)]);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+    }
+
+    /// A row with no condition sources whenever the part is fitted.
+    #[test]
+    fn an_unconditional_output_row_sources_in_either_mode() {
+        let lib = dual_role_lib("");
+        let found = run_with(&lib, vec![usb(), bridge(V3), sensor("U2", V3)]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    const VCC_BARE: i64 = 9;
+
+    /// A part with a recommended supply row `min..max` on its `vdd` pin.
+    fn windowed_lib() -> ModelLibrary {
+        let card = |id: &str, value: &str, lo: f64, hi: f64| {
+            format!(
+                "[[models]]\nid = \"{id}\"\nkind = \"digital\"\ndescription = \"fixture\"\n\
+                 [models.match]\nvalue_re = \"^{value}$\"\n[models.params]\nidentity_only = true\n\
+                 warning = \"identity only\"\nunlocked_by = \"validated behavior\"\n\
+                 [[models.envelope]]\nkind = \"supply_range\"\npin = \"vdd\"\nmin_v = {lo}\n\
+                 max_v = {hi}\nbasis = \"Recommended Operating Conditions\"\n\
+                 [models.pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n"
+            )
+        };
+        user_lib(
+            &[
+                card("mcu_fx", "FXMCU", 2.0, 3.6),
+                card("xcvr_fx", "FXXCVR", 3.0, 3.6),
+                card("tof_fx", "FXTOF", 2.6, 3.0),
+                card("wide_fx", "FXWIDE", 2.7, 5.5),
+            ]
+            .join("\n"),
+        )
+    }
+
+    fn consumer(reference: &str, value: &str, rail: i64) -> Component {
+        let mut c = part(reference, value, &[("1", rail), ("2", GND)]);
+        c.pins[0].function = "VDD".into();
+        c.pins[0].kind = "power_in".into();
+        c
+    }
+
+    fn bare_board(
+        rail_name: &'static str,
+        consumers: &[(&str, &str)],
+    ) -> (ExtractedBoard, ModelLibrary) {
+        let mut named = nets();
+        named.push((VCC_BARE, rail_name));
+        let mut parts = vec![part("J1", "Conn_01x02", &[("1", VCC_BARE), ("2", GND)])];
+        for (r, v) in consumers {
+            parts.push(consumer(r, v, VCC_BARE));
+        }
+        (board(&named, parts), windowed_lib())
+    }
+
+    fn bare_notes(found: &[LintFinding]) -> Vec<&LintFinding> {
+        found
+            .iter()
+            .filter(|f| {
+                f.check == LintCheck::RailUnpowered && f.message.contains("states no voltage")
+            })
+            .collect()
+    }
+
+    /// A bare `VCC` on a connector whose consumers cannot all run at the 5 V its
+    /// name is conventionally taken for: no level is guessed, and one note
+    /// names what the consumers allow.
+    #[test]
+    fn a_bare_rail_the_consumers_rule_out_holds_no_level_and_says_so() {
+        let (b, lib) = bare_board("VCC", &[("U1", "FXMCU"), ("U2", "FXXCVR"), ("U3", "FXTOF")]);
+        let bound = hauksbee_bind::binder::bind_board(&b, &lib);
+        assert!(
+            bound.supplies.iter().all(|l| l.net_name != "VCC"),
+            "no 5 V level may be held on the bare rail"
+        );
+        let found = rail_basis_findings(&rail_bases(&b, &lib, &bound)).findings;
+        let notes = bare_notes(&found);
+        assert_eq!(notes.len(), 1, "{found:#?}");
+        assert_eq!(notes[0].severity, Severity::Low);
+        assert!(
+            notes[0].message.contains("3 V only"),
+            "{}",
+            notes[0].message
+        );
+        assert!(
+            notes[0].message.contains("U2 minimum"),
+            "{}",
+            notes[0].message
+        );
+        assert!(
+            notes[0].message.contains("U3 maximum"),
+            "{}",
+            notes[0].message
+        );
+    }
+
+    /// Windows that do not meet at all are their own statement.
+    #[test]
+    fn a_bare_rail_no_single_supply_satisfies_says_so() {
+        let mut named = nets();
+        named.push((VCC_BARE, "VCC"));
+        let lib = user_lib(&format!(
+            "{}\n{}",
+            "[[models]]\nid = \"a_fx\"\nkind = \"digital\"\ndescription = \"f\"\n[models.match]\nvalue_re = \"^FXA$\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[[models.envelope]]\nkind = \"supply_range\"\npin = \"vdd\"\nmin_v = 3.0\nmax_v = 3.6\nbasis = \"ROC\"\n[models.pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n",
+            "[[models]]\nid = \"b_fx\"\nkind = \"digital\"\ndescription = \"f\"\n[models.match]\nvalue_re = \"^FXB$\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[[models.envelope]]\nkind = \"supply_range\"\npin = \"vdd\"\nmin_v = 1.65\nmax_v = 1.95\nbasis = \"ROC\"\n[models.pins]\n\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n"
+        ));
+        let parts = vec![
+            part("J1", "Conn_01x02", &[("1", VCC_BARE), ("2", GND)]),
+            consumer("U1", "FXA", VCC_BARE),
+            consumer("U2", "FXB", VCC_BARE),
+        ];
+        let found = rail_basis_lint(&board(&named, parts), &lib).findings;
+        let notes = bare_notes(&found);
+        assert_eq!(notes.len(), 1, "{found:#?}");
+        assert!(
+            notes[0]
+                .message
+                .contains("no single supply satisfies every consumer"),
+            "{}",
+            notes[0].message
+        );
+    }
+
+    /// Silent control: the same consumers on a rail whose name states 5 V keep
+    /// the name's level, and nothing here is said about it.
+    #[test]
+    fn a_rail_named_for_its_voltage_keeps_the_level() {
+        let (b, lib) = bare_board("5V", &[("U1", "FXMCU"), ("U2", "FXXCVR"), ("U3", "FXTOF")]);
+        let bound = hauksbee_bind::binder::bind_board(&b, &lib);
+        assert!(bound.supplies.iter().any(|l| l.net_name == "5V"));
+        let found = rail_basis_findings(&rail_bases(&b, &lib, &bound)).findings;
+        assert!(bare_notes(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Silent control: a bare `VCC` whose consumers all allow 5 V keeps the
+    /// conventional level.
+    #[test]
+    fn a_bare_rail_the_consumers_allow_at_5v_keeps_the_convention() {
+        let (b, lib) = bare_board("VCC", &[("U1", "FXWIDE")]);
+        let bound = hauksbee_bind::binder::bind_board(&b, &lib);
+        assert!(bound.supplies.iter().any(|l| l.net_name == "VCC"));
+        let found = rail_basis_findings(&rail_bases(&b, &lib, &bound)).findings;
+        assert!(bare_notes(&found).is_empty(), "{found:#?}");
     }
 }
