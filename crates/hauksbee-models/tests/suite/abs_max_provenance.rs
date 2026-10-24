@@ -90,3 +90,72 @@ fn every_shipped_absolute_maximum_has_its_own_source() {
         offenders.join("\n  ")
     );
 }
+
+/// A card that prints a per-pin absolute maximum for a supply pin (a
+/// characteristic row named `<ROLE>_MAX`, the datasheet's own symbol) must
+/// enforce it on that pin. Without a `supply_range` row the pin is judged at
+/// the card-wide `ratings.max_voltage_v`, which is the highest supply pin's
+/// limit: a 1.89 V internal-regulator pin was judged at 6 V, and a design that
+/// tied it to a 3.3 V rail passed.
+#[test]
+fn a_supply_pin_with_its_own_absolute_maximum_row_enforces_it() {
+    use hauksbee_models::pin_roles::{power_pin, PowerKind};
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+    let (mut offenders, mut rows) = (Vec::new(), 0);
+    for path in std::fs::read_dir(db)
+        .expect("db dir")
+        .flatten()
+        .map(|f| f.path())
+    {
+        let text = std::fs::read_to_string(&path).expect("db file");
+        let Ok(file) = toml::from_str::<DbFile>(&text) else {
+            continue;
+        };
+        for entry in &file.models {
+            let Some(source) = &entry.source else {
+                continue;
+            };
+            let roles: std::collections::BTreeSet<String> = entry
+                .pins
+                .values()
+                .map(|r| r.to_ascii_lowercase())
+                .collect();
+            for row in &source.characteristic {
+                let Some(max) = row.max else { continue };
+                // The datasheet symbol is the first token: `VCC_MAX, ...`.
+                let symbol = row
+                    .parameter
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let Some(role) = symbol.strip_suffix("_max") else {
+                    continue;
+                };
+                if !roles.contains(role)
+                    || !power_pin(role, entry.kind).is_some_and(|p| p.kind == PowerKind::Supply)
+                {
+                    continue;
+                }
+                rows += 1;
+                let enforced = entry.envelope.iter().any(|e| {
+                    matches!(e, OperatingEnvelope::SupplyRange { pin, abs_max_v, max_v, .. }
+                        if pin.eq_ignore_ascii_case(role)
+                            && abs_max_v.unwrap_or(*max_v) <= max + 1e-9)
+                });
+                if !enforced {
+                    offenders.push(format!(
+                        "{} {role}: {} <= {max} V ({})",
+                        entry.id, row.parameter, row.basis
+                    ));
+                }
+            }
+        }
+    }
+    assert!(rows > 0, "no <ROLE>_MAX supply rows were seen");
+    assert!(
+        offenders.is_empty(),
+        "supply pins whose own absolute maximum no supply_range row enforces:\n  {}",
+        offenders.join("\n  ")
+    );
+}

@@ -2560,6 +2560,14 @@ max_v = 5.5
 abs_max_v = 6.0
 basis = "TI SNOSD82D, Section 6.3 p.5 V+ 1.8 to 5.5 V over -55 to 150 C (1.7 V is allowed only over -55 to 70 C); Section 6.1 p.5 supply absolute maximum"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "alert", "add0"]
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SNOSD82D, Section 6.3 p.5 Recommended Operating Conditions, VI/O SCL, SDA, ALERT and ADD0 0 V to 5.5 V"
+abs_max_basis = "TI SNOSD82D, Section 6.1 p.5 Absolute Maximum Ratings, voltage at SCL, SDA, ALERT and ADD0 -0.3 V to 6 V"
+
 [models.peripheral]
 kind = "register_map"
 spec_toml = '''
@@ -3109,6 +3117,14 @@ min_v = 1.8
 max_v = 5.5
 abs_max_v = 6.0
 basis = "TI SNOSD82D, Section 6.3 p.5 V+ 1.8 to 5.5 V over -55 to 150 C (1.7 V is allowed only over -55 to 70 C); Section 6.1 p.5 supply absolute maximum"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "alert", "add0"]
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SNOSD82D, Section 6.3 p.5 Recommended Operating Conditions, VI/O SCL, SDA, ALERT and ADD0 0 V to 5.5 V"
+abs_max_basis = "TI SNOSD82D, Section 6.1 p.5 Absolute Maximum Ratings, voltage at SCL, SDA, ALERT and ADD0 -0.3 V to 6 V"
 
 [models.peripheral]
 kind = "register_map"

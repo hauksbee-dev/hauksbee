@@ -14887,6 +14887,14 @@ max_v = 3.6
 abs_max_v = 4.6
 basis = "Recommended Operating Conditions, VAVDD and VDVDD supply voltage; Absolute Maximum Ratings, supply voltage upper limit"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["copi", "cs_n", "sclk"]
+max_v = 5.5
+abs_max_v = 6.0
+basis = "MPS MA600 Rev. 1.0 Electrical Characteristics p.6, Digital I/O, input high voltage VIH 2.5 V min / 5.5 V max"
+abs_max_basis = "MPS MA600 Rev. 1.0 Absolute Maximum Ratings p.5, input pin voltage (VI) -0.5 V to +6 V"
+
 [[models.source.characteristic]]
 parameter = "VDD_UVLO, VDD under-voltage lockout threshold"
 max = 2.9
@@ -15504,20 +15512,40 @@ kind = "supply_range"
 pin = "vdd"
 min_v = 1.8
 max_v = 5.5
+abs_max_v = 6.0
 basis = "Table 14, VDD chip supply voltage, VCC not shorted to VDD; VCC connected to 0.1 µF decoupling capacitor"
+abs_max_basis = "Table 12 p.24, VDD_MAX, max voltage on the VDD pin relative to VSS, -0.5 V to 6 V"
 
 # Table 14 also prints VDD 1.71..1.89 V for the configuration with VCC shorted to VDD. That
 # is an alternative configuration, not a second limit: the envelope judges every row at once,
 # so the row would call the usual VCC-decoupled design (VDD 1.8..5.5 V above) out of range at
-# any rail over 1.89 V. The shorted configuration's ceiling stays in the VCC_MAX characteristic.
+# any rail over 1.89 V. The shorted configuration's window is the VCC row below, which judges
+# the VCC pin itself.
 
 [[models.envelope]]
 kind = "supply_range"
 pin = "vddio"
 min_v = 1.71
 max_v = 5.5
+abs_max_v = 6.0
 conditions = "TA = −40 °C to +85 °C; VDD = 5.5 V; VDDIO ≤ VDD"
 basis = "Table 14, VDDIO supply voltage I/O and VDD chip supply voltage maximum"
+abs_max_basis = "Table 12 p.24, VDDIO_MAX, max voltage on the VDDIO pin relative to VSS, 6 V"
+
+# VCC is the internal regulator's output (Table 14: connect a 0.1 µF capacitor to it, or short
+# it to VDD only when VDD is 1.71..1.89 V). Table 12 p.24 rates it at 1.89 V, far under the 6 V
+# of VDD, so it is judged on its own: a board that ties VCC to a 1.8 V rail sits inside, one
+# that ties it to 3.3 V or 5 V exceeds the absolute maximum. VCC on a capacitor alone has no
+# level and is not judged (optional_supplies above). The window is Table 14's VDD row for the
+# shorted configuration, because VCC then is VDD.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.71
+max_v = 1.89
+abs_max_v = 1.89
+basis = "Table 14 p.24, VDD chip supply voltage with VCC shorted to VDD, 1.71 V min / 1.8 V typ / 1.89 V max"
+abs_max_basis = "Table 12 p.24, VCC_MAX, max voltage on the VCC pin relative to VSS, -0.5 V to 1.89 V"
 
 [[models.envelope]]
 kind = "rail_order"

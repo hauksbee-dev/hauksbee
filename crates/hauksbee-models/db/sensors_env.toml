@@ -3646,6 +3646,14 @@ abs_max_v = 3.6
 basis = "Derived: Table 3 p.4 says AVDDVCSEL is 'to be connected to main supply' (AVDD), so the AVDD range of Table 8 p.19 applies, 2.6 V min / 3.5 V max"
 abs_max_basis = "Table 7 Absolute maximum ratings p.19, AVDD: -0.5 V to 3.6 V (derived for the VCSEL supply pin, which Table 3 says is tied to the main supply)"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["sda", "scl", "xshut", "gpio1"]
+max_v = 3.5
+abs_max_v = 3.6
+basis = "VL53L0X DS11555 Rev 6 Table 8 Recommended operating conditions p.19, IO (IOVDD) 2V8 mode 2.6 V min / 2.8 V typ / 3.5 V max (the I/Os are failsafe, with no diode to AVDD)"
+abs_max_basis = "Table 7 Absolute maximum ratings p.19, SCL, SDA, XSHUT and GPIO1: -0.5 V to 3.6 V"
+
 [models.peripheral]
 kind = "register_map"
 spec_toml = '''

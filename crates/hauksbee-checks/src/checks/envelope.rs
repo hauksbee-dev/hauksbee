@@ -1280,6 +1280,13 @@ fn envelope_lint_in(
                     }
                     let range = match resolver.range(net_id) {
                         RailKnowledge::Known(range) => range,
+                        // A supply pin the card lets the board leave unfed (an on-chip
+                        // regulator's output, held up by its own bypass capacitor) is
+                        // routinely on a net no source defines: there is no level to
+                        // judge, and no gap to report. A rail that does have a level is
+                        // judged below, which is what makes the card's ceiling on that
+                        // pin bite when the board ties it to a higher rail.
+                        RailKnowledge::Unknown if is_optional_supply(model, pin) => continue,
                         knowledge => {
                             if abstained_nets.insert(net_id) {
                                 let finding =
@@ -1497,6 +1504,15 @@ fn envelope_lint_in(
     fold_starved_rails(&resolver, starved, &mut report);
     estimate_starved_rails(&resolver, st, &unleveled, &mut report);
     report
+}
+
+/// Whether the card lists `role` under `optional_supplies`: a supply pad the
+/// datasheet lets the board leave unfed.
+fn is_optional_supply(model: &ModelEntry, role: &str) -> bool {
+    model
+        .optional_supplies
+        .iter()
+        .any(|o| o.role.eq_ignore_ascii_case(role))
 }
 
 /// One abstention per supply net whose name seems to state a voltage it does
@@ -2029,6 +2045,57 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         };
         assert_eq!(core(2), 0, "VREG_VOUT drives the core net");
         assert!(core(3) >= 1, "nothing on the board sets the core net");
+    }
+
+    /// A CY8CMBR3108 on 3.3 V, with its VCC pin (the internal regulator output,
+    /// 1.89 V absolute maximum, datasheet Table 12) on `vcc_net`.
+    fn cy8cmbr3108_lint(vcc_net: i64, with_cap: bool) -> NetLintReport {
+        let nets = &[(1, "GND"), (2, "+3V3"), (3, "N$12")];
+        let mut parts = vec![part(
+            "U1",
+            "CY8CMBR3108-LQXI",
+            vec![pin("4", vcc_net), pin("5", 2), pin("6", 2), pin("7", 1)],
+        )];
+        if with_cap {
+            parts.push(part("C1", "0.1uF", vec![pin("1", 3), pin("2", 1)]));
+        }
+        envelope_lint(&board(nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// VCC is the regulator's output, not an input: tied to the 3.3 V VDD it
+    /// sits above its 1.89 V absolute maximum. The card's one card-wide
+    /// maximum (6 V, for VDD) used to judge it, so the design passed.
+    #[test]
+    fn an_internal_regulator_pin_tied_to_a_higher_rail_is_flagged() {
+        let report = cy8cmbr3108_lint(2, false);
+        let findings: Vec<_> = report
+            .of_check(LintCheck::OperatingEnvelope)
+            .filter(|f| f.message.contains("vcc"))
+            .collect();
+        assert!(!findings.is_empty(), "VCC on 3.3 V must be flagged");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("1.89") && f.message.contains("Table 12")),
+            "{:?}",
+            findings.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Silent control: the datasheet's own wiring, VCC on a 0.1 uF decoupling
+    /// capacitor with VDD at 3.3 V, and the same with the pin left on a net
+    /// nothing defines. An optional supply with no source is not judged and
+    /// does not abstain either.
+    #[test]
+    fn an_internal_regulator_pin_on_its_decoupling_cap_is_silent() {
+        for with_cap in [true, false] {
+            let report = cy8cmbr3108_lint(3, with_cap);
+            let findings: Vec<_> = report
+                .of_check(LintCheck::OperatingEnvelope)
+                .map(|f| f.message.clone())
+                .collect();
+            assert!(findings.is_empty(), "cap={with_cap}: {findings:?}");
+        }
     }
 
     #[test]
