@@ -6,32 +6,49 @@ use super::{
 use hauksbee_models::schema::CurrentProgramSemantics;
 
 #[test]
-fn bq24075_identity_card_carries_the_sourced_battery_and_pin_contracts() {
+fn bq24075_card_carries_the_sourced_power_path_battery_and_pin_contracts() {
     for value in ["BQ24075", "BQ24075RGT", "BQ24075RGTR", "BQ24075RGTT"] {
         let model = expect_model(value);
-        assert_eq!(model.id, "bq24075_identity", "{value}");
-        assert_eq!(model.params.get_bool("identity_only"), Some(true));
+        assert_eq!(model.id, "bq24075", "{value}");
+        // No longer identity-only: OUT is stamped from the power-path law.
+        assert_eq!(model.params.get_bool("identity_only"), None);
         assert_eq!(model.params.get_str("battery_chemistry"), Some("liion"));
         assert_eq!(model.params.get_f64("vout_setpoint_low"), Some(4.16));
         assert_eq!(model.params.get_f64("vout_setpoint_high"), Some(4.23));
-        assert_pins(&model, &pins("1=ts 2=bat 3=bat 13=vbus"));
-        assert!(model.params.get_str("unlocked_by").is_some());
-        let rec = "Section 8.3 Recommended Operating Conditions";
-        assert!(has_supply_range(
+        assert_pins(
             &model,
-            "vbus",
-            (4.35, 6.4),
-            Some(28.0),
-            rec
-        ));
+            &pins(
+                "1=ts 2=bat 3=bat 4=ce 5=en2 6=en1 7=pgood 9=chg 10=out 11=out \
+                 12=ilim 13=in 14=tmr 15=sysoff 16=iset",
+            ),
+        );
+        let rec = "Section 8.3 Recommended Operating Conditions";
+        assert!(has_supply_range(&model, "in", (4.35, 6.4), Some(28.0), rec));
         let abs = "Section 8.1 Absolute Maximum Ratings";
         assert!(has_supply_range(&model, "bat", (-0.3, 5.0), None, abs));
+        assert!(has_supply_range(&model, "out", (-0.3, 7.0), None, abs));
+
+        // OUT is one voltage law on the `out` role, behind the 0.3 ohm of
+        // VDO(IN-OUT) typ 300 mV at 1 A (8.5, p.12), tracking IN and BAT.
+        let [law] = model.behavioral.laws.as_slice() else {
+            panic!("{value}: want exactly the OUT power-path law");
+        };
+        assert_eq!(law.a, "out");
+        assert_eq!(law.r_ohms, Some(0.3));
+        assert!(law.expr.contains("v_in") && law.expr.contains("v_bat"));
+        assert!(law.expr.contains("5.5"), "VO(REG) typ 5.5 V: {}", law.expr);
+
+        // ISET program: ICHG = KISET / RISET, KISET 890 A*Ohm (8.5, p.13).
+        let program = model.current_program.as_ref().expect("ISET program");
+        assert_eq!(program.pin, "iset");
+        assert_eq!(program.semantics, CurrentProgramSemantics::RegulatedCurrent);
+        assert_eq!(program.max_operating_current_a, Some(1.5));
     }
 
     assert!(
         resolve_value("BQ24075T")
             .model
-            .is_none_or(|model| model.id != "bq24075_identity"),
+            .is_none_or(|model| model.id != "bq24075"),
         "the voltage-based-TS BQ24075T sibling must not borrow this current-based-TS card"
     );
 }

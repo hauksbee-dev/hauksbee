@@ -5739,7 +5739,7 @@ missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_contro
 [models.strap_latch]
 event = "reset_release"
 note  = "the BOOT0 pin (PB8) is latched, together with the nBOOT1 option bit, on the 4th edge of the internal startup clock source after reset release, and re-sampled when exiting Standby; model state is the factory default nSWBOOT0 = 1, nBOOT1 = 1, BOOT_LOCK = 0; PB8 reverts to analog mode once reset is released"
-cite  = "RM0440 Rev 6, section 2.6.1 'Boot configuration', Table 5 and text, PDF p.90-91; OPTR production value PDF p.110; FLASH_SEC1R production value PDF p.114"
+cite  = "RM0440 Rev 9, section 2.6.1 'Boot configuration', Table 5 (PDF p.91) and text (latched on the 4th edge of the internal startup clock source, PDF p.92); OPTR production value 0xFFEF F8AA PDF p.111; FLASH_SEC1R production value 0xFF00 FF00 PDF p.115"
 
 [models.reset_input]
 role = "reset"
@@ -5752,21 +5752,21 @@ role = "pb8_boot0"
 internal_pull = "unknown"
 vil = [0.3, 0.0]
 vih = [0.7, 0.0]
-cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 6 PDF p.91 (no pull stated)"
+cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 9 PDF p.92 (no pull stated)"
 
 [[models.boot_modes]]
 name = "main flash"
 when = { pb8_boot0 = "low" }
 outcome = "user_flash"
 detail = "factory option bits (BOOT_LOCK = 0, nSWBOOT0 = 1) with the BOOT0 pin low: main Flash memory is selected as boot area (nBOOT1 is a don't-care); user firmware runs"
-cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.90"
+cite = "RM0440 Rev 9, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.91"
 
 [[models.boot_modes]]
 name = "system memory (factory nBOOT1 = 1)"
 when = { pb8_boot0 = "high" }
 outcome = "rom_bootloader"
 detail = "factory option bits (BOOT_LOCK = 0, nBOOT1 = 1, nSWBOOT0 = 1) with the BOOT0 pin high: system memory (ST bootloader, 0x1FFF0000) is the boot area; user firmware does not run"
-cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.90; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
+cite = "RM0440 Rev 9, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.91; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
 
 [models.rom_bootloader]
 protocol = "st_usart"
@@ -5774,10 +5774,9 @@ version = 0x31
 product_id = 0x0469
 commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 PA9 (TX) / PA10 (RX), USART2 PA2/PA3 or USART3 PC10/PC11, 8E1"
-cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
+cite = "AN3155 Rev 22 Table 2 (command codes); AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins), Table 226 PDF p.520 (PID 0x469). The Get command list and version byte are derived, not printed per device."
 [models.pin_capability.spi_sck]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 SCK (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
-master_only = ["12", "25", "30", "43"]
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 SCK (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; no pad of this table is master_only: a USART CK pad is the clock output in SPI master mode and the clock input in SPI slave mode (RM0440 printed p.1693), so it serves the bus whichever side the MCU is"
 [models.pin_capability.spi_sck.pads]
 "6" = "SPI2_SCK (AF5)"
 "12" = "USART2_CK (AF7)"
@@ -5789,7 +5788,7 @@ master_only = ["12", "25", "30", "43"]
 "41" = "SPI1_SCK (AF5) / SPI3_SCK (AF6)"
 "43" = "USART2_CK (AF7)"
 [models.pin_capability.spi_mosi]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MOSI (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MOSI (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; master_only pads are the USART TX pads that carry no SPI MOSI function: TX is master data out (MOSI) only in master mode, since in slave mode it carries MISO, while the USART RX pads (data in, MOSI as a slave) are not master_only"
 master_only = ["10", "16", "22", "31", "37", "39", "41", "44", "47"]
 [models.pin_capability.spi_mosi.pads]
 "10" = "USART2_TX (AF7)"
@@ -5814,7 +5813,7 @@ master_only = ["10", "16", "22", "31", "37", "39", "41", "44", "47"]
 "46" = "USART3_RX (AF7)"
 "47" = "USART3_TX (AF7)"
 [models.pin_capability.spi_miso]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MISO (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), UFQFPN48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MISO (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; master_only pads are the USART RX pads that carry no SPI MISO function: RX is master data in (MISO) only in master mode, since in slave mode it carries MOSI, while the USART TX pads (data out, MISO as a slave) are not master_only"
 master_only = ["11", "24", "38", "45", "46"]
 [models.pin_capability.spi_miso.pads]
 "10" = "USART2_TX (AF7)"
@@ -6171,7 +6170,7 @@ missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_contro
 [models.strap_latch]
 event = "reset_release"
 note  = "the BOOT0 pin (PB8) is latched, together with the nBOOT1 option bit, on the 4th edge of the internal startup clock source after reset release, and re-sampled when exiting Standby; model state is the factory default nSWBOOT0 = 1, nBOOT1 = 1, BOOT_LOCK = 0; PB8 reverts to analog mode once reset is released"
-cite  = "RM0440 Rev 6, section 2.6.1 'Boot configuration', Table 5 and text, PDF p.90-91; OPTR production value PDF p.110; FLASH_SEC1R production value PDF p.114"
+cite  = "RM0440 Rev 9, section 2.6.1 'Boot configuration', Table 5 (PDF p.91) and text (latched on the 4th edge of the internal startup clock source, PDF p.92); OPTR production value 0xFFEF F8AA PDF p.111; FLASH_SEC1R production value 0xFF00 FF00 PDF p.115"
 
 [models.reset_input]
 role = "reset"
@@ -6184,21 +6183,21 @@ role = "pb8_boot0"
 internal_pull = "unknown"
 vil = [0.3, 0.0]
 vih = [0.7, 0.0]
-cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 6 PDF p.91 (no pull stated)"
+cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 9 PDF p.92 (no pull stated)"
 
 [[models.boot_modes]]
 name = "main flash"
 when = { pb8_boot0 = "low" }
 outcome = "user_flash"
 detail = "factory option bits (BOOT_LOCK = 0, nSWBOOT0 = 1) with the BOOT0 pin low: main Flash memory is selected as boot area (nBOOT1 is a don't-care); user firmware runs"
-cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.90"
+cite = "RM0440 Rev 9, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.91"
 
 [[models.boot_modes]]
 name = "system memory (factory nBOOT1 = 1)"
 when = { pb8_boot0 = "high" }
 outcome = "rom_bootloader"
 detail = "factory option bits (BOOT_LOCK = 0, nBOOT1 = 1, nSWBOOT0 = 1) with the BOOT0 pin high: system memory (ST bootloader, 0x1FFF0000) is the boot area; user firmware does not run"
-cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.90; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
+cite = "RM0440 Rev 9, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.91; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
 
 [models.rom_bootloader]
 protocol = "st_usart"
@@ -6206,10 +6205,9 @@ version = 0x31
 product_id = 0x0469
 commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 PA9 (TX) / PA10 (RX) or USART2 PA2 (TX) / PA3 (RX), 8E1"
-cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins; USART3 PC10/PC11 has no LQFP48 pad, DS12288 Table 12), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
+cite = "AN3155 Rev 22 Table 2 (command codes); AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins; USART3 PC10/PC11 has no LQFP48 pad, DS12288 Table 12), Table 226 PDF p.520 (PID 0x469). The Get command list and version byte are derived, not printed per device."
 [models.pin_capability.spi_sck]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 SCK (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
-master_only = ["12", "26", "30", "42"]
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 SCK (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; no pad of this table is master_only: a USART CK pad is the clock output in SPI master mode and the clock input in SPI slave mode (RM0440 printed p.1693), so it serves the bus whichever side the MCU is"
 [models.pin_capability.spi_sck.pads]
 "6" = "SPI2_SCK (AF5)"
 "12" = "USART2_CK (AF7)"
@@ -6220,7 +6218,7 @@ master_only = ["12", "26", "30", "42"]
 "40" = "SPI1_SCK (AF5) / SPI3_SCK (AF6)"
 "42" = "USART2_CK (AF7)"
 [models.pin_capability.spi_mosi]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MOSI (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MOSI (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; master_only pads are the USART TX pads that carry no SPI MOSI function: TX is master data out (MOSI) only in master mode, since in slave mode it carries MISO, while the USART RX pads (data in, MOSI as a slave) are not master_only"
 master_only = ["10", "22", "31", "38", "40", "43", "46"]
 [models.pin_capability.spi_mosi.pads]
 "10" = "USART2_TX (AF7)"
@@ -6242,7 +6240,7 @@ master_only = ["10", "22", "31", "38", "40", "43", "46"]
 "45" = "USART3_RX (AF7)"
 "46" = "USART3_TX (AF7)"
 [models.pin_capability.spi_miso]
-basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MISO (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so USART TX/RX data pads can be master data out/in or slave data in/out and appear in both spi_mosi and spi_miso (no master_only); a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART pads are marked master_only in the direction they carry as SPI controller (the USART also has a slave mode on this part, whose opposite-direction pad is not listed)"
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 13 'Alternate function' AF0..AF15 (PDF page = printed page: port A p.73, port B p.74, port C p.75, port F p.78), LQFP48 pads of this card's pin map only (ports PA, PB, PC, PF): SPI1/SPI2/SPI3/SPI4 MISO (AF5/AF6) pads. USART as SPI: section 3.29 (p.42) says USART1, USART2 and USART3 provide 'an SPI-like communication capability' and Table 9 'USART/UART/LPUART features' (p.42) lists Synchronous mode for USART1/2/3 only (UART4/5 and LPUART1 have none); RM0440 Rev 9 section 40.5.2 'USART signals' (printed p.1693) says CK is the clock output in synchronous SPI master mode and the clock input in SPI slave mode, and the 'Slave mode' text (SLVEN, printed p.1720) confirms slave operation, so a USART can serve SPI as master or slave and its TX/RX data pads appear in both spi_mosi and spi_miso; a USART pad is counted only when that USART's CK pad is in the card's map (USART1_CK PA8, USART2_CK PA4/PB5, USART3_CK PB12 are all mapped). I2S2/I2S3 pads are not SPI and are not counted; hardware peripheral only, a software (bit-banged) implementation can use any pad; master_only pads are the USART RX pads that carry no SPI MISO function: RX is master data in (MISO) only in master mode, since in slave mode it carries MOSI, while the USART TX pads (data out, MISO as a slave) are not master_only"
 master_only = ["11", "25", "39", "44", "45"]
 [models.pin_capability.spi_miso.pads]
 "10" = "USART2_TX (AF7)"
@@ -7545,7 +7543,7 @@ backend = "qemu:esp32"
 "40" = "p03_rxd"
 
 [models.pin_capability.adc]
-basis = "Espressif ESP32 Datasheet v5.3, Table 2-1 Pin Overview (PDF p.14) and Table 4-6 Peripheral Pin Configurations (PDF p.46): MTDI/GPIO12 ADC2_CH5, MTDO/GPIO15 ADC2_CH3, GPIO2 ADC2_CH2, GPIO0 ADC2_CH1; GPIO5 and the UART pads carry none. ADC2 is not usable while Wi-Fi runs (ESP-IDF note)"
+basis = "Espressif ESP32 Datasheet v5.3, Table 2-1 Pin Overview (PDF pp.14-15: pad 18 MTDI and pad 21 MTDO on p.14; pads 22 GPIO2, 23 GPIO0 and 24 GPIO4 on p.15) and Table 4-6 Peripheral Pin Configurations (PDF p.46): MTDI/GPIO12 ADC2_CH5, MTDO/GPIO15 ADC2_CH3, GPIO2 ADC2_CH2, GPIO0 ADC2_CH1, GPIO4 (pad 24) ADC2_CH0; GPIO5 and the UART pads carry none. ADC2 is not usable while Wi-Fi runs (ESP-IDF note)"
 [models.pin_capability.adc.pads]
 "18" = "ADC2_CH5"
 "21" = "ADC2_CH3"
@@ -8197,11 +8195,11 @@ must_not_float_roles = "en"
 "8"  = "gpio3"
 "51" = "gpio45"
 "52" = "gpio46"
-"6"  = "gpio1"       # Table 2-1 pin 6 (SPI download strap)
-"7"  = "gpio2"       # Table 2-1 pin 7 (SPI download strap)
+"6"  = "gpio1"       # Table 2-1 pin 6 (ADC1_CH0; not a strap)
+"7"  = "gpio2"       # Table 2-1 pin 7 (ADC1_CH1; not a strap)
 
 [models.pin_capability.adc]
-basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 8 GPIO3 ADC1_CH2; GPIO0, GPIO45 and GPIO46 carry no ADC channel"
+basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 6 GPIO1 ADC1_CH0, pin 7 GPIO2 ADC1_CH1 and pin 8 GPIO3 ADC1_CH2 (pins 6-8 are GPIO1-GPIO3 in Table 2-1 Pin Overview, PDF p.16); GPIO0, GPIO45 and GPIO46 carry no ADC channel"
 [models.pin_capability.adc.pads]
 "6" = "ADC1_CH0 (GPIO1)"
 "7" = "ADC1_CH1 (GPIO2)"
@@ -8958,12 +8956,12 @@ backend = "qemu:esp32c3"
 "14" = "gpio8"
 "15" = "gpio9"
 "7"  = "en"          # CHIP_EN (Table 2-1 pin 7)
-"8"  = "gpio3"       # Table 2-1 pin 8 (SPI download strap)
+"8"  = "gpio3"       # Table 2-1 pin 8 (ADC1_CH3; not a strap)
 "28" = "p021_txd"
 "27" = "p020_rxd"
 
 [models.pin_capability.adc]
-basis = "Espressif ESP32-C3 Datasheet v2.4, Table 2-6 Analog Functions (PDF p.21): pin 6 GPIO2 ADC1_CH2; GPIO8, GPIO9, GPIO20, GPIO21 carry none"
+basis = "Espressif ESP32-C3 Datasheet v2.4, Table 2-6 Analog Functions (PDF p.21): pin 6 GPIO2 ADC1_CH2 and pin 8 GPIO3 ADC1_CH3 (pins 6 and 8 are GPIO2 and GPIO3 in Table 2-1 Pin Overview, PDF p.16); GPIO8, GPIO9, GPIO20, GPIO21 carry none"
 [models.pin_capability.adc.pads]
 "6" = "ADC1_CH2"
 "8" = "ADC1_CH3 (GPIO3)"
@@ -10354,6 +10352,10 @@ internal_clock = "internal ring oscillator (ROSC)"
 # number 26, Digital In (FT), IOVDD domain, reset state Pull-Up, "Chip enable / reset"), the same pad as the
 # rp2040_qfn56 map below. The identity entry maps only the two pads it needs for straps.
 "26" = "run"
+# Pad 23 = DVDD (Table 621 Power supply pins, PDF p.615: DVDD pads 23 and 50, core supply). The [models.reset]
+# brown-out threshold below watches DVDD, so its supply_pin role must be a role in this map; pad 50 (the
+# second DVDD pad) is carried as dvdd2 by the rp2040_qfn56 entry.
+"23" = "dvdd"
 [models.pin_capability.pull_up]
 basis = "Raspberry Pi RP2040 Datasheet (build-version 3184e62-clean, build-date 2025-02-20, sha256 be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c): Table 614 Pin Types (p.612) 'Digital IO ... Programmable Pull-Up, Pull-Down'; Table 615 GPIO pins (pp.612-613) all GPIO0-GPIO29 Digital IO; section 2.19 PADS_BANK0 GPIO0-GPIO29 registers (Table 341, pp.301-302) bit 3 PUE 'Pull up enable'; Table 625 Digital IO (pp.615-616) RPU Pull-Up Resistance 50-80 kOhm. QSPI pins: Table 616 (p.613), PADS_QSPI Tables 344-348 (pp.303-304) with PUE. Not listed: RUN (fixed reset pull-up, no pad register, Table 619)"
 [models.pin_capability.pull_up.pads]

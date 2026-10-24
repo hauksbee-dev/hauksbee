@@ -12,16 +12,49 @@
 # designator at bind time, so changing the board resistor changes the behaviour
 # with no model edit, exactly the way the real revision fixes landed.
 
-# ── BQ24075: 1-cell Li-ion charger / power-path manager ──
+# ── BQ24075: 1-cell Li-ion charger / power-path manager (RGT-16) ──────────────
 #
-# This card is deliberately identity-only. It carries the primary-source pin
-# map and static operating contracts needed by board checks, but it does not
-# stamp the charger's power-path, CC/CV, current-limit, thermal-regulation, or
-# safety-timer behavior into a solve.
+# Source: TI BQ24072/73/74/75/79 datasheet SLUS810N (September 2008, revised
+# October 2021), https://www.ti.com/lit/ds/symlink/bq24075.pdf,
+# sha256 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1.
+# Every figure below was read from that PDF; "p.N" is the printed page, which
+# equals the PDF page. Only the BQ24075 column is used (VO(REG) 5.5 V; the
+# BQ24072/73/74/79 differ in VO(REG), VBAT(REG), VOVP and TS method).
+#
+# THE POWER PATH (what this card stamps). Sections 9.3.3 and 9.3.4.1 (p.21) and
+# the OUT entry of Table 7-1 (p.8): "OUT provides a regulated output when the input is below the
+# OVP threshold and above the regulation voltage. When the input is out of the
+# operation range, OUT is connected to VBAT". Electrical Characteristics
+# (p.12): VDO(IN-OUT) 300 mV typ / 475 mV max (VIN = 4.3 V, IIN = 1 A) and
+# VDO(BAT-OUT) 50 mV typ / 100 mV max (IOUT = 1 A, VBAT > 3 V), VO(REG) 5.4 /
+# 5.5 / 5.6 V for the BQ24075 and BQ24079. So, in the order the one law below
+# tests them:
+#   - IN valid (above UVLO 3.3 V typ, above VBAT + VIN(DT) 80 mV typ, below
+#     VOVP 6.6 V typ, all p.12): OUT = min(VIN, VO(REG)) less the input FET
+#     drop. A 5 V USB input therefore gives OUT about 0.3 V below IN at 1 A
+#     (the part is a pass FET there, NOT a 5.5 V source), and a 5.8 V or higher
+#     input gives the regulated 5.5 V;
+#   - otherwise OUT = VBAT less the battery FET drop (battery supplement).
+# The drop is the datasheet's drop at 1 A over 1 A: 0.3 ohm for the input FET,
+# held as the law's series resistance. One resistance serves both branches
+# (the battery FET is 0.05 ohm), so a battery-fed OUT sags up to 0.25 V more
+# than the part's at 1 A: the conservative side for an undervoltage reading.
+# The same 0.3 ohm in the regulated window adds droop the real regulating loop
+# would not show (about 0.3 V per amp); that window is only 5.8 V to 6.4 V.
+#
+# NOT MODELLED (each is a behaviour of the real part this card lacks, and the
+# coverage block says so): the current IN and BAT carry (the law is a source
+# behind its resistance, not a current-reflecting stage, so IN reads no load
+# from OUT and BAT neither charges nor discharges), CC/CV charging and the
+# ISET-programmed current (the `current_program` row names the resistor law but
+# no charge port is stamped), the ILIM / EN1 / EN2 input-current limit
+# (Table 7-2, p.9), VIN-DPM and DPPM, thermal regulation, battery-supplement
+# thresholds VBSUP1/VBSUP2, SYSOFF, the TMR safety timers and the TS monitor.
+# The TMR resistor window is decoded from the board by device_decode, not here.
 [[models]]
-id = "bq24075_identity"
-kind = "vreg"
-description = "TI BQ24075 1-cell Li-ion charger and power-path manager (identity and sourced static contracts only)"
+id = "bq24075"
+kind = "digital"
+description = "TI BQ24075 1-cell Li-ion charger and power-path manager (OUT follows IN less the input FET drop, regulated to 5.5 V, else follows BAT; charging, current limits and timers not modelled)"
 
 [models.source]
 tier = "curated-library"
@@ -30,13 +63,22 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.ti.com/lit/ds/symlink/bq24075.pdf"
 title = "Texas Instruments BQ2407x datasheet, SLUS810N, Rev. N"
-locator = "Section 6 Device Comparison Table; Table 7-1 Pin Functions; Sections 8.1 Absolute Maximum Ratings, 8.3 Recommended Operating Conditions, 8.5 Electrical Characteristics (BATTERY CHARGER), 9.1 Overview, 9.3.5 Battery Charging, and 9.3.6 Battery Pack Temperature Monitoring"
+locator = "Section 6 Device Comparison Table; Table 7-1 Pin Functions pp.8-9; Table 7-2 EN1/EN2 Settings p.9; 8.1 Absolute Maximum Ratings, 8.3 Recommended Operating Conditions and 8.4 Thermal Information pp.10-11; 8.5 Electrical Characteristics pp.12-13; 9.3.5 Battery Charging and 9.3.6 Battery Pack Temperature Monitoring"
 sha256 = "4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vo_reg"
+low = 5.4
+high = 5.6
+unit = "V"
+kind = "specification-limits"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), VO(REG) OUT pin voltage regulation (BQ24075, BQ24079), VIN > VOUT + VDO(IN-OUT): 5.4 / 5.5 / 5.6 V min / typ / max; the law holds the 5.5 V typical"
 
 [[models.source.uncertainty]]
 status = "unknown"
 parameter = "charger_behavior"
-reason = "power-path switching, CC/CV dynamics, current programming and limiting, thermal regulation, safety timers, and battery-temperature response are not modeled"
+reason = "charge-current regulation (ISET), the input-current limit (ILIM, EN1, EN2), DPM and DPPM loops, thermal regulation, the safety timers, the TS monitor and the IN and BAT currents are not modelled; only the OUT voltage is"
 
 [[models.source.characteristic]]
 parameter = "RθJA junction-to-ambient thermal resistance"
@@ -44,7 +86,113 @@ rating = "theta_ja_c_per_w"
 max = 44.5
 unit = "°C/W"
 conditions = "RGT (VQFN) 16 pins, JEDEC thermal metric"
-basis = "TI SLUS810N (October 2021), Section 8.4 Thermal Information, BQ2407x RGT (VQFN) 16 pins, RθJA 44.5 °C/W"
+basis = "TI SLUS810N (October 2021), Section 8.4 Thermal Information (p.11), BQ2407x RGT (VQFN) 16 pins, RθJA 44.5 °C/W"
+
+[[models.source.characteristic]]
+parameter = "VO(REG) OUT pin voltage regulation (BQ24075)"
+min = 5.4
+typ = 5.5
+max = 5.6
+unit = "V"
+conditions = "VIN > VOUT + VDO(IN-OUT)"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), VO(REG), BQ24075 and BQ24079 row"
+
+[[models.source.characteristic]]
+parameter = "VDO(IN-OUT) dropout, IN to OUT"
+typ = 300
+max = 475
+unit = "mV"
+conditions = "VIN = 4.3 V, IIN = 1 A, VBAT = 4.2 V"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), POWER PATH, VDO(IN-OUT) typ / max"
+
+[[models.source.characteristic]]
+parameter = "VDO(BAT-OUT) dropout, BAT to OUT"
+typ = 50
+max = 100
+unit = "mV"
+conditions = "IOUT = 1 A, VIN = 0 V, VBAT > 3 V"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), POWER PATH, VDO(BAT-OUT) typ / max"
+
+[[models.source.characteristic]]
+parameter = "UVLO input undervoltage lock-out"
+min = 3.2
+typ = 3.3
+max = 3.4
+unit = "V"
+conditions = "VIN: 0 V to 4 V"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), UVLO min / typ / max"
+
+[[models.source.characteristic]]
+parameter = "VIN(DT) input power detection threshold above VBAT"
+min = 55
+typ = 80
+max = 130
+unit = "mV"
+conditions = "VBAT = 3.6 V, VIN: 3.5 V to 4 V"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), VIN(DT) min / typ / max"
+
+[[models.source.characteristic]]
+parameter = "VOVP input overvoltage protection threshold"
+min = 6.4
+typ = 6.6
+max = 6.8
+unit = "V"
+conditions = "VIN: 5 V to 7 V (BQ24072, BQ24073, BQ24075, BQ24079)"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), VOVP min / typ / max"
+
+[[models.source.characteristic]]
+parameter = "KISET fast charge current factor"
+min = 797
+typ = 890
+max = 975
+unit = "A·Ω"
+conditions = "ICHG = KISET / RISET, RISET 590 Ω to 8.9 kΩ"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.13), KISET min / typ / max; Section 8.3 (p.10) RISET 590 Ω to 8900 Ω"
+
+[[models.source.characteristic]]
+parameter = "KILIM maximum input current factor, ILIM = 500 mA to 1.5 A"
+min = 1500
+typ = 1610
+max = 1720
+unit = "A·Ω"
+conditions = "EN2 = HI, EN1 = LO; IIN-MAX = KILIM / RILIM, RILIM 1.1 kΩ to 8 kΩ (200 mA to 1.5 A)"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), KILIM min / typ / max; Section 8.3 (p.10) RILIM 1100 Ω to 8000 Ω"
+
+[[models.source.characteristic]]
+parameter = "KILIM maximum input current factor, ILIM = 200 mA to 500 mA"
+min = 1330
+typ = 1525
+max = 1720
+unit = "A·Ω"
+conditions = "EN2 = HI, EN1 = LO; IIN-MAX = KILIM / RILIM"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), KILIM min / typ / max (ILIM = 200 mA to 500 mA row)"
+
+[[models.source.characteristic]]
+parameter = "IINmax maximum input current, USB100 mode"
+min = 90
+typ = 95
+max = 100
+unit = "mA"
+conditions = "EN1 = LO, EN2 = LO"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), IINmax; Table 7-2 EN1/EN2 Settings (p.9)"
+
+[[models.source.characteristic]]
+parameter = "IINmax maximum input current, USB500 mode"
+min = 450
+typ = 475
+max = 500
+unit = "mA"
+conditions = "EN1 = HI, EN2 = LO"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.12), IINmax; Table 7-2 EN1/EN2 Settings (p.9)"
+
+[[models.source.characteristic]]
+parameter = "VBAT(REG) battery charge voltage"
+min = 4.16
+typ = 4.20
+max = 4.23
+unit = "V"
+conditions = "BQ24072, BQ24073, BQ24074, BQ24075"
+basis = "TI SLUS810N, 8.5 Electrical Characteristics (p.13), BATTERY CHARGER, VBAT(REG) min / typ / max"
 
 [models.match]
 # BQ24075, the RGT package code, and its reel/package-quantity suffixes. Do not
@@ -52,35 +200,32 @@ basis = "TI SLUS810N (October 2021), Section 8.4 Thermal Information, BQ2407x RG
 value_re = "(?i)^BQ24075(?:RGT(?:R|T)?)?$"
 
 [models.params]
-identity_only = true
-warning = "BQ24075 identity, pin map, Li-ion chemistry, charge-voltage tolerance, and pin-voltage envelopes are sourced; charger and power-path behavior is not modeled"
-unlocked_by = "a validated BQ24075 power-path, CC/CV charge, thermal-regulation, current-limiting, safety-timer, and TS protection implementation"
 # SLUS810N Section 9.1 identifies the family as integrated Li-Ion linear
 # chargers; Section 9.3.5 and Figure 9-6 describe the normal Li-Ion charge cycle.
 battery_chemistry = "liion"
-# SLUS810N Section 8.5 Electrical Characteristics, BATTERY CHARGER,
+# SLUS810N Section 8.5 Electrical Characteristics, BATTERY CHARGER (p.13),
 # VBAT(REG) BQ24072/73/74/75 row: 4.16 V minimum and 4.23 V maximum.
 vout_setpoint_low = 4.16
 vout_setpoint_high = 4.23
 
 [models.pins]
-# RGT0016C package. SLUS810N Table 7-1, BQ24075/BQ24079 column.
+# RGT0016C package. SLUS810N Table 7-1 (pp.8-9), BQ24075/BQ24079 column.
 "1" = "ts"       # TS, External NTC Thermistor Input
 "2" = "bat"      # BAT, charger output and battery-voltage sense
 "3" = "bat"
-"4" = "ce"
-"5" = "en2"
-"6" = "en1"
-"7" = "pgood"
+"4" = "ce"       # CE, charge enable, active low (internal ~285 kOhm pull-down)
+"5" = "en2"      # EN2, input-current-limit select (internal ~285 kOhm pull-down)
+"6" = "en1"      # EN1, input-current-limit select (internal ~285 kOhm pull-down)
+"7" = "pgood"    # PGOOD, open-drain, low when a valid input is detected
 "8" = "gnd"      # VSS
-"9" = "chg"
+"9" = "chg"      # CHG, open-drain, low while charging
 "10" = "out"     # OUT, system supply output
 "11" = "out"
-"12" = "ilim"
-"13" = "vbus"    # Datasheet pin name IN; external DC/USB input
-"14" = "tmr"
-"15" = "sysoff"
-"16" = "iset"
+"12" = "ilim"    # ILIM, input current limit program resistor (EN2 = 1, EN1 = 0)
+"13" = "in"      # IN, external DC/USB input
+"14" = "tmr"     # TMR, safety timer program
+"15" = "sysoff"  # SYSOFF, battery-FET off (BQ24075/BQ24079 only; internal ~5 MOhm pull-up to VBAT)
+"16" = "iset"    # ISET, fast-charge current program resistor
 
 [models.pin_capability.open_drain]
 basis = "Texas Instruments BQ2407x SLUS810N (September 2008, revised October 2021): Table 7-1 Pin Functions (p.8) describes PGOOD and CHG as open-drain status outputs, and Section 9.3.5.7 Status Indicators (p.28) states the BQ2407x contains two open-drain outputs, PGOOD and CHG"
@@ -89,22 +234,62 @@ basis = "Texas Instruments BQ2407x SLUS810N (September 2008, revised October 202
 "9" = "CHG"
 
 [models.ratings]
-theta_ja_c_per_w = 44.5     # SLUS810N 8.4 Thermal Information, RGT 16 pins
+theta_ja_c_per_w = 44.5     # SLUS810N 8.4 Thermal Information (p.11), RGT 16 pins
+
+# ISET sets the fast-charge current (Equation 2, p.25: ICHG = KISET / RISET with
+# KISET = 890 A*Ohm typ, p.13), from IN through the part into BAT. RISET 590 Ohm
+# to 8.9 kOhm (Section 8.3, p.10) gives 100 mA to 1.5 A. The card records the
+# law for the board checks; no charge port is stamped (see the header).
+[models.current_program]
+pin = "iset"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["bat"]
+max_operating_current_a = 1.5
+equation = "inverse_resistance"
+k_volts = 890.0
 
 [[models.envelope]]
 kind = "supply_range"
-pin = "vbus"
+pin = "in"
 min_v = 4.35
 max_v = 6.4
 abs_max_v = 28.0
-basis = "TI BQ2407x SLUS810N, Section 8.3 Recommended Operating Conditions, IN operating voltage range, BQ24072/73/75/79 row (4.35-6.4 V); Section 8.1 Absolute Maximum Ratings, IN row (28 V maximum)"
+basis = "TI BQ2407x SLUS810N, Section 8.3 Recommended Operating Conditions (p.10), IN operating voltage range, BQ24072/73/75/79 row (4.35-6.4 V); Section 8.1 Absolute Maximum Ratings (p.10), IN row (28 V maximum)"
 
 [[models.envelope]]
 kind = "supply_range"
 pin = "bat"
 min_v = -0.3
 max_v = 5.0
-basis = "TI BQ2407x SLUS810N, Section 8.1 Absolute Maximum Ratings, BAT with respect to VSS row (-0.3-5 V); this is a stress bound, not the Section 8.5 charge-regulation range"
+basis = "TI BQ2407x SLUS810N, Section 8.1 Absolute Maximum Ratings (p.10), BAT with respect to VSS row (-0.3-5 V); this is a stress bound, not the Section 8.5 charge-regulation range"
+
+# The OUT pin is an output, but the board can drive it from a second source;
+# Section 8.1 (p.10) limits OUT (and CE, EN1, EN2, TS, ISET, PGOOD, CHG, ILIM,
+# TMR, SYSOFF) to -0.3 V to 7 V with respect to VSS.
+[[models.envelope]]
+kind = "supply_range"
+pin = "out"
+min_v = -0.3
+max_v = 7.0
+basis = "TI BQ2407x SLUS810N, Section 8.1 Absolute Maximum Ratings (p.10), OUT, EN1, EN2, CE, TS, ISET, PGOOD, CHG, ILIM, TMR, SYSOFF with respect to VSS row (-0.3-7 V); a stress bound, not the Section 8.5 regulation range"
+
+# OUT follows IN less the input FET drop (regulated to VO(REG)), else follows BAT
+# (header). The law is the supply of the net it drives (`r_ohms` at or below
+# `rail_owner::SERIES_OHMS`), so a rail fed only from OUT takes no name-derived
+# ideal source beside it. Thresholds, all typical values of 8.5 (p.12): UVLO
+# 3.3 V, VIN(DT) 0.08 V above VBAT, VOVP 6.6 V; VO(REG) 5.5 V (BQ24075 column).
+# r_ohms is VDO(IN-OUT) typ 0.3 V over its 1 A test current.
+[[models.behavioral.laws]]
+name = "out_power_path"
+kind = "voltage"
+a = "out"
+expr = "if(v_in > 3.3 && v_in > v_bat + 0.08 && v_in < 6.6, min(v_in, 5.5), v_bat)"
+r_ohms = 0.3
+
+[models.coverage]
+implements = ["pin_roles", "out_power_path_voltage", "vo_reg_5v5", "in_envelope", "bat_envelope", "pgood_chg_open_drain", "rilim_riset_ranges_recorded", "absolute_ratings"]
+missing = ["in_bat_current_reflection", "cc_cv_charging", "iset_charge_current_stamp", "ilim_en1_en2_input_current_limit", "vin_dpm", "dppm", "thermal_regulation", "battery_supplement_thresholds", "sysoff", "safety_timers_tmr", "ts_monitor"]
 
 # ── LTC4020: 55V buck-boost battery charger controller ────────────────────────
 #
