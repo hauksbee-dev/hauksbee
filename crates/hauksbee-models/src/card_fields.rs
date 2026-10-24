@@ -403,6 +403,14 @@ pub fn checklist_lines(kind: ComponentKind, roles: &[&str]) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if is_ic_kind(kind) && kind != ComponentKind::Mcu && has(&["sda"]) && has(&["scl"]) {
+        out.push(
+            "i2c_address: [models.i2c] address (7-bit, not the 8-bit write byte) and one \
+             [[models.i2c.select]] row per address-pin combination the table prints, with the \
+             page  (look under: device addressing, slave address selection)"
+                .to_owned(),
+        );
+    }
     if is_ic_kind(kind) {
         out.push(
             "open_drain: [models.pin_capability.open_drain] pads for every output the pin \
@@ -438,6 +446,9 @@ pub fn prompt_guidance(kind: &str) -> String {
     }
     out.push_str(SUPPLY_CAP_GUIDANCE);
     out.push_str(OPEN_DRAIN_GUIDANCE);
+    if kind != "mcu" {
+        out.push_str(I2C_ADDRESS_GUIDANCE);
+    }
     match kind {
         "analog_switch" => out.push_str(LOAD_SWITCH_GUIDANCE),
         "digital" => out.push_str(MOTOR_DRIVER_GUIDANCE),
@@ -482,6 +493,32 @@ pull-up. Coverage that names an open-drain behaviour without the table is refuse
 
 Pads by the number keyed in [models.pins]. A part with no open-drain output omits
 the table.
+"#;
+
+const I2C_ADDRESS_GUIDANCE: &str = r#"
+I2C ADDRESS (`[models.i2c]`, only for a part that is an I2C target, i.e. has SDA and
+SCL pins): a board check compares the 7-bit addresses of the parts on one bus, so
+read the device-addressing section ("slave address", "I2C address selection", an
+address table keyed by ADDR / A0 / A1 / AD0 / SDO / ADD0 pins) and write the address
+as 7 bits, not the 8-bit write byte (0x52 on the page is 0x29 here):
+
+  [models.i2c]
+  address = 0x48                 # the only address, or the table's default row
+  basis = "<table or sentence and PDF page>"
+  [[models.i2c.select]]          # only when pins choose the address; one row per
+  address = 0x48                 # combination the table prints, every row naming
+  straps = { addr = "low" }      # the same pin roles of [models.pins]; levels are
+  [[models.i2c.select]]          # "low" (GND), "high" (the supply), "sda", "scl",
+  address = 0x49                 # or "open" when the table prints a floating row
+  straps = { addr = "high" }
+
+A part that also answers at a second address (an accelerometer and magnetometer on
+one die) lists it as `also = [0x1e]`. A part whose address firmware can move after
+power-up (the datasheet says "programmable I2C address") adds
+`[models.i2c.reassignable]` with via = "software", requires_pin = <the shutdown or
+reset role that must be held while it is moved, if any> and a basis. A part whose
+address the datasheet does not print gets no block and an `unknown` source record
+with parameter = "i2c_address".
 "#;
 
 const LOAD_SWITCH_GUIDANCE: &str = r#"

@@ -167,6 +167,12 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pin_bias: Vec<PinBias>,
 
+    /// `[models.i2c]`: the 7-bit address this I2C target answers at, the pins
+    /// that select it and whether firmware can move it. Read by the same-bus
+    /// address-clash check; see [`crate::i2c_address`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i2c: Option<crate::i2c_address::I2cAddress>,
+
     /// `[[models.supply_cap]]`: the least capacitance the datasheet requires
     /// (or recommends) on a supply input or an output pin, to ground. Read by
     /// the supply-capacitance check against the capacitors on that net.

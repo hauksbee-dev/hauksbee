@@ -81,6 +81,7 @@ pub mod extract_progress;
 pub mod extract_stage_messages;
 pub mod extract_trace;
 pub mod extract_usage;
+pub mod i2c_address;
 pub mod logic_spec;
 pub mod matcher;
 pub mod mcu_modules;

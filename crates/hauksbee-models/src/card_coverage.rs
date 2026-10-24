@@ -335,7 +335,32 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
         ComponentKind::Vreg => vreg_needs(entry, &mut out),
         _ => {}
     }
+    i2c_needs(entry, &mut out);
     out
+}
+
+/// An I2C target (a non-MCU card with both bus pins) needs its 7-bit address.
+fn i2c_needs(entry: &ModelEntry, out: &mut Vec<Need>) {
+    if matches!(
+        entry.kind,
+        ComponentKind::Mcu
+            | ComponentKind::Passive
+            | ComponentKind::Connector
+            | ComponentKind::Ignore
+    ) {
+        return;
+    }
+    let has = |role: &str| has_role(entry, &|r| r == role);
+    if has("sda") && has("scl") {
+        out.push(Need {
+            key: "i2c_address".into(),
+            ask: "[models.i2c] address (the default or only 7-bit address) and one \
+                  [[models.i2c.select]] row per address-select strap combination the datasheet \
+                  lists, with a basis citing the table and page"
+                .into(),
+            look: "I2C address table (device addressing / slave address selection)",
+        });
+    }
 }
 
 /// What a card of `kind` needs before any draft exists (the checklist's groups).
@@ -527,6 +552,7 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
         }),
         ("backend", _) => entry.params.get_str("backend").is_some(),
         ("straps", _) => !entry.straps.is_empty(),
+        ("i2c_address", _) => entry.i2c.is_some(),
         ("adc_pins", _) => entry.adc_declared(),
         ("pin_function", key) => hauksbee_ir::pin_functions::PeripheralFunction::ALL
             .iter()

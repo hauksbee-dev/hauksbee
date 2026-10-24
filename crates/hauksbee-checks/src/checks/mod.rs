@@ -194,6 +194,7 @@ pub mod firmware_intent;
 pub mod float_parity;
 pub mod floating_inputs;
 pub mod holdup;
+pub mod i2c_address;
 pub mod indicators;
 pub mod led_current;
 pub mod logic_levels;
@@ -789,6 +790,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         supply_cap::supply_cap_lint(board, lib).findings,
         holdup::holdup_lint(board, lib).findings,
         power_pins::power_pin_lint(board, lib).findings,
+        i2c_address::i2c_address_lint(board, lib).findings,
     ] {
         report.findings.extend(findings);
     }

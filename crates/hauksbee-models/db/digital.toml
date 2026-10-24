@@ -4364,6 +4364,16 @@ gnd_pin    = "1"           # GND
 max_sclk_hz = { max = 10000000.0, unit = "Hz", conditions = "SPI clock input frequency F_spi, 0 to 10 MHz; 3- and 4-wire SPI", basis = "Bosch BME280 data sheet BST-BME280-DS001-24 (revision 1.24, Feb 2024), Table 34 SPI timings, F_spi max 10 MHz (p.37); key features (p.2): SPI up to 10 MHz" }
 i2c_max_hz = { max = 3400000.0, unit = "Hz", conditions = "I2C High Speed mode; Standard and Fast modes are supported as well", basis = "Bosch BME280 data sheet BST-BME280-DS001-24 (revision 1.24), key features (p.2): I2C up to 3.4 MHz; Table 33 I2C timings (p.36) lists S&F and HS mode" }
 
+[models.i2c]
+address = 0x76
+basis = "Bosch BST-BME280-DS001-24 rev 1.24 PDF p.32: SDO to GND gives slave address 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77)"
+[[models.i2c.select]]
+address = 0x76
+straps = { sdo = "low" }
+[[models.i2c.select]]
+address = 0x77
+straps = { sdo = "high" }
+
 [models.pins]
 # Table 35 Pin description, LGA-8. NOTE THE NUMBERING DIRECTION: the datasheet's
 # connection diagram runs clockwise in top view, which is the opposite of the
@@ -9011,6 +9021,16 @@ vil   = 0.66     # Vil_si 0.2 x VDDIO max, VDDIO = 1.2 to 3.6 V
 supply_static_ua = 24.8    # Table 12, ultra high resolution, 1 Hz forced mode, typ
 supply_pin = "8"           # VDD
 gnd_pin    = "1"           # GND
+
+[models.i2c]
+address = 0x76
+basis = "Bosch BST-BMP280-DS001-26 rev 1.26 PDF p.28: SDO to GND gives slave address 1110110 (0x76), SDO to VDDIO gives 1110111 (0x77); SDO cannot be left floating"
+[[models.i2c.select]]
+address = 0x76
+straps = { sdo = "low" }
+[[models.i2c.select]]
+address = 0x77
+straps = { sdo = "high" }
 
 [models.pins]
 # Table 29 Pin description, all 8 pads. SDI/SCK use the bus vocabulary.

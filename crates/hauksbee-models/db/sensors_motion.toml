@@ -61,6 +61,16 @@ warning = "I2C register map is executable (DEVID, configuration registers, accel
 # Serial Communications: no internal pull on CS or ALT ADDRESS.
 must_not_float_roles = "cs,sdo"
 
+[models.i2c]
+address = 0x53
+basis = "Analog Devices ADXL345 Rev. G PDF p.17: ALT ADDRESS pin (SDO, pin 12) high gives 7-bit address 0x1D, grounded gives 0x53"
+[[models.i2c.select]]
+address = 0x53
+straps = { sdo = "low" }
+[[models.i2c.select]]
+address = 0x1D
+straps = { sdo = "high" }
+
 [models.pins]
 # Table 5 Pin Function Descriptions, all 14 terminals. SCL/SCLK, SDA/SDI/SDIO and
 # SDO/ALT ADDRESS use the bus vocabulary.
@@ -502,6 +512,16 @@ supply_static_ua = 3800.0   # Section 6.3, normal operating current, gyroscope +
 supply_pin = "13"           # VDD
 gnd_pin    = "18"           # GND
 warning = "I2C register map is executable (WHO_AM_I, configuration registers, power-up sleep, accelerometer/gyroscope/temperature data); the auxiliary I2C master, FIFO, DMP, interrupts and self-test are not modelled"
+
+[models.i2c]
+address = 0x68
+basis = "InvenSense MPU-6000/MPU-6050 PS-MPU-6000A-00 rev 3.2 PDF p.15 I2C ADDRESS row: AD0 = 0 gives 1101000, AD0 = 1 gives 1101001"
+[[models.i2c.select]]
+address = 0x68
+straps = { ad0 = "low" }
+[[models.i2c.select]]
+address = 0x69
+straps = { ad0 = "high" }
 
 [models.pins]
 # Section 7.1 Pin Out and Signal Description, QFN-24. NC pads are numbered apart
@@ -2277,6 +2297,11 @@ supply_pin = "9"           # Vdd
 gnd_pin    = "6"           # GND
 warning = "accelerometer I2C register map only (WHO_AM_I_A, control registers, acceleration data); the magnetometer slave at 0x1E, SPI, FIFO and interrupt engine are not modelled"
 must_not_float_roles = "cs_xl,cs_mag"
+
+[models.i2c]
+address = 0x19
+also = [0x1E]
+basis = "ST LSM303AGR DocID027765 rev 11 PDF p.39 I2C section Default address: accelerometer slave address 0011001b, magnetometer 0011110b (no address pins)"
 
 [models.pins]
 # Table 2 Pin description, LGA-12.

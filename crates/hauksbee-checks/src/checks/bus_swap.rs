@@ -163,7 +163,7 @@ fn is_rail(board: &ExtractedBoard, id: i64) -> bool {
 
 /// Whether `comp` is a series part of a line: a resistor of at most
 /// [`SERIES_MAX_OHMS`], a ferrite bead or an inductor.
-fn is_series_part(comp: &Component) -> bool {
+pub(super) fn is_series_part(comp: &Component) -> bool {
     if comp.pins.len() != 2 {
         return false;
     }

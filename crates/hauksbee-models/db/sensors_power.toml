@@ -55,6 +55,10 @@ supply_pin = "2"           # VCC
 gnd_pin    = "13"          # GND
 warning = "I2C register map only: time registers read back what was written and the clock does not count; alarms, outputs and VBAT operation are not modelled"
 
+[models.i2c]
+address = 0x68
+basis = "Maxim DS3231 PDF p.17 I2C section: the 7-bit DS3231 address is 1101000 (no address pins)"
+
 [models.pins]
 # Pin Description / Pin Configuration, 16-pin SO.
 "1"  = "out_32khz"  # 32 kHz output, open drain
@@ -421,6 +425,10 @@ supply_static_ua = 200.0   # DC Electrical Characteristics, ICCS standby supply 
 supply_pin = "8"           # VCC
 gnd_pin    = "4"           # GND
 warning = "I2C register map only: time registers read back what was written and the clock does not count; SQW/OUT and VBAT operation are not modelled"
+
+[models.i2c]
+address = 0x68
+basis = "Maxim DS1307 PDF p.12: the 7-bit DS1307 address is 1101000 (no address pins)"
 
 [models.pins]
 # Pin Description / Pin Configurations, PDIP and SO.
@@ -1227,6 +1235,58 @@ supply_pin = "6"           # VS
 gnd_pin    = "7"           # GND
 warning = "I2C register map with the measurement registers fed from sensor inputs; the conversion state machine, averaging, triggered-mode timing and the alert engine are not modelled"
 must_not_float_roles = "a0,a1"
+
+[models.i2c]
+address = 0x40
+basis = "TI INA226 SBOS547C PDF p.18 Table 6-2: 16 addresses 1000000b to 1001111b from A1 and A0 each on GND, VS, SDA or SCL"
+[[models.i2c.select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[models.i2c.select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[models.i2c.select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[models.i2c.select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[models.i2c.select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[models.i2c.select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[models.i2c.select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[models.i2c.select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[models.i2c.select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[models.i2c.select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[models.i2c.select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[models.i2c.select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[models.i2c.select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[models.i2c.select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[models.i2c.select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[models.i2c.select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
 
 [models.pins]
 "1" = "a1"

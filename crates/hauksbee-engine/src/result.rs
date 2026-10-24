@@ -4015,6 +4015,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::DebugHeaderPinout
         | LintCheck::BusLineSwap
         | LintCheck::UsbCcTermination
+        | LintCheck::I2cAddressClash
         | LintCheck::SwitchShort
         | LintCheck::PinMuxCapability
         | LintCheck::FirmwareUnconnectedPad
@@ -4040,6 +4041,9 @@ const fn wiring_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::BusLineSwap => {
             "Cross the two nets (or the two connector pins) so each line reaches the pad of its own name."
+        }
+        LintCheck::I2cAddressClash => {
+            "Give the parts different addresses with their address-select pins, move one to a bus of its own or behind an I2C mux channel, or sequence the movable part's re-address at boot."
         }
         LintCheck::UsbCcTermination => {
             "Fit 5.1 kOhm 1% from each CC pin to ground on a sink, or the standard Rp for the advertised current on a source."

@@ -2033,6 +2033,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A USB receptacle and a Qwiic, STEMMA QT or Grove port fix which pin carries which line. If the connector's D+ lands on the controller's D- pad, or its SDA pin on the SCL pad, the device never enumerates or the bus never answers, and nothing about the supply looks wrong.".to_string(),
                 "Cross the two nets (or the two connector pins) so each line reaches the pad of its own name.".to_string(),
             ),
+            LintCheck::I2cAddressClash if f.is_abstention() => (
+                format!("An I2C address on {parts} was not judged. {}", f.message),
+                "Two parts on one I2C bus must answer at different 7-bit addresses. This part's address is chosen by a pin the design files do not fix, so the check could not say which address it takes, and it could take one that another part on the bus already uses. The board is not known to be wrong.".to_string(),
+                "Tie the address-select pin to ground, the supply or a bus line so the address is fixed (or confirm the firmware sets it), then re-check.".to_string(),
+            ),
+            LintCheck::I2cAddressClash => (
+                format!("Two I2C parts on one bus answer at the same address ({parts}). {}", f.message),
+                "An I2C bus addresses each part by a 7-bit number. When two parts on the same pair of lines answer at the same number, both acknowledge every transfer: a read returns the two replies ANDed together and a write reaches both, so neither part can be used reliably. Some parts can be moved to another address at boot, by a command sent while the neighbour is held in reset; that needs the reset pin wired to something the firmware can drive.".to_string(),
+                "Change one part's address with its address-select pin, put it on its own bus or behind an I2C mux channel, or use a part with a different address; for a part that firmware re-addresses, wire its shutdown pin to a GPIO and sequence it at boot.".to_string(),
+            ),
             LintCheck::UsbCcTermination => (
                 format!("The USB-C CC resistors of {parts} do not fit the port's role. {}", f.message),
                 "A USB-C sink announces itself with a 5.1 kOhm pull-down on each CC pin, and a source advertises its current with a pull-up of 56k, 22k or 10k to 5 V (36k, 12k or 4.7k to 3.3 V). Another value is read as the wrong current or no sink at all, and a sink with pull-ups, or a source with pull-downs, is never recognised: the source never applies VBUS.".to_string(),
