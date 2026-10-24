@@ -148,7 +148,7 @@ fn can_exceed_sources(circuit: &Circuit) -> bool {
 impl Envelope {
     /// The envelope of `circuit`, or `None` when it cannot be stated: no
     /// ground-referenced source to bound by, or a board that can legitimately
-    /// leave its sources ([`can_exceed_sources`]).
+    /// leave its sources (`can_exceed_sources`).
     #[must_use]
     pub fn of(circuit: &Circuit) -> Option<Self> {
         if can_exceed_sources(circuit) {

@@ -25,7 +25,7 @@
 //! and the resistor is the series resistance this check asks for.
 //!
 //! A 4-pad tactile switch has its pads bonded in pairs inside the part (see
-//! [`bond_pairs`]). Where the pairs are known (from placed pad geometry, or the
+//! `bond_pairs`). Where the pairs are known (from placed pad geometry, or the
 //! standard Omron numbering on a 6x6 or 12x12 footprint), a bonded pair on two
 //! different nets is a switch that is always closed, and a switch with both
 //! terminals on one net or one terminal unconnected never closes.
