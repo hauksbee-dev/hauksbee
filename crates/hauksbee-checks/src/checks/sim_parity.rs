@@ -86,6 +86,13 @@ pub enum SimTarget {
     FetOrientation,
     BackPower,
     PowerStates,
+    FloatingInputs,
+    ModelControls,
+    NodeDrive,
+    OpenDrainPullup,
+    PinBias,
+    ControlHeldOff,
+    Straps,
 }
 
 impl SimTarget {
@@ -96,6 +103,13 @@ impl SimTarget {
             Self::FetOrientation => "fet_orientation",
             Self::BackPower => "back_power",
             Self::PowerStates => "power_states",
+            Self::FloatingInputs => "floating_inputs",
+            Self::ModelControls => "model_controls",
+            Self::NodeDrive => "node_drive",
+            Self::OpenDrainPullup => "open_drain_pullup",
+            Self::PinBias => "pin_bias",
+            Self::ControlHeldOff => "control_held_off",
+            Self::Straps => "straps",
         }
     }
 }
@@ -133,13 +147,13 @@ pub struct Shadow {
 }
 
 /// A solved state: the workspace and its unknowns.
-struct Solved {
-    ws: Workspace,
-    x: Vec<f64>,
+pub(super) struct Solved {
+    pub(super) ws: Workspace,
+    pub(super) x: Vec<f64>,
 }
 
 impl Solved {
-    fn v(&self, n: NodeId) -> f64 {
+    pub(super) fn v(&self, n: NodeId) -> f64 {
         self.ws
             .layout
             .node(n)
@@ -191,7 +205,11 @@ fn drive_state(b: &BoundBoard) -> Vec<(bool, u64)> {
 /// Settle `bound` (logic and converters reacting to the solve, as
 /// `dc_stress` does), each solve seeded from the last. `None` when a solve
 /// fails.
-fn settle(bound: &mut BoundBoard, seed: Option<&[f64]>, solves: &mut usize) -> Option<Solved> {
+pub(super) fn settle(
+    bound: &mut BoundBoard,
+    seed: Option<&[f64]>,
+    solves: &mut usize,
+) -> Option<Solved> {
     let mut ws = Workspace::new(&bound.circuit);
     let opts = SolverOptions::default();
     let mut last: Option<Vec<f64>> = seed.map(<[f64]>::to_vec);

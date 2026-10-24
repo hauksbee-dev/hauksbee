@@ -165,6 +165,7 @@ pub mod debug_header;
 pub mod device_decode;
 pub mod envelope;
 pub mod fet_orientation;
+pub mod float_parity;
 pub mod floating_inputs;
 pub mod holdup;
 pub mod indicators;
