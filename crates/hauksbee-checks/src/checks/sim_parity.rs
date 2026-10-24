@@ -18,19 +18,30 @@
 //!   draws its supply through its own pin clamps is back-fed, and an I2C line
 //!   that was high at rest and now sits low under a powered device's VIL is a
 //!   locked bus (`power_states`).
-//! - **Input supply reversed** (every supply the binder powers the board from,
-//!   negated, regulators off): a FET the rest state holds on with a gate no
-//!   firmware drives, sitting on an input, that conducts through its body
-//!   diode is a reverse-polarity FET that does not block (`fet_orientation`).
+//! - **Input supply reversed**: the board's inputs are read from topology, as
+//!   the connector and battery pads whose nets a supplied rail reaches through
+//!   wires (fuses, beads, inductors) and the FETs on at rest. Each is driven
+//!   at minus its rest level, with the binder's own supply legs disconnected
+//!   and regulators off, and the rest of the board solves around it. A FET the
+//!   rest state holds on with a gate no firmware drives is a reverse-polarity
+//!   FET; it does not block when its body diode carries a load's current, or
+//!   when the diode is forward-biased and the protected side follows the
+//!   reversal below ground (an unloaded rail passes it on with next to no
+//!   current). A resistor across the channel that carries more than the diode
+//!   passes the reversal whichever way the FET faces, so it is not blamed
+//!   (`fet_orientation`).
 //!
-//! What picks the scenarios (which switch firmware can open) is read from the
-//! board; what decides a finding is only the solve. Nothing here enters a
-//! verdict: [`parity_ledger`] lays the sim findings beside the hand checks'
-//! as (check, part) pairs, so a hand check is retired only when the ledger
-//! shows the solve finds what it finds. The shadow abstains, with the reason
-//! kept in [`Shadow::why_not`], wherever the solve cannot speak: a state that
-//! does not solve, a FET gate no model sets, a part whose rail the rest solve
-//! leaves dead.
+//! What picks the scenarios (which switch firmware can open, which pads are
+//! inputs) is read from the board; what decides a finding is only the solve.
+//! Nothing here enters a verdict: [`parity_ledger`] lays the sim findings
+//! beside the hand checks' as (check, part) pairs, so a hand check is retired
+//! only when the ledger shows the solve finds what it finds. The shadow
+//! abstains, with the reason kept in [`Shadow::why_not`] (or
+//! [`Shadow::unjudged`] for the whole board), wherever the solve cannot speak:
+//! a board no net names a voltage for, a state that does not solve, a FET gate
+//! no model sets, a FET whose channel nets the rest solve leaves dead, a FET
+//! with a supply pad on each side. A hand finding there is an `abstained`
+//! ledger row, not a hand-only miss.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
@@ -39,6 +50,7 @@ use hauksbee_bind::binder::{bind_board, BoundBoard};
 use hauksbee_bind::control_inputs::{hold_off, undetermined_gates};
 use hauksbee_bind::junctions::{
     clamp_current, dc_with_junction_homotopy, junction_current, stamp_ic_junctions, IcJunctions,
+    LIVE_SUPPLY_V,
 };
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::{Device, NodeId, SourceKind};
@@ -108,6 +120,9 @@ pub struct Shadow {
     pub why_not: BTreeMap<String, String>,
     /// Board-wide notes (a scenario that did not solve).
     pub notes: Vec<String>,
+    /// The whole board went unjudged (it solves unpowered, or its rest state
+    /// does not solve): every hand finding on it is an abstention.
+    pub unjudged: bool,
     /// DC solves run.
     pub solves: usize,
     /// Scenarios tried (rest, each switch, reversed supply).
@@ -237,12 +252,17 @@ struct Fet {
 impl Fet {
     /// Body-diode (bulk-drain junction) forward current at `st` (A).
     fn body_current(&self, st: &Solved) -> f64 {
+        junction_current(self.body_is, self.body_bias(st))
+    }
+
+    /// Body-diode anode-to-cathode voltage at `st` (V): positive is forward.
+    fn body_bias(&self, st: &Solved) -> f64 {
         let (anode, cathode) = if self.pmos {
             (self.d, self.b)
         } else {
             (self.b, self.d)
         };
-        junction_current(self.body_is, st.v(anode) - st.v(cathode))
+        st.v(anode) - st.v(cathode)
     }
 
     /// Whether the channel conducts at `st` (folded |VGS| past threshold).
@@ -577,28 +597,121 @@ fn power_state_findings(
     }
 }
 
-/// Nodes an input supply sits on, plus the far side of any wire-like series
-/// element on them.
-fn input_nodes(bound: &BoundBoard, inputs: &[bool]) -> BTreeSet<NodeId> {
-    let mut nodes: BTreeSet<NodeId> = (bound.supplies.iter().zip(inputs))
-        .filter(|(_, input)| **input)
-        .map(|(l, _)| l.net)
-        .collect();
-    let near: Vec<NodeId> = nodes.iter().copied().collect();
-    for dev in &bound.circuit.devices {
-        if let Device::Resistor { a, b, ohms, .. } = dev {
-            if *ohms <= WIRE_OHMS {
-                if near.contains(a) && *b != NodeId::GROUND {
-                    nodes.insert(*b);
-                }
-                if near.contains(b) && *a != NodeId::GROUND {
-                    nodes.insert(*a);
-                }
+/// The board nets joined by a wire at DC: a bound resistor of a few ohms or
+/// less (a fuse, a bead, a sense resistor) or an inductor, between two board
+/// nets, neither of them ground. The supply legs' own resistors run to an
+/// internal node and so never appear.
+fn wire_edges(bound: &BoundBoard, nets: &Nets) -> Vec<(NodeId, NodeId)> {
+    let board_net = |n: &NodeId| *n != NodeId::GROUND && nets.name.contains_key(n);
+    (bound.circuit.devices.iter())
+        .filter_map(|dev| match dev {
+            Device::Resistor { a, b, ohms, .. } if *ohms <= WIRE_OHMS => Some((*a, *b)),
+            Device::Inductor { a, b, .. } => Some((*a, *b)),
+            _ => None,
+        })
+        .filter(|(a, b)| a != b && board_net(a) && board_net(b))
+        .collect()
+}
+
+/// The current resistors wired straight across `a` and `b` carry at `st` (A):
+/// a pre-charge or soft-start path across a FET's channel.
+fn bridge_current(bound: &BoundBoard, (a, b): (NodeId, NodeId), st: &Solved) -> f64 {
+    let dv = (st.v(a) - st.v(b)).abs();
+    (bound.circuit.devices.iter())
+        .filter_map(|dev| match dev {
+            Device::Resistor {
+                a: p, b: n, ohms, ..
+            } if *ohms > 0.0 && ((*p, *n) == (a, b) || (*p, *n) == (b, a)) => Some(dv / ohms),
+            _ => None,
+        })
+        .sum()
+}
+
+/// Every node `edges` reach from `start`.
+fn reach(start: &[NodeId], edges: &[(NodeId, NodeId)]) -> BTreeSet<NodeId> {
+    let mut seen: BTreeSet<NodeId> = start.iter().copied().collect();
+    let mut frontier: Vec<NodeId> = start.to_vec();
+    while let Some(n) = frontier.pop() {
+        for &(a, b) in edges {
+            let far = if a == n {
+                b
+            } else if b == n {
+                a
+            } else {
+                continue;
+            };
+            if seen.insert(far) {
+                frontier.push(far);
             }
         }
     }
-    nodes
+    seen
 }
+
+/// Where a reversed supply comes in, read from the board's topology.
+struct SupplyInputs {
+    /// Each input net and the level (V) the rest state holds it at: the pad of
+    /// a connector or battery (not a ground) that wires and the always-on FETs
+    /// join to a rail the binder supplies, and that the rest solve holds up.
+    nodes: Vec<(NodeId, f64)>,
+    /// The nets joined to a supplied rail through those wires and FETs.
+    joined: BTreeSet<NodeId>,
+    /// The wire-only edges, to tell which side of a FET an input is on.
+    wires: Vec<(NodeId, NodeId)>,
+}
+
+/// The board's supply inputs: the pads a reversed supply would be plugged
+/// into. A connector or battery pad counts when its net is joined to a rail
+/// the binder supplies through wires and the FETs in `through` (on at rest,
+/// no firmware on their gate): that is the pad the board's power arrives on,
+/// whatever rail the binder put its supply on (it supplies a rail because the
+/// name gives a voltage, often downstream of the protection the scenario is
+/// testing). A signal pad behind a pull-up is not joined, a regulator's output
+/// is not a supplied rail, and a pad the rest solve leaves dead has no level
+/// to reverse.
+fn supply_inputs(
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+    nets: &Nets,
+    rest: &Solved,
+    through: &[&Fet],
+) -> SupplyInputs {
+    let wires = wire_edges(bound, nets);
+    let mut edges = wires.clone();
+    edges.extend(through.iter().map(|f| (f.d, f.s)));
+    let legs: Vec<NodeId> = bound.supplies.iter().map(|l| l.net).collect();
+    let joined = reach(&legs, &edges);
+    let mut nodes: Vec<(NodeId, f64)> = Vec::new();
+    let ids: HashMap<i64, &str> = (board.nets.iter())
+        .map(|n| (n.id, n.name.as_str()))
+        .collect();
+    for c in (board.components.iter()).filter(|c| super::fet_orientation::is_supply_source(c)) {
+        for p in &c.pins {
+            let Some(name) = p.net.filter(|n| *n != 0).and_then(|n| ids.get(&n)) else {
+                continue;
+            };
+            let Some(&node) = bound.net_nodes.get(*name) else {
+                continue;
+            };
+            if hauksbee_extract::is_ground(name) || !joined.contains(&node) {
+                continue;
+            }
+            let v = rest.v(node);
+            if v >= LIVE_SUPPLY_V && !nodes.iter().any(|(n, _)| *n == node) {
+                nodes.push((node, v));
+            }
+        }
+    }
+    SupplyInputs {
+        nodes,
+        joined,
+        wires,
+    }
+}
+
+/// Series resistance of a reversed supply (ohms): the stiff source the
+/// binder's own supplies are.
+const REVERSED_SOURCE_OHMS: f64 = hauksbee_bind::power_supply::STIFF_R_OHMS;
 
 /// Open the series resistor of every supply leg `which` (leg index, net)
 /// picks, so the rail it held is left to the circuit.
@@ -643,30 +756,39 @@ fn input_legs(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard) ->
     }
 }
 
-/// Negate every input supply, disconnect every other supply leg (a rail the
-/// binder powers only because it names a voltage) and zero every simple
-/// regulator's source.
-fn reverse_inputs(bound: &mut BoundBoard, inputs: &[bool]) {
-    disconnect_legs(bound, &|i, _| !inputs[i]);
-    let legs: Vec<usize> = (bound.supplies.iter().zip(inputs))
-        .filter(|(_, input)| **input)
-        .map(|(l, _)| l.vsource.0 as usize)
-        .collect();
+/// Plug the supply in backwards: every supply leg disconnected (the binder's
+/// rails stand in for the real input, which is now reversed), every simple
+/// regulator's source zeroed, and each input net driven to minus its rest
+/// level through [`REVERSED_SOURCE_OHMS`] (a Norton source, so no node is
+/// added and the snapshot restores the circuit). The rest of the board solves
+/// from there.
+fn reverse_inputs(bound: &mut BoundBoard, inputs: &[(NodeId, f64)]) {
+    disconnect_legs(bound, &|_, _| true);
     let regs: Vec<usize> = (bound.report.regulators.iter())
         .map(|r| r.source.0 as usize)
         .collect();
-    for (i, dev) in bound.circuit.devices.iter_mut().enumerate() {
-        if let Device::Vsource {
+    for i in regs {
+        if let Some(Device::Vsource {
             kind: SourceKind::Dc(v),
             ..
-        } = dev
+        }) = bound.circuit.devices.get_mut(i)
         {
-            if legs.contains(&i) {
-                *v = -*v;
-            } else if regs.contains(&i) {
-                *v = 0.0;
-            }
+            *v = 0.0;
         }
+    }
+    for (k, &(node, v)) in inputs.iter().enumerate() {
+        bound.circuit.add(Device::Isource {
+            name: format!("Irev_in{k}"),
+            p: NodeId::GROUND,
+            n: node,
+            kind: SourceKind::Dc(-v / REVERSED_SOURCE_OHMS),
+        });
+        bound.circuit.add(Device::resistor(
+            format!("Rrev_in{k}"),
+            node,
+            NodeId::GROUND,
+            REVERSED_SOURCE_OHMS,
+        ));
     }
 }
 
@@ -691,6 +813,7 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
              unpowered"
                 .to_string(),
         );
+        shadow.unjudged = true;
     }
     // Rest without the IC junctions: which supplies the circuit powers.
     shadow.scenarios += 1;
@@ -698,6 +821,7 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
         shadow
             .notes
             .push("the rest state did not solve: nothing judged".to_string());
+        shadow.unjudged = true;
         return shadow;
     };
     let ij = stamp_ic_junctions(&mut bound, &|n| bare.v(n));
@@ -712,6 +836,7 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
         shadow
             .notes
             .push("the rest state with every junction did not solve: nothing judged".to_string());
+        shadow.unjudged = true;
         return shadow;
     };
     rest_findings(&ij, &rest, &nets, &mut shadow.findings);
@@ -722,6 +847,22 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
     let switches = switches(board, lib, &bound, &nets, &fets);
     let firmware_switched: BTreeSet<&str> = switches.iter().map(Switch::part).collect();
     for sw in &switches {
+        // A FET whose channel nets both solve dead at rest has nothing to
+        // switch: opening it shows nothing, which is not a pass.
+        if let Switch::Fet { fet, .. } = sw {
+            if rest.v(fet.d).abs().max(rest.v(fet.s).abs()) < LIVE_SUPPLY_V {
+                shadow.why_not.insert(
+                    fet.reference.clone(),
+                    format!(
+                        "both channel nets ('{}', '{}') solve dead at rest: nothing the binder \
+                         models powers them, so its gate-off state is not judged",
+                        nets.name(fet.d),
+                        nets.name(fet.s)
+                    ),
+                );
+                continue;
+            }
+        }
         shadow.scenarios += 1;
         if !sw.open(&mut bound) {
             at_rest.restore(&mut bound);
@@ -779,48 +920,133 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
     }
 
     // Input supply reversed.
-    let inputs = input_nodes(&bound, &inputs_fed);
-    let candidates: Vec<&Fet> = (fets.iter())
+    let always_on: Vec<&Fet> = (fets.iter())
         .filter(|f| !firmware_switched.contains(f.reference.as_str()))
         .filter(|f| !shadow.why_not.contains_key(&f.reference))
         .filter(|f| f.channel_on(&rest))
-        .filter(|f| inputs.contains(&f.s) || inputs.contains(&f.d))
         .collect();
+    let inputs = supply_inputs(board, &bound, &nets, &rest, &always_on);
+    // Each candidate with its protected end, when the input's side is read.
+    let mut candidates: Vec<(&Fet, Option<NodeId>)> = Vec::new();
+    for f in always_on {
+        if !inputs.joined.contains(&f.s) {
+            continue;
+        }
+        if inputs.nodes.is_empty() {
+            shadow.why_not.insert(
+                f.reference.clone(),
+                "on at rest with no firmware on its gate, but no connector or battery pad feeds \
+                 its rail: no input to reverse, not judged"
+                    .to_string(),
+            );
+            continue;
+        }
+        // A supply pad on each side (an input on one, a header passing the
+        // protected rail out on the other) leaves which side is the input to
+        // the reader: reversing both would hide the diode.
+        let side_has_input = |end: NodeId| {
+            let near = reach(&[end], &inputs.wires);
+            inputs.nodes.iter().any(|(n, _)| near.contains(n))
+        };
+        let (at_s, at_d) = (side_has_input(f.s), side_has_input(f.d));
+        if at_s && at_d {
+            shadow.why_not.insert(
+                f.reference.clone(),
+                format!(
+                    "a connector or battery pad on each side ('{}', '{}'): which is the input is \
+                     not read, not judged",
+                    nets.name(f.s),
+                    nets.name(f.d)
+                ),
+            );
+            continue;
+        }
+        let far = match (at_s, at_d) {
+            (true, false) => Some(f.d),
+            (false, true) => Some(f.s),
+            _ => None,
+        };
+        candidates.push((f, far));
+    }
     if !candidates.is_empty() {
         shadow.scenarios += 1;
-        reverse_inputs(&mut bound, &inputs_fed);
+        reverse_inputs(&mut bound, &inputs.nodes);
         let rev = settle(&mut bound, None, &mut shadow.solves);
         at_rest.restore(&mut bound);
+        let input_names: Vec<String> = (inputs.nodes.iter())
+            .map(|(n, v)| format!("'{}' at -{v:.1} V", nets.name(*n)))
+            .collect();
+        let scenario = format!("input supply reversed ({})", input_names.join(", "));
         match rev {
-            None => shadow
-                .notes
-                .push("the reversed-supply state did not solve".to_string()),
+            None => {
+                shadow
+                    .notes
+                    .push("the reversed-supply state did not solve".to_string());
+                for (f, _) in candidates {
+                    shadow.why_not.insert(
+                        f.reference.clone(),
+                        "the reversed-supply state did not solve".to_string(),
+                    );
+                }
+            }
             Some(rev) => {
-                for f in candidates {
+                for (f, far) in candidates {
+                    // The protected side: the end away from the input, else
+                    // the end the reversal pulls down least.
+                    let far =
+                        far.unwrap_or_else(|| if rev.v(f.s) > rev.v(f.d) { f.s } else { f.d });
+                    let near = if far == f.s { f.d } else { f.s };
                     let i = f.body_current(&rev);
+                    let bias = f.body_bias(&rev);
+                    let (v_far, v_near) = (rev.v(far), rev.v(near));
                     shadow.fet_notes.insert(
                         f.reference.clone(),
-                        format!("input reversed: body diode carries {i:.1e} A"),
+                        format!(
+                            "{scenario}: body diode at {bias:.2} V carries {i:.1e} A; '{}' (the \
+                             protected side) at {v_far:.2} V",
+                            nets.name(far)
+                        ),
                     );
-                    if i < BODY_DIODE_A {
+                    // Not blocked: the diode carries a load's current, or it
+                    // is forward-biased and the protected side follows the
+                    // reversed input below ground (an unloaded rail passes the
+                    // reversal on with next to no current).
+                    let passes =
+                        bias > 0.0 && v_far < -LIVE_SUPPLY_V && rest.v(far) > LIVE_SUPPLY_V;
+                    if i < BODY_DIODE_A && !passes {
+                        continue;
+                    }
+                    // A resistor across the channel (a soft-start or
+                    // pre-charge path) that carries more than the diode passes
+                    // the reversal whichever way the FET faces: its
+                    // orientation is not what lets it through.
+                    let bridge = bridge_current(&bound, (f.s, f.d), &rev);
+                    if bridge > i {
+                        shadow.fet_notes.insert(
+                            f.reference.clone(),
+                            format!(
+                                "{scenario}: a resistor across its channel carries the reversal \
+                                 ({bridge:.1e} A against {i:.1e} A in the body diode): it passes \
+                                 whichever way the FET faces, so its orientation is not judged \
+                                 by it"
+                            ),
+                        );
                         continue;
                     }
                     shadow.findings.push(SimFinding {
                         target: SimTarget::FetOrientation,
                         part: f.reference.clone(),
                         nets: vec![nets.name(f.s), nets.name(f.d)],
-                        scenario: "input supply reversed".to_string(),
+                        scenario: scenario.clone(),
                         message: format!(
                             "{} is on at rest with no firmware on its gate, as a reverse-polarity \
-                             FET is, but with the input reversed it conducts {:.3e} A through its \
-                             body diode ('{}' at {:.2} V, '{}' at {:.2} V): the reversed supply is \
-                             not blocked",
+                             FET is, but with the input reversed its body diode is forward-biased \
+                             ({bias:.2} V, {i:.3e} A) and passes the reversal on: '{}' sits at \
+                             {v_far:.2} V behind '{}' at {v_near:.2} V. The reversed supply is not \
+                             blocked",
                             f.reference,
-                            i,
-                            nets.name(f.s),
-                            rev.v(f.s),
-                            nets.name(f.d),
-                            rev.v(f.d)
+                            nets.name(far),
+                            nets.name(near),
                         ),
                     });
                 }
@@ -828,15 +1054,15 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
         }
     }
     for f in &fets {
-        if shadow.fet_notes.contains_key(&f.reference) {
+        if shadow.fet_notes.contains_key(&f.reference) || shadow.why_not.contains_key(&f.reference)
+        {
             continue;
         }
-        let why = if !f.channel_on(&rest) {
-            "no firmware output reaches its gate and it is off at rest: no scenario opens it"
-        } else if !inputs.contains(&f.s) && !inputs.contains(&f.d) {
-            "on at rest with no firmware on its gate, but on no input supply: not reversed"
+        let why = if f.channel_on(&rest) {
+            "on at rest with no firmware on its gate, but on no rail a supply pad feeds: not \
+             reversed"
         } else {
-            "not tried"
+            "no firmware output reaches its gate and it is off at rest: no scenario opens it"
         };
         shadow
             .fet_notes
@@ -849,7 +1075,13 @@ pub fn shadow_findings(board: &ExtractedBoard, lib: &ModelLibrary) -> Shadow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Side {
     Both,
+    /// The hand check found it; the solve judged the part and was silent.
     HandOnly,
+    /// The hand check found it; the solve could not judge the part (the
+    /// reason is the row's detail). Not a match: it blocks a retirement as a
+    /// hand-only row does, but it names a missing model or scenario, not a
+    /// miss.
+    Abstained,
     SimOnly,
 }
 
@@ -859,6 +1091,7 @@ impl Side {
         match self {
             Self::Both => "both",
             Self::HandOnly => "hand-only",
+            Self::Abstained => "abstained",
             Self::SimOnly => "sim-only",
         }
     }
@@ -913,19 +1146,21 @@ pub fn hand_pairs(
     out
 }
 
-/// Why the shadow is silent on a hand finding's part, as far as it can say.
+/// Why the shadow is silent on a hand finding's part, as far as it can say,
+/// and whether that is an abstention (the solve could not judge the part)
+/// rather than a solved silence.
 fn silent_reason(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     shadow: &Shadow,
     t: SimTarget,
     part: &str,
-) -> String {
+) -> (String, bool) {
     if let Some(why) = shadow.why_not.get(part) {
-        return why.clone();
+        return (why.clone(), true);
     }
-    if !shadow.notes.is_empty() {
-        return shadow.notes.join("; ");
+    if shadow.unjudged {
+        return (shadow.notes.join("; "), true);
     }
     let comp = board.components.iter().find(|c| c.reference == part);
     let kind = comp.and_then(|c| {
@@ -933,13 +1168,13 @@ fn silent_reason(
             .find(|(r, _)| r.reference == c.reference)
             .map(|(_, m)| m.kind)
     });
-    match (t, kind) {
-        (_, None) => "no card resolved: nothing bound to solve".to_string(),
+    let silent = match (t, kind) {
+        (_, None) => return ("no card resolved: nothing bound to solve".to_string(), true),
         (SimTarget::FetOrientation, Some(ComponentKind::Nmos | ComponentKind::Pmos)) => {
-            shadow.fet_notes.get(part).map_or_else(
-                || "not bound as a MOSFET with a body diode".to_string(),
-                |n| format!("solved and silent: {n}"),
-            )
+            match shadow.fet_notes.get(part) {
+                None => return ("not bound as a MOSFET with a body diode".to_string(), true),
+                Some(n) => format!("solved and silent: {n}"),
+            }
         }
         (SimTarget::BackPower | SimTarget::PowerStates, Some(k))
             if !matches!(
@@ -951,10 +1186,19 @@ fn silent_reason(
                     | ComponentKind::Dac
             ) =>
         {
-            format!("{k:?} part: outside the logic/MCU clamp scope")
+            return (
+                format!("{k:?} part: outside the logic/MCU clamp scope"),
+                true,
+            );
         }
         _ => "solved and silent: no clamp conducts in any scenario tried".to_string(),
-    }
+    };
+    let notes = if shadow.notes.is_empty() {
+        String::new()
+    } else {
+        format!(" (board notes: {})", shadow.notes.join("; "))
+    };
+    (format!("{silent}{notes}"), false)
 }
 
 /// The parity ledger: every (check, part) pair the hand checks or the shadow
@@ -973,16 +1217,19 @@ pub fn parity_ledger(board: &ExtractedBoard, lib: &ModelLibrary) -> Ledger {
     let rows = (keys.into_iter())
         .map(|key| {
             let (t, part) = key;
-            let found = sim.get(key);
-            let side = match (hand.contains_key(key), found.is_some()) {
-                (true, true) => Side::Both,
-                (true, false) => Side::HandOnly,
-                _ => Side::SimOnly,
+            let (side, detail) = match (hand.contains_key(key), sim.get(key)) {
+                (true, Some(f)) => (Side::Both, format!("{}: {}", f.scenario, f.message)),
+                (false, Some(f)) => (Side::SimOnly, format!("{}: {}", f.scenario, f.message)),
+                (_, None) => {
+                    let (why, abstained) = silent_reason(board, lib, &shadow, *t, part);
+                    let side = if abstained {
+                        Side::Abstained
+                    } else {
+                        Side::HandOnly
+                    };
+                    (side, why)
+                }
             };
-            let detail = found.map_or_else(
-                || silent_reason(board, lib, &shadow, *t, part),
-                |f| format!("{}: {}", f.scenario, f.message),
-            );
             LedgerRow {
                 check: *t,
                 part: part.clone(),
@@ -1012,8 +1259,10 @@ mod tests {
     const VIN: i64 = 20;
     const VFUSED: i64 = 21;
     const VPROT: i64 = 22;
+    const RAW: i64 = 23;
 
     const NETS: &[(i64, &str)] = &[
+        (RAW, "Net-(J1-Pad1)"),
         (GND, "GND"),
         (V5, "+5V"),
         (V3, "+3V3"),
@@ -1193,12 +1442,160 @@ mod tests {
             bad.rows
         );
         assert!(
-            (bad.shadow.findings.iter()).any(|f| f.scenario == "input supply reversed"),
+            (bad.shadow.findings.iter())
+                .any(|f| f.scenario.starts_with("input supply reversed ('+12V'")),
             "{:#?}",
             bad.shadow.findings
         );
         let good = ledger(rpp(VPROT, VFUSED));
         assert!(good.rows.is_empty(), "{:#?}", good.rows);
+    }
+
+    /// The protection FET where the only named rail is downstream of it: the
+    /// connector's pad is an unnamed net, the fuse and FET feed `+12V`, and
+    /// nothing loads `+12V`. The reversal must be applied at the connector,
+    /// not at the named rail, and an unloaded rail that follows the reversal
+    /// below ground through the body diode is still not blocked.
+    fn rpp_downstream(s: i64, d: i64) -> Vec<Component> {
+        vec![
+            header("J1", RAW),
+            part("F1", "1A", "Device:Fuse", &[("1", RAW), ("2", VFUSED)]),
+            generic_fet("PMOS", (s, d, GATE)),
+            res("R1", "100k", GATE, GND),
+        ]
+    }
+
+    #[test]
+    fn a_reversed_protection_pfet_is_found_when_only_its_downstream_rail_is_named() {
+        let bad = ledger(rpp_downstream(VFUSED, VIN));
+        assert_eq!(
+            rows(&bad, SimTarget::FetOrientation, Side::Both),
+            ["Q1"],
+            "{:#?}",
+            bad.rows
+        );
+        let f = &bad.shadow.findings[0];
+        assert!(
+            f.scenario
+                .starts_with("input supply reversed ('Net-(J1-Pad1)'"),
+            "the reversal sits on the connector's pad: {}",
+            f.scenario
+        );
+        assert!(f.message.contains("forward-biased"), "{}", f.message);
+        let good = ledger(rpp_downstream(VIN, VFUSED));
+        assert!(good.rows.is_empty(), "{:#?}", good.rows);
+        assert!(
+            (good.shadow.fet_notes.get("Q1"))
+                .is_some_and(|n| n.starts_with("input supply reversed")),
+            "the right orientation is judged, not skipped: {:#?}",
+            good.shadow
+        );
+    }
+
+    /// The same FET with a resistor straight across its channel (a soft-start
+    /// FET with a pre-charge path, source on the input as such a switch has
+    /// it): the reversal reaches the rail through the resistor whichever way
+    /// the FET faces, so its orientation is not blamed. Without the resistor
+    /// the same board is flagged (the test above).
+    #[test]
+    fn a_resistor_across_the_channel_carries_the_reversal_and_the_fet_is_not_blamed() {
+        let mut parts = rpp_downstream(VFUSED, VIN);
+        parts.push(res("R3", "62", VFUSED, VIN));
+        let l = ledger(parts);
+        assert!(
+            !(l.shadow.findings.iter()).any(|f| f.target == SimTarget::FetOrientation),
+            "{:#?}",
+            l.shadow.findings
+        );
+        assert!(
+            (l.shadow.fet_notes.get("Q1")).is_some_and(|n| n.contains("across its channel")),
+            "{:#?}",
+            l.shadow
+        );
+        assert!(l.rows.is_empty(), "{:#?}", l.rows);
+    }
+
+    /// A high-side switch with no connector or battery: nothing on the board
+    /// is an input, so no reversal is tried and nothing is reported.
+    #[test]
+    fn a_switch_with_no_connector_or_battery_gets_no_reversed_supply() {
+        let l = ledger(vec![
+            generic_fet("PMOS", (V5, LOAD, GATE)),
+            res("R1", "100k", GATE, GND),
+            res("R2", "1k", LOAD, GND),
+        ]);
+        assert!(
+            !(l.shadow.findings.iter()).any(|f| f.scenario.starts_with("input supply reversed")),
+            "{:#?}",
+            l.shadow.findings
+        );
+        assert!(
+            (l.shadow.why_not.get("Q1")).is_some_and(|w| w.contains("no connector or battery")),
+            "{:#?}",
+            l.shadow
+        );
+        assert!(
+            rows(&l, SimTarget::FetOrientation, Side::SimOnly).is_empty(),
+            "{:#?}",
+            l.rows
+        );
+    }
+
+    /// A protection FET with a connector on each side (an input on one, the
+    /// protected rail brought out on the other): which side is the input is
+    /// not read, so the solve abstains rather than guess.
+    #[test]
+    fn a_fet_with_a_supply_pad_on_each_side_is_not_judged_reversed() {
+        let mut parts = rpp(VFUSED, VPROT);
+        parts.push(header("J2", VPROT));
+        let l = ledger(parts);
+        assert!(
+            (l.shadow.why_not.get("Q1")).is_some_and(|w| w.contains("on each side")),
+            "{:#?}",
+            l.shadow
+        );
+        for r in l.rows.iter().filter(|r| r.part == "Q1") {
+            assert_eq!(r.side, Side::Abstained, "{r:#?}");
+        }
+    }
+
+    /// A firmware-switched FET between two nets nothing powers: its gate-off
+    /// state has nothing to judge.
+    #[test]
+    fn a_switch_whose_channel_nets_solve_dead_is_not_judged() {
+        let l = ledger(vec![
+            header("J1", V5),
+            mcu(GATE),
+            generic_fet("PMOS", (SIG, LOAD, GATE)),
+            res("R2", "1k", LOAD, GND),
+        ]);
+        assert!(
+            (l.shadow.why_not.get("Q1")).is_some_and(|w| w.contains("solve dead at rest")),
+            "{:#?}",
+            l.shadow
+        );
+        assert!(l.shadow.findings.is_empty(), "{:#?}", l.shadow.findings);
+    }
+
+    /// With no net naming a voltage the board solves unpowered: a hand
+    /// finding on it is an abstention, not a hand-only miss.
+    #[test]
+    fn a_hand_finding_on_an_unpowered_board_is_an_abstention() {
+        let nets: &[(i64, &str)] = &[
+            (GND, "GND"),
+            (GATE, "GATE"),
+            (VIN, "VIN"),
+            (VFUSED, "VIN_FUSED"),
+            (VPROT, "VPROT"),
+        ];
+        let b = board("t", nets, rpp(VFUSED, VPROT));
+        let l = parity_ledger(&b, &ModelLibrary::builtin());
+        assert!(l.shadow.unjudged, "{:#?}", l.shadow);
+        assert!(l.shadow.findings.is_empty(), "{:#?}", l.shadow.findings);
+        assert!(!l.rows.is_empty(), "the hand check flags Q1: {:#?}", l.rows);
+        for r in &l.rows {
+            assert_eq!(r.side, Side::Abstained, "{r:#?}");
+        }
     }
 
     #[test]
