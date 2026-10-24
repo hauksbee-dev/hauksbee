@@ -128,6 +128,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SIMAVR_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SIMAVR_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=SIMAVR_COMMIT");
+    // bindgen loads whichever libclang this variable (or the default search) names.
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     // CI and release builds place an immutable source marker beside the exact
     // headers/archive. Make that identity a Cargo input and embed it into the
@@ -235,12 +237,68 @@ fn main() {
         .allowlist_item("UART_.*")
         .allowlist_var("UART_.*")
         .generate()
-        .expect("Unable to generate simavr bindings");
+        .unwrap_or_else(|e| {
+            panic!(
+                "hauksbee-mcu: bindgen could not parse the simavr headers under {include_dir} \
+                 ({e}). If clang reports a missing header (stddef.h, stdint.h, ...), point \
+                 SIMAVR_INCLUDE_DIR at a complete simavr install and make sure the libclang \
+                 development package that matches your clang is installed \
+                 (apt: libclang-dev; its resource directory supplies stddef.h)."
+            )
+        });
+
+    // bindgen can finish "successfully" while emitting a struct it failed to
+    // see the body of as an empty placeholder, leaving the real size only in
+    // its layout asserts. Refuse to continue with such bindings.
+    verify_bindings(&bindings.to_string(), &include_dir);
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("simavr_bindings.rs"))
         .expect("Couldn't write bindings");
+}
+
+/// Fields the AVR backend reads. A struct that lost its body has none of them.
+const REQUIRED_STRUCT_FIELDS: [(&str, &[&str]); 4] = [
+    (
+        "avr_t",
+        &["mmcu", "frequency", "cycle", "pc", "state", "data", "flash"],
+    ),
+    ("avr_irq_t", &["value", "flags"]),
+    ("avr_io_t", &["kind", "avr"]),
+    ("elf_firmware_t", &["mmcu", "frequency"]),
+];
+
+/// Panic with an actionable message unless every struct the backend reads
+/// came out of bindgen with its real fields.
+fn verify_bindings(generated: &str, include_dir: &str) {
+    for (name, fields) in REQUIRED_STRUCT_FIELDS {
+        let header = format!("pub struct {name} {{");
+        let Some(start) = generated.find(&header) else {
+            panic!(
+                "hauksbee-mcu: bindgen emitted no `{name}` from the simavr headers under \
+                 {include_dir}; clang did not see the header (check SIMAVR_INCLUDE_DIR)"
+            );
+        };
+        let body = &generated[start..];
+        let body = &body[..body.find("\n}").unwrap_or(body.len())];
+        let missing: Vec<&str> = fields
+            .iter()
+            .copied()
+            .filter(|field| !body.contains(&format!("pub {field}:")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "hauksbee-mcu: bindgen produced `{name}` without its fields ({}) from the \
+             simavr headers under {include_dir}. clang parsed them without an error but \
+             bindgen could not read the struct body; this is the signature of a libclang \
+             newer than the pinned bindgen supports (bump bindgen, or point LIBCLANG_PATH at \
+             an older libclang) or of a header clang could not resolve (stddef.h/stdint.h \
+             from clang's resource directory; install the libclang development package that \
+             matches your clang, and check SIMAVR_INCLUDE_DIR).",
+            missing.join(", ")
+        );
+    }
 }
 
 /// Probe a pkg-config library preferring the STATIC archive; when no static
