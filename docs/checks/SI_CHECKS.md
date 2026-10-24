@@ -134,6 +134,16 @@ the card speaks either way.
   package and variant (20-QFN, 16-QFN, 10-MSOP) because the pad numbers differ;
   each binds only where the footprint names its package, and a bare `SI5351`
   value on a footprint that does not say the package binds no card.
+- A card may also state the limits the datasheet puts on the crystal and the caps,
+  which the load band cannot show: `max_crystal_cl_f` (the largest crystal CL the
+  chip supports) and `max_external_load_f` (the most external capacitance across
+  the pair, the two caps in series). A crystal over the first, or caps over the
+  second, is a separate `medium` finding citing the card's basis, even when the
+  load band happens to cover the crystal's CL. The Si5351 cards state 12 pF
+  (Table 8, p.11) and 2 pF (4.1.1, p.15; 7.4, p.25): an 18 pF crystal on 22 pF caps
+  and a 10 pF crystal on 10 pF caps are both flagged, while a 10 pF crystal on two
+  2 pF caps, a 12 pF crystal on two 4 pF caps (the data sheet's own example) and a
+  6 pF crystal with no caps are silent.
 - A tunable bank with no printed range cannot be computed: info, no judgement,
   with or without external caps.
 - RTCs and other parts without a card are recognised by name as before

@@ -886,8 +886,16 @@ pads = ["39", "40"]              # exactly two pads of [models.pins]: its XI and
 min_f = 4.0e-12                  # capacitance each pad has to ground, farads
 max_f = 24.5e-12
 includes_pin_capacitance = false # optional; true when the figure already counts the IC pin
+max_crystal_cl_f = 12.0e-12      # optional; the largest crystal CL the datasheet supports
+max_external_load_f = 2.0e-12    # optional; most external capacitance across the pair
 basis = "Datasheet <part> <version>, Table <n> (PDF p.<n>): <what the row says>"
 ```
+
+`max_crystal_cl_f` and `max_external_load_f` (each 0.1 pF to 100 pF) are the limits
+the datasheet states for the crystal's load capacitance and for the capacitors the
+board adds, the latter taken across the pair (the two external caps in series). The
+crystal check flags a crystal or a pair of caps beyond them at medium, citing the
+basis, even where the chip's load range would cover the crystal's CL.
 
 `includes_pin_capacitance = true` (needs a `min_f`/`max_f` range) says the printed
 load is the whole capacitance the IC puts on the pad, pin included. The check then

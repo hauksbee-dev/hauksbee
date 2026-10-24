@@ -117,7 +117,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 16 (p.29) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 16 (p.29) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -191,7 +193,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 14 (p.27) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 14 (p.27) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -265,7 +269,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 15 (p.28) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 15 (p.28) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -335,7 +341,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 19 (p.32) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 19 (p.32) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -405,7 +413,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 17 (p.30) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 17 (p.30) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -475,7 +485,9 @@ pads = ["1", "2"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 18 (p.31) XA pin 1, XB pin 2"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); the 0 pF option is not taken because AN619 Rev. 0.8 Register 183 (p.60) lists XTAL_CL 00 as Reserved, do not select (AN619 does not cover the 16-QFN, AN1234 not read, so that reading is assumed to carry over), leaving CL 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 18 (p.31) XA pin 1, XB pin 2"
 
 [models.coverage]
 implements = []
@@ -539,7 +551,9 @@ pads = ["2", "3"]
 min_f = 12.0e-12
 max_f = 20.0e-12
 includes_pin_capacitance = true
-basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (so the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); Table 20 (p.33) XA pin 2, XB pin 3"
+max_crystal_cl_f = 12.0e-12
+max_external_load_f = 2.0e-12
+basis = "Si5351A/B/C-B Data Sheet Rev. 1.3, 4.1.1 Crystal Inputs (XA, XB) (p.15): total internal XTAL load CL 'can be selected to be 0, 6, 8, or 10 pF', 'additional external load capacitance < 2 pF' only (which implies the pin capacitance is inside CL); NOT AGREED with AN619 Rev. 0.8 Register 183 (p.60), which lists XTAL_CL 01 = 6 pF, 10 = 8 pF, 11 = 10 pF (default) and 00 = Reserved, do not select: the 0 pF option is not taken, so CL is 6 to 10 pF across XA and XB and 12 to 20 pF on each pad; Table 8 note 1 (p.11): 6, 8 or 10 pF crystals use the internal load capacitance, a 12 pF crystal adds 2 pF externally (4 pF on XA and XB); limits: Table 8 (p.11) supports a crystal CL of 6 to 12 pF (max_crystal_cl_f), and 4.1.1 (p.15) with 7.4 (p.25) allows external load capacitance of about 2 pF across the pair, the 4 pF on each of XA and XB of Table 8 note 1 being 2 pF in series (max_external_load_f); Table 20 (p.33) XA pin 2, XB pin 3"
 
 [models.coverage]
 implements = []

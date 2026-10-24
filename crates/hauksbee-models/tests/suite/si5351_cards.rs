@@ -192,6 +192,17 @@ fn every_package_states_the_same_programmable_crystal_load() {
             "{value}"
         );
         assert!(cap.includes_pin_capacitance, "{value}");
+        // Table 8 (p.11): crystal CL 6 to 12 pF; 4.1.1 (p.15) with 7.4 (p.25): 2 pF
+        // of external capacitance across the pair (4 pF on each of XA and XB).
+        assert_eq!(cap.max_crystal_cl_f, Some(12.0e-12), "{value}");
+        assert_eq!(cap.max_external_load_f, Some(2.0e-12), "{value}");
+        // The pin capacitance being inside CL is an inference from 4.1.1, said as one.
+        assert!(
+            cap.basis
+                .contains("which implies the pin capacitance is inside CL"),
+            "{value}: {}",
+            cap.basis
+        );
         for cited in ["4.1.1", "p.15", "AN619", "Register 183", "p.60", "Reserved"] {
             assert!(
                 cap.basis.contains(cited),

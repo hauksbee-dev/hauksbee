@@ -443,6 +443,18 @@ pub struct XtalIntCap {
     /// assumes a trace-only stray instead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub includes_pin_capacitance: bool,
+    /// The largest crystal load capacitance CL (farads) the datasheet supports on
+    /// this oscillator (the Si5351's crystal table: 6 to 12 pF). A crystal
+    /// specifying more cannot be loaded correctly however the chip is tuned, so the
+    /// crystal check flags it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_crystal_cl_f: Option<f64>,
+    /// The most external load capacitance (farads) the datasheet allows on this
+    /// oscillator, taken across the pair: the two external caps in series. The
+    /// Si5351 allows 2 pF (4 pF on each of XA and XB); a board with more is
+    /// flagged, since the chip's own bank no longer sets the load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_external_load_f: Option<f64>,
     /// The datasheet table and page this is read from.
     pub basis: String,
 }
