@@ -16,8 +16,22 @@
 //! Only with positive evidence of an AC source: a bridge (four diodes, or a
 //! bridge package) or a lone rectifier diode whose AC side carries a stated RMS
 //! voltage ("12VAC", "24 V AC", `AC_9V`") on a net name, a connector or
-//! transformer value, or a net property. A bridge on a DC input (polarity
-//! protection) has no AC voltage, and is silent. The bulk capacitor is what the
+//! transformer value, or a net property.
+//!
+//! A bridge whose two AC nets each reach a connector or a transformer (through
+//! at most two series fuses, resistors or ferrites) also counts as AC evidence
+//! when no voltage is stated: the transformer is off-board and the board never
+//! says what it delivers. The valley cannot be computed then, so the finding is
+//! a Medium "hold-up unverified: state the AC input voltage" that names the
+//! bridge, the bulk total, the regulators' minimum input and the RMS voltage the
+//! connector must deliver for the rail to hold up. The evidence is withdrawn
+//! when a net on the path or the connector itself reads as DC (a rail or battery
+//! name, a barrel jack, USB): a bridge on a DC input is polarity protection and
+//! has no AC voltage. A bridge behind an unmarked connector cannot be told from
+//! polarity protection by topology, so the message says to ignore it for a DC
+//! input. A lone diode needs a stated voltage: a series diode from a connector
+//! is reverse protection far more often than a half-wave rectifier. The bulk
+//! capacitor is what the
 //! `supply_cap` check counts on the DC node: fitted capacitors from the
 //! rectifier's positive node to its negative. A regulator is judged when its
 //! `in` pin sits on that node and its card has a `supply_range` row for `in`
@@ -72,8 +86,9 @@ struct Rectifier {
     drops: u32,
     /// Ripples per mains cycle (2 full-wave, 1 half-wave).
     pulses: u32,
-    /// The stated RMS voltage at the AC side, and the text it was read from.
-    vrms: f64,
+    /// The stated RMS voltage at the AC side (`None` when only a connector or
+    /// transformer says the input is AC), and the text it was read from.
+    vrms: Option<f64>,
     source: String,
     /// The parts of the rectifier, for the message.
     refs: Vec<String>,
@@ -178,6 +193,130 @@ fn ac_source(board: &ExtractedBoard, nets: &[i64]) -> Option<(f64, String)> {
     None
 }
 
+/// Words in a net name that say the net is a DC supply, not an AC input.
+const DC_NET_TOKENS: [&str; 15] = [
+    "VIN", "VBUS", "VBAT", "VBATT", "BAT", "BATT", "DC", "VDC", "DCIN", "VCC", "VDD", "VSYS",
+    "USB", "SOLAR", "PV",
+];
+
+/// Whether a net's name reads as a DC rail, a battery or ground.
+fn net_reads_dc(name: &str) -> bool {
+    let n = super::norm(name);
+    n.starts_with('+')
+        || n.starts_with('-')
+        || super::is_ground_name(name)
+        || named_rail_voltage(name).is_some()
+        || n.split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|t| DC_NET_TOKENS.contains(&t))
+}
+
+/// Whether a connector's own text (value, symbol, footprint, properties) says
+/// it brings in DC: a barrel jack, a battery, USB, a solar panel.
+fn connector_reads_dc(c: &Component) -> bool {
+    let texts = [c.value.as_str(), c.lib_id.as_str(), c.footprint.as_str()]
+        .into_iter()
+        .chain(c.properties.iter().map(|(_, v)| v.as_str()));
+    texts.into_iter().any(|t| {
+        let t = t.to_ascii_uppercase();
+        ["JACK", "BARREL", "BATT", "USB", "SOLAR", "POLARITY"]
+            .iter()
+            .any(|w| t.contains(w))
+            || t.split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|w| matches!(w, "DC" | "DCIN" | "VDC" | "PV"))
+    })
+}
+
+/// A part the AC input enters the board through: a connector proper (not a
+/// test point, mounting hole, switch or jumper) or a transformer, that does not
+/// read as a DC source.
+fn is_ac_entry(c: &Component) -> bool {
+    if c.dnp {
+        return false;
+    }
+    let r = c.reference.to_ascii_uppercase();
+    let numbered = |p: &str| {
+        r.strip_prefix(p)
+            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
+    };
+    let transformer = numbered("T")
+        || numbered("TR")
+        || numbered("TX")
+        || c.value.to_ascii_uppercase().contains("TRANSFORMER");
+    let connector = hauksbee_extract::is_connector_like(c)
+        && !["TP", "MH", "MK", "SW", "JP"]
+            .iter()
+            .any(|p| r.starts_with(p));
+    (connector || transformer) && !connector_reads_dc(c)
+}
+
+/// A two-pad part an AC input passes through on its way to the bridge: a
+/// fuse, a series resistor, a ferrite bead or an inductor.
+fn is_series_part(c: &Component) -> bool {
+    let r = c.reference.to_ascii_uppercase();
+    let fuse = r.starts_with('F') && !r.starts_with("FB");
+    !c.dnp
+        && c.pins.len() == 2
+        && (fuse
+            || matches!(
+                RefClass::of(&c.reference),
+                RefClass::Resistor | RefClass::Inductor | RefClass::FerriteBead
+            ))
+}
+
+/// The connector or transformer `net` is fed from, through at most two series
+/// parts, where no net on the way and no entry part reads as DC.
+fn entry_of(board: &ExtractedBoard, net: i64) -> Option<&Component> {
+    let mut seen = BTreeSet::from([net]);
+    let mut frontier = vec![net];
+    for _ in 0..3 {
+        let mut onward = Vec::new();
+        for &id in &frontier {
+            if board.net(id).is_none_or(|n| net_reads_dc(&n.name)) {
+                return None; // a DC-named net on the way: not an AC input
+            }
+            for (c, _) in board.net_members(id) {
+                if is_ac_entry(c) {
+                    return Some(c);
+                }
+                if is_series_part(c) {
+                    onward.extend(
+                        c.pins
+                            .iter()
+                            .filter_map(|p| p.net)
+                            .filter(|far| seen.insert(*far)),
+                    );
+                }
+            }
+        }
+        frontier = onward;
+    }
+    None
+}
+
+/// The text naming the connector(s) every net in `nets` is fed from, where each
+/// one reaches an AC entry part.
+fn connector_feed(board: &ExtractedBoard, nets: &[i64]) -> Option<String> {
+    let mut entries: Vec<&str> = Vec::new();
+    for &id in nets {
+        let c = entry_of(board, id)?;
+        if !entries.contains(&c.reference.as_str()) {
+            entries.push(c.reference.as_str());
+        }
+    }
+    Some(format!(
+        "{} (the AC voltage is not stated on the board)",
+        entries.join(", ")
+    ))
+}
+
+/// The AC source of a bridge: a stated RMS voltage, or (voltage `None`) only the
+/// connector or transformer the AC nets come from.
+fn bridge_feed(board: &ExtractedBoard, ac: &[i64]) -> Option<(Option<f64>, String)> {
+    ac_source(board, ac)
+        .map(|(v, s)| (Some(v), s))
+        .or_else(|| connector_feed(board, ac).map(|s| (None, s)))
+}
+
 /// The pin of a bridge package by its printed name.
 fn bridge_pin(c: &Component, names: &[&str]) -> Option<i64> {
     c.pins
@@ -213,7 +352,7 @@ fn discrete_bridges(board: &ExtractedBoard, diodes: &DiodeEnds<'_>) -> Vec<Recti
                     })
                     .map(|&(c, _, _)| c.reference.clone())
                     .collect();
-                if let Some((vrms, source)) = ac_source(board, &[a1, a2]) {
+                if let Some((vrms, source)) = bridge_feed(board, &[a1, a2]) {
                     found.push(Rectifier {
                         pos: p,
                         neg: n,
@@ -255,7 +394,7 @@ fn package_bridges(board: &ExtractedBoard) -> Vec<Rectifier> {
         if ac.len() != 2 || pos == neg {
             continue;
         }
-        if let Some((vrms, source)) = ac_source(board, &ac) {
+        if let Some((vrms, source)) = bridge_feed(board, &ac) {
             found.push(Rectifier {
                 pos,
                 neg,
@@ -292,6 +431,7 @@ fn half_wave(
         let Some((vrms, source)) = ac_source(board, &[a]) else {
             continue;
         };
+        let vrms = Some(vrms);
         let ground = board
             .nets
             .iter()
@@ -536,35 +676,39 @@ fn rectifier_findings(
         .filter_map(|c| models.get(c.reference.as_str()).map(|m| (c, m)))
         .filter(|(c, m)| m.kind == ComponentKind::Vreg && role_net_id(c, m, "in") == Some(rect.pos))
         .collect();
-    let vp = (rect.vrms * std::f64::consts::SQRT_2)
-        .mul_add(LINE_HIGH, -(f64::from(rect.drops) * DIODE_DROP_V));
     let f_ripple = MAINS_HZ * f64::from(rect.pulses);
     // The bulk node's input current: every regulator on it.
-    let mut total = 0.0;
+    let mut loads: Vec<RegLoad> = Vec::new();
     let mut from: Vec<String> = Vec::new();
     for (c, m) in &regs {
         let Some(out) = role_net_id(c, m, "out") else {
             continue;
         };
-        let iq = m.params.get_f64("iq_a").unwrap_or(0.0);
         let d = known_draw(board, models, attributed, (out, &c.reference), 1);
-        let vout = m
-            .params
-            .get_f64("vout")
-            .or_else(|| board.net(out).and_then(|o| named_rail_voltage(&o.name)));
-        total += if m.behavioral.converter.is_some() {
-            // Power conservation at 100 % efficiency, at the peak input.
-            vout.map_or(0.0, |vo| d.amps * (vo / vp).min(1.0)) + iq
-        } else {
-            d.amps + iq
-        };
+        loads.push(RegLoad {
+            amps: d.amps,
+            iq: m.params.get_f64("iq_a").unwrap_or(0.0),
+            vout: m
+                .params
+                .get_f64("vout")
+                .or_else(|| board.net(out).and_then(|o| named_rail_voltage(&o.name))),
+            converter: m.behavioral.converter.is_some(),
+        });
         from.extend(d.from);
     }
+    let Some(vrms) = rect.vrms else {
+        return unverified_finding(board, rect, &caps, (&regs, &loads, &from), (bulk, f_ripple))
+            .into_iter()
+            .collect();
+    };
+    let vp = peak_v(vrms, rect.drops);
+    let total: f64 = loads.iter().map(|l| l.input_current(vp)).sum();
     if total <= 0.0 {
         return findings;
     }
     let valley = valley_v(vp, total, bulk, f_ripple);
     let hold = Hold {
+        vrms,
         vp,
         total,
         bulk,
@@ -590,8 +734,125 @@ fn rectifier_findings(
     findings
 }
 
+/// The peak bulk voltage from a line of `vrms` (10 % high) through `drops` diodes.
+fn peak_v(vrms: f64, drops: u32) -> f64 {
+    (vrms * std::f64::consts::SQRT_2).mul_add(LINE_HIGH, -(f64::from(drops) * DIODE_DROP_V))
+}
+
+/// What one regulator on the bulk node draws from it.
+struct RegLoad {
+    /// The known current on its output rail, and its own quiescent current (A).
+    amps: f64,
+    iq: f64,
+    vout: Option<f64>,
+    converter: bool,
+}
+
+impl RegLoad {
+    /// The current drawn from a bulk node at peak `vp`. A converter draws the
+    /// output power over the input voltage (100 % efficiency, the peak input).
+    fn input_current(&self, vp: f64) -> f64 {
+        if self.converter {
+            self.vout.map_or(0.0, |vo| self.amps * (vo / vp).min(1.0)) + self.iq
+        } else {
+            self.amps + self.iq
+        }
+    }
+}
+
+/// The one finding for a bridge whose AC voltage the board never states: the
+/// hold-up cannot be judged, and the message says what the input must deliver.
+fn unverified_finding(
+    board: &ExtractedBoard,
+    rect: &Rectifier,
+    caps: &[&Component],
+    (regs, loads, from): (&[(&Component, &ModelEntry)], &[RegLoad], &[String]),
+    (bulk, f_ripple): (f64, f64),
+) -> Option<LintFinding> {
+    let judged: Vec<(&Component, &ModelEntry, f64, String)> = regs
+        .iter()
+        .filter_map(|&(c, m)| min_input(m).map(|(need, basis)| (c, m, need, basis)))
+        .collect();
+    let (_, strictest, need, basis) = judged.iter().max_by(|a, b| a.2.total_cmp(&b.2))?;
+    let need = *need;
+    let total_at = |vp: f64| loads.iter().map(|l| l.input_current(vp)).sum::<f64>();
+    // As with a stated voltage, no known load downstream means no claim.
+    if from.is_empty() || total_at(need) <= 0.0 {
+        return None;
+    }
+    // The least peak at which the valley still reaches the minimum input; the
+    // valley rises with the peak, so bisect.
+    let holds = |vp: f64| valley_v(vp, total_at(vp), bulk, f_ripple) >= need;
+    let (mut lo, mut hi) = (need, 5_000.0_f64);
+    let peak = holds(hi).then(|| {
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if holds(mid) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        hi
+    });
+    let bulk_net = board.net(rect.pos).map_or("?", |n| n.name.as_str());
+    let reg_refs: Vec<String> = judged.iter().map(|(c, ..)| c.reference.clone()).collect();
+    let required = peak.map_or_else(
+        || {
+            "No AC input voltage holds the rail up at this load with this bulk capacitance"
+                .to_string()
+        },
+        |vp| {
+            let vrms = f64::from(rect.drops).mul_add(DIODE_DROP_V, vp)
+                / (std::f64::consts::SQRT_2 * LINE_HIGH);
+            format!(
+                "At about {} of load ({}) the rail only stays above {} in every valley if \
+                 the AC input is at least {} RMS under load",
+                format_amps(total_at(vp)),
+                from.join(", "),
+                format_volts(need),
+                format_engineering(vrms, "V"),
+            )
+        },
+    );
+    let message = format!(
+        "Rectified supply '{bulk_net}', hold-up unverified: state the AC input \
+         voltage. {} rectify an AC input fed from {}; with {} of bulk capacitance, {} \
+         ({}, card '{}') needs at least {} at its input (datasheet: {}). {required} \
+         ({} Hz mains, a line 10 % high, {} per diode, no source impedance; unlisted loads \
+         raise the figure). If this input is DC and the bridge is polarity protection, \
+         ignore this.",
+        rect.refs.join(", "),
+        rect.source,
+        farads(bulk),
+        reg_refs.join(", "),
+        strictest.description.trim(),
+        strictest.id,
+        format_volts(need),
+        basis.trim(),
+        MAINS_HZ,
+        format_volts(DIODE_DROP_V),
+    );
+    let mut involved = reg_refs;
+    involved.extend(rect.refs.iter().cloned());
+    involved.extend(caps.iter().map(|x| x.reference.clone()));
+    Some(LintFinding {
+        check: LintCheck::HoldUpDroop,
+        severity: Severity::Medium,
+        message: format!(
+            "{message} {REMEDY_MARKER}State the AC input voltage (a net name such as '12VAC', \
+             or the transformer or connector value) so the valley can be computed, and size \
+             the bulk capacitance on '{bulk_net}' for the lowest voltage it delivers under \
+             load."
+        ),
+        refs: involved,
+        nets: vec![bulk_net.to_string()],
+    })
+}
+
 /// A rectifier's operating point: peak, input current, bulk C, valley, ripple.
 struct Hold {
+    vrms: f64,
     vp: f64,
     total: f64,
     bulk: f64,
@@ -653,7 +914,7 @@ fn droop_finding(
                 "half-wave"
             },
             rect.refs.join(", "),
-            format_engineering(rect.vrms, "V"),
+            format_engineering(h.vrms, "V"),
             rect.source,
             farads(h.bulk),
             format_volts(h.valley),
@@ -833,6 +1094,83 @@ icc_a = 0.4
         // Only the LDO's own 5 mA: 17.5 V peak across 220 uF holds well above 9 V.
         let f = lint(&supply("12VAC", &["220u"], false));
         assert!(f.is_empty(), "{f:?}");
+    }
+
+    /// The `supply` bridge with its AC side on a 2-pin connector `J1` of
+    /// `connector` value, and no AC-named net: the board never says the voltage.
+    fn connector_supply(connector: &str, bulk: &[&str], load: bool) -> ExtractedBoard {
+        let mut b = supply("Net-(J1-Pin_1)", bulk, load);
+        b.nets[4].name = "Net-(J1-Pin_2)".into();
+        b.components
+            .push(part("J1", connector, &[("1", 4), ("2", 5)]));
+        b
+    }
+
+    #[test]
+    fn a_connector_fed_bridge_with_no_stated_voltage_is_unverified() {
+        let f = lint(&connector_supply("Conn_01x02", &["330u"], true));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].check, LintCheck::HoldUpDroop);
+        assert_eq!(f[0].severity, Severity::Medium);
+        for s in [
+            "hold-up unverified: state the AC input voltage",
+            "D1",
+            "J1",
+            "330 µF",
+            "U1",
+            "9 V",
+            "RMS",
+            "ignore this",
+        ] {
+            assert!(f[0].message.contains(s), "{s:?} in {}", f[0].message);
+        }
+        assert!(f[0].own_remedy().is_some());
+        // The same bridge with the voltage named is judged, not "unverified".
+        let mut named = connector_supply("Conn_01x02", &["330u"], true);
+        named.nets[3].name = "9VAC".into();
+        let g = lint(&named);
+        assert_eq!(g.len(), 1, "{g:?}");
+        assert_eq!(g[0].severity, Severity::High);
+        assert!(!g[0].message.contains("unverified"), "{}", g[0].message);
+        // And with a stated voltage a big bulk capacitor is silent.
+        named.components.retain(|c| c.reference != "C1");
+        named
+            .components
+            .push(part("C1", "4700u", &[("1", 3), ("2", 1)]));
+        assert!(lint(&named).is_empty());
+    }
+
+    #[test]
+    fn the_connector_must_not_read_as_a_dc_source() {
+        for jack in ["DC Barrel Jack 2.1mm", "Battery", "USB_B", "Solar panel"] {
+            let f = lint(&connector_supply(jack, &["330u"], true));
+            assert!(f.is_empty(), "{jack}: {f:?}");
+        }
+        // A DC-named net on the way withdraws the evidence too.
+        let mut dc = connector_supply("Conn_01x02", &["330u"], true);
+        dc.nets[3].name = "VIN_RAW".into();
+        assert!(lint(&dc).is_empty());
+    }
+
+    #[test]
+    fn a_fuse_between_the_connector_and_the_bridge_still_counts() {
+        let mut b = connector_supply("Conn_01x02", &["330u"], true);
+        b.nets.push(hauksbee_extract::Net::new(6, "Net-(F1-Pad2)"));
+        // J1 pin 1 now reaches the bridge through F1.
+        let j1 = b.components.iter_mut().find(|c| c.reference == "J1");
+        j1.unwrap().pins[0].net = Some(6);
+        b.components.push(part("F1", "1A", &[("1", 6), ("2", 4)]));
+        let f = lint(&b);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn an_unverified_bridge_needs_a_connector_and_a_known_load() {
+        // No connector, no named voltage: a DC-side bridge, silent.
+        assert!(lint(&supply("Net-(J1-Pin_1)", &["330u"], true)).is_empty());
+        // A connector but no known load downstream: no claim.
+        assert!(lint(&connector_supply("Conn_01x02", &["330u"], false)).is_empty());
     }
 
     #[test]
