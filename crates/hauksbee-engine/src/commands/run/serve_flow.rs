@@ -38,6 +38,7 @@ fn print_plain_check(
         lib: &run_inputs.lib,
         reader_notes: &run_inputs.reader_notes,
         inputs: &run_inputs.inputs,
+        firmware: cfg.firmware.as_deref(),
     };
     crate::reports::check::emit_with_schematic_quiet(
         &inputs,

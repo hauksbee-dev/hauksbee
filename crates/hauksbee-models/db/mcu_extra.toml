@@ -226,6 +226,130 @@ basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current I
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
 missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_SCK (shared with I2Sx_CK) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["14", "29"]
+[models.pin_capability.spi_sck.pads]
+"15" = "SPI1_SCK (PA5)"
+"18" = "SPI5_SCK (PB0)"
+"21" = "SPI2_SCK (PB10)"
+"25" = "SPI3_SCK (PB12)"
+"26" = "SPI2_SCK, SPI4_SCK (PB13)"
+"39" = "SPI1_SCK, SPI3_SCK (PB3)"
+"14" = "USART2_CK (PA4) (AF7)"
+"29" = "USART1_CK (PA8) (AF7)"
+[models.pin_capability.spi_mosi]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["12", "30", "38", "42"]
+[models.pin_capability.spi_mosi.pads]
+"11" = "SPI4_MOSI (PA1)"
+"17" = "SPI1_MOSI (PA7)"
+"28" = "SPI2_MOSI (PB15)"
+"31" = "SPI5_MOSI (PA10)"
+"41" = "SPI1_MOSI, SPI3_MOSI (PB5)"
+"45" = "SPI5_MOSI (PB8)"
+"12" = "USART2_TX (PA2) (AF7)"
+"30" = "USART1_TX (PA9) (AF7)"
+"38" = "USART1_TX (PA15) (AF7)"
+"42" = "USART1_TX (PB6) (AF7)"
+[models.pin_capability.spi_miso]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MISO per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["13", "31", "39", "43"]
+[models.pin_capability.spi_miso.pads]
+"16" = "SPI1_MISO (PA6)"
+"27" = "SPI2_MISO (PB14)"
+"32" = "SPI4_MISO (PA11)"
+"33" = "SPI5_MISO (PA12)"
+"40" = "SPI1_MISO, SPI3_MISO (PB4)"
+"13" = "USART2_RX (PA3) (AF7)"
+"31" = "USART1_RX (PA10) (AF7)"
+"39" = "USART1_RX (PB3) (AF7)"
+"43" = "USART1_RX (PB7) (AF7)"
+[models.pin_capability.i2c_sda]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SDA per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"39" = "I2C2_SDA (PB3)"
+"40" = "I2C3_SDA (PB4)"
+"43" = "I2C1_SDA (PB7)"
+"45" = "I2C3_SDA (PB8)"
+"46" = "I2C1_SDA, I2C2_SDA (PB9)"
+[models.pin_capability.i2c_scl]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SCL per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"21" = "I2C2_SCL (PB10)"
+"29" = "I2C3_SCL (PA8)"
+"42" = "I2C1_SCL (PB6)"
+"45" = "I2C1_SCL (PB8)"
+[models.pin_capability.uart_tx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_TX/UARTx_TX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"12" = "USART2_TX (PA2)"
+"30" = "USART1_TX (PA9)"
+"32" = "USART6_TX (PA11)"
+"38" = "USART1_TX (PA15)"
+"42" = "USART1_TX (PB6)"
+[models.pin_capability.uart_rx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_RX/UARTx_RX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"13" = "USART2_RX (PA3)"
+"31" = "USART1_RX (PA10)"
+"33" = "USART6_RX (PA12)"
+"39" = "USART1_RX (PB3)"
+"43" = "USART1_RX (PB7)"
+[models.pin_capability.pwm]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy and TIMx_CHyN timer outputs (all timers with output channels; TIM6/TIM7 basic timers have none) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"10" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"11" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"12" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"13" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"15" = "TIM2_CH1 (PA5)"
+"16" = "TIM3_CH1 (PA6)"
+"17" = "TIM1_CH1N, TIM3_CH2 (PA7)"
+"18" = "TIM1_CH2N, TIM3_CH3 (PB0)"
+"19" = "TIM1_CH3N, TIM3_CH4 (PB1)"
+"21" = "TIM2_CH3 (PB10)"
+"26" = "TIM1_CH1N (PB13)"
+"27" = "TIM1_CH2N (PB14)"
+"28" = "TIM1_CH3N (PB15)"
+"29" = "TIM1_CH1 (PA8)"
+"30" = "TIM1_CH2 (PA9)"
+"31" = "TIM1_CH3 (PA10)"
+"32" = "TIM1_CH4 (PA11)"
+"38" = "TIM2_CH1 (PA15)"
+"39" = "TIM2_CH2 (PB3)"
+"40" = "TIM3_CH1 (PB4)"
+"41" = "TIM3_CH2 (PB5)"
+"42" = "TIM4_CH1 (PB6)"
+"43" = "TIM4_CH2 (PB7)"
+"45" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"46" = "TIM4_CH4, TIM11_CH1 (PB9)"
+[models.pin_capability.timer_capture]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy timer channels usable as input capture (complementary CHyN pins excluded) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"10" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"11" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"12" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"13" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"15" = "TIM2_CH1 (PA5)"
+"16" = "TIM3_CH1 (PA6)"
+"17" = "TIM3_CH2 (PA7)"
+"18" = "TIM3_CH3 (PB0)"
+"19" = "TIM3_CH4 (PB1)"
+"21" = "TIM2_CH3 (PB10)"
+"29" = "TIM1_CH1 (PA8)"
+"30" = "TIM1_CH2 (PA9)"
+"31" = "TIM1_CH3 (PA10)"
+"32" = "TIM1_CH4 (PA11)"
+"38" = "TIM2_CH1 (PA15)"
+"39" = "TIM2_CH2 (PB3)"
+"40" = "TIM3_CH1 (PB4)"
+"41" = "TIM3_CH2 (PB5)"
+"42" = "TIM4_CH1 (PB6)"
+"43" = "TIM4_CH2 (PB7)"
+"45" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"46" = "TIM4_CH4, TIM11_CH1 (PB9)"
+
 
 # Bootloader UART RX pad bias. Sources, each read from the PDF:
 #   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
@@ -472,6 +596,130 @@ basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current I
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
 missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_SCK (shared with I2Sx_CK) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["D1", "G6"]
+[models.pin_capability.spi_sck.pads]
+"A3" = "SPI1_SCK, SPI3_SCK (PB3)"
+"E2" = "SPI3_SCK (PB12)"
+"E3" = "SPI2_SCK (PB10)"
+"F5" = "SPI1_SCK (PA5)"
+"G1" = "SPI2_SCK, SPI4_SCK (PB13)"
+"G5" = "SPI5_SCK (PB0)"
+"D1" = "USART1_CK (PA8) (AF7)"
+"G6" = "USART2_CK (PA4) (AF7)"
+[models.pin_capability.spi_mosi]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["A2", "C4", "D2", "E5"]
+[models.pin_capability.spi_mosi.pads]
+"B4" = "SPI1_MOSI, SPI3_MOSI (PB5)"
+"B5" = "SPI5_MOSI (PB8)"
+"C2" = "SPI5_MOSI (PA10)"
+"E1" = "SPI2_MOSI (PB15)"
+"F3" = "SPI1_MOSI (PA7)"
+"G7" = "SPI4_MOSI (PA1)"
+"A2" = "USART1_TX (PA15) (AF7)"
+"C4" = "USART1_TX (PB6) (AF7)"
+"D2" = "USART1_TX (PA9) (AF7)"
+"E5" = "USART2_TX (PA2) (AF7)"
+[models.pin_capability.spi_miso]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MISO per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["A3", "C2", "D4", "E4"]
+[models.pin_capability.spi_miso.pads]
+"A4" = "SPI1_MISO, SPI3_MISO (PB4)"
+"C1" = "SPI4_MISO (PA11)"
+"C3" = "SPI5_MISO (PA12)"
+"F1" = "SPI2_MISO (PB14)"
+"F4" = "SPI1_MISO (PA6)"
+"A3" = "USART1_RX (PB3) (AF7)"
+"C2" = "USART1_RX (PA10) (AF7)"
+"D4" = "USART1_RX (PB7) (AF7)"
+"E4" = "USART2_RX (PA3) (AF7)"
+[models.pin_capability.i2c_sda]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SDA per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"A3" = "I2C2_SDA (PB3)"
+"A4" = "I2C3_SDA (PB4)"
+"B5" = "I2C3_SDA (PB8)"
+"C5" = "I2C1_SDA, I2C2_SDA (PB9)"
+"D4" = "I2C1_SDA (PB7)"
+[models.pin_capability.i2c_scl]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SCL per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"B5" = "I2C1_SCL (PB8)"
+"C4" = "I2C1_SCL (PB6)"
+"D1" = "I2C3_SCL (PA8)"
+"E3" = "I2C2_SCL (PB10)"
+[models.pin_capability.uart_tx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_TX/UARTx_TX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"A2" = "USART1_TX (PA15)"
+"C1" = "USART6_TX (PA11)"
+"C4" = "USART1_TX (PB6)"
+"D2" = "USART1_TX (PA9)"
+"E5" = "USART2_TX (PA2)"
+[models.pin_capability.uart_rx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_RX/UARTx_RX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"A3" = "USART1_RX (PB3)"
+"C2" = "USART1_RX (PA10)"
+"C3" = "USART6_RX (PA12)"
+"D4" = "USART1_RX (PB7)"
+"E4" = "USART2_RX (PA3)"
+[models.pin_capability.pwm]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy and TIMx_CHyN timer outputs (all timers with output channels; TIM6/TIM7 basic timers have none) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"A2" = "TIM2_CH1 (PA15)"
+"A3" = "TIM2_CH2 (PB3)"
+"A4" = "TIM3_CH1 (PB4)"
+"B4" = "TIM3_CH2 (PB5)"
+"B5" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"C1" = "TIM1_CH4 (PA11)"
+"C2" = "TIM1_CH3 (PA10)"
+"C4" = "TIM4_CH1 (PB6)"
+"C5" = "TIM4_CH4, TIM11_CH1 (PB9)"
+"D1" = "TIM1_CH1 (PA8)"
+"D2" = "TIM1_CH2 (PA9)"
+"D4" = "TIM4_CH2 (PB7)"
+"E1" = "TIM1_CH3N (PB15)"
+"E3" = "TIM2_CH3 (PB10)"
+"E4" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"E5" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"F1" = "TIM1_CH2N (PB14)"
+"F3" = "TIM1_CH1N, TIM3_CH2 (PA7)"
+"F4" = "TIM3_CH1 (PA6)"
+"F5" = "TIM2_CH1 (PA5)"
+"F6" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"G1" = "TIM1_CH1N (PB13)"
+"G4" = "TIM1_CH3N, TIM3_CH4 (PB1)"
+"G5" = "TIM1_CH2N, TIM3_CH3 (PB0)"
+"G7" = "TIM2_CH2, TIM5_CH2 (PA1)"
+[models.pin_capability.timer_capture]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy timer channels usable as input capture (complementary CHyN pins excluded) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"A2" = "TIM2_CH1 (PA15)"
+"A3" = "TIM2_CH2 (PB3)"
+"A4" = "TIM3_CH1 (PB4)"
+"B4" = "TIM3_CH2 (PB5)"
+"B5" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"C1" = "TIM1_CH4 (PA11)"
+"C2" = "TIM1_CH3 (PA10)"
+"C4" = "TIM4_CH1 (PB6)"
+"C5" = "TIM4_CH4, TIM11_CH1 (PB9)"
+"D1" = "TIM1_CH1 (PA8)"
+"D2" = "TIM1_CH2 (PA9)"
+"D4" = "TIM4_CH2 (PB7)"
+"E3" = "TIM2_CH3 (PB10)"
+"E4" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"E5" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"F3" = "TIM3_CH2 (PA7)"
+"F4" = "TIM3_CH1 (PA6)"
+"F5" = "TIM2_CH1 (PA5)"
+"F6" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"G4" = "TIM3_CH4 (PB1)"
+"G5" = "TIM3_CH3 (PB0)"
+"G7" = "TIM2_CH2, TIM5_CH2 (PA1)"
+
 
 # Bootloader UART RX pad bias. Sources, each read from the PDF:
 #   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
@@ -731,6 +979,151 @@ basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current I
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
 missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_SCK (shared with I2Sx_CK) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["20", "39", "41"]
+[models.pin_capability.spi_sck.pads]
+"21" = "SPI1_SCK (PA5)"
+"26" = "SPI5_SCK (PB0)"
+"29" = "SPI2_SCK (PB10)"
+"33" = "SPI3_SCK (PB12)"
+"34" = "SPI2_SCK, SPI4_SCK (PB13)"
+"38" = "SPI2_SCK (PC7)"
+"51" = "SPI3_SCK (PC10)"
+"55" = "SPI1_SCK, SPI3_SCK (PB3)"
+"20" = "USART2_CK (PA4) (AF7)"
+"39" = "USART6_CK (PC8) (AF8)"
+"41" = "USART1_CK (PA8) (AF7)"
+[models.pin_capability.spi_mosi]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["16", "37", "42", "44", "50", "58"]
+[models.pin_capability.spi_mosi.pads]
+"11" = "SPI2_MOSI (PC3)"
+"15" = "SPI4_MOSI (PA1)"
+"23" = "SPI1_MOSI (PA7)"
+"36" = "SPI2_MOSI (PB15)"
+"43" = "SPI5_MOSI (PA10)"
+"53" = "SPI3_MOSI (PC12)"
+"57" = "SPI1_MOSI, SPI3_MOSI (PB5)"
+"61" = "SPI5_MOSI (PB8)"
+"16" = "USART2_TX (PA2) (AF7)"
+"37" = "USART6_TX (PC6) (AF8)"
+"42" = "USART1_TX (PA9) (AF7)"
+"44" = "USART6_TX (PA11) (AF8)"
+"50" = "USART1_TX (PA15) (AF7)"
+"58" = "USART1_TX (PB6) (AF7)"
+[models.pin_capability.spi_miso]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MISO per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["17", "38", "43", "55", "59"]
+[models.pin_capability.spi_miso.pads]
+"10" = "SPI2_MISO (PC2)"
+"22" = "SPI1_MISO (PA6)"
+"35" = "SPI2_MISO (PB14)"
+"44" = "SPI4_MISO (PA11)"
+"45" = "SPI5_MISO (PA12)"
+"52" = "SPI3_MISO (PC11)"
+"56" = "SPI1_MISO, SPI3_MISO (PB4)"
+"17" = "USART2_RX (PA3) (AF7)"
+"38" = "USART6_RX (PC7) (AF8)"
+"43" = "USART1_RX (PA10) (AF7)"
+"55" = "USART1_RX (PB3) (AF7)"
+"59" = "USART1_RX (PB7) (AF7)"
+[models.pin_capability.i2c_sda]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SDA per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"40" = "I2C3_SDA (PC9)"
+"55" = "I2C2_SDA (PB3)"
+"56" = "I2C3_SDA (PB4)"
+"59" = "I2C1_SDA (PB7)"
+"61" = "I2C3_SDA (PB8)"
+"62" = "I2C1_SDA, I2C2_SDA (PB9)"
+[models.pin_capability.i2c_scl]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SCL per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"29" = "I2C2_SCL (PB10)"
+"41" = "I2C3_SCL (PA8)"
+"58" = "I2C1_SCL (PB6)"
+"61" = "I2C1_SCL (PB8)"
+[models.pin_capability.uart_tx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_TX/UARTx_TX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"16" = "USART2_TX (PA2)"
+"37" = "USART6_TX (PC6)"
+"42" = "USART1_TX (PA9)"
+"44" = "USART6_TX (PA11)"
+"50" = "USART1_TX (PA15)"
+"58" = "USART1_TX (PB6)"
+[models.pin_capability.uart_rx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_RX/UARTx_RX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"17" = "USART2_RX (PA3)"
+"38" = "USART6_RX (PC7)"
+"43" = "USART1_RX (PA10)"
+"45" = "USART6_RX (PA12)"
+"55" = "USART1_RX (PB3)"
+"59" = "USART1_RX (PB7)"
+[models.pin_capability.pwm]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy and TIMx_CHyN timer outputs (all timers with output channels; TIM6/TIM7 basic timers have none) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"14" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"15" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"16" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"17" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"21" = "TIM2_CH1 (PA5)"
+"22" = "TIM3_CH1 (PA6)"
+"23" = "TIM1_CH1N, TIM3_CH2 (PA7)"
+"26" = "TIM1_CH2N, TIM3_CH3 (PB0)"
+"27" = "TIM1_CH3N, TIM3_CH4 (PB1)"
+"29" = "TIM2_CH3 (PB10)"
+"34" = "TIM1_CH1N (PB13)"
+"35" = "TIM1_CH2N (PB14)"
+"36" = "TIM1_CH3N (PB15)"
+"37" = "TIM3_CH1 (PC6)"
+"38" = "TIM3_CH2 (PC7)"
+"39" = "TIM3_CH3 (PC8)"
+"40" = "TIM3_CH4 (PC9)"
+"41" = "TIM1_CH1 (PA8)"
+"42" = "TIM1_CH2 (PA9)"
+"43" = "TIM1_CH3 (PA10)"
+"44" = "TIM1_CH4 (PA11)"
+"50" = "TIM2_CH1 (PA15)"
+"55" = "TIM2_CH2 (PB3)"
+"56" = "TIM3_CH1 (PB4)"
+"57" = "TIM3_CH2 (PB5)"
+"58" = "TIM4_CH1 (PB6)"
+"59" = "TIM4_CH2 (PB7)"
+"61" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"62" = "TIM4_CH4, TIM11_CH1 (PB9)"
+[models.pin_capability.timer_capture]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy timer channels usable as input capture (complementary CHyN pins excluded) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"14" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"15" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"16" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"17" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"21" = "TIM2_CH1 (PA5)"
+"22" = "TIM3_CH1 (PA6)"
+"23" = "TIM3_CH2 (PA7)"
+"26" = "TIM3_CH3 (PB0)"
+"27" = "TIM3_CH4 (PB1)"
+"29" = "TIM2_CH3 (PB10)"
+"37" = "TIM3_CH1 (PC6)"
+"38" = "TIM3_CH2 (PC7)"
+"39" = "TIM3_CH3 (PC8)"
+"40" = "TIM3_CH4 (PC9)"
+"41" = "TIM1_CH1 (PA8)"
+"42" = "TIM1_CH2 (PA9)"
+"43" = "TIM1_CH3 (PA10)"
+"44" = "TIM1_CH4 (PA11)"
+"50" = "TIM2_CH1 (PA15)"
+"55" = "TIM2_CH2 (PB3)"
+"56" = "TIM3_CH1 (PB4)"
+"57" = "TIM3_CH2 (PB5)"
+"58" = "TIM4_CH1 (PB6)"
+"59" = "TIM4_CH2 (PB7)"
+"61" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"62" = "TIM4_CH4, TIM11_CH1 (PB9)"
+
 
 # Bootloader UART RX pad bias. Sources, each read from the PDF:
 #   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
@@ -1040,6 +1433,187 @@ basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current I
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
 missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_SCK (shared with I2Sx_CK) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["29", "65", "67", "88"]
+[models.pin_capability.spi_sck.pads]
+"1" = "SPI4_SCK, SPI5_SCK (PE2)"
+"30" = "SPI1_SCK (PA5)"
+"35" = "SPI5_SCK (PB0)"
+"43" = "SPI4_SCK, SPI5_SCK (PE12)"
+"47" = "SPI2_SCK (PB10)"
+"51" = "SPI3_SCK (PB12)"
+"52" = "SPI2_SCK, SPI4_SCK (PB13)"
+"64" = "SPI2_SCK (PC7)"
+"78" = "SPI3_SCK (PC10)"
+"84" = "SPI2_SCK (PD3)"
+"89" = "SPI1_SCK, SPI3_SCK (PB3)"
+"29" = "USART2_CK (PA4) (AF7)"
+"65" = "USART6_CK (PC8) (AF8)"
+"67" = "USART1_CK (PA8) (AF7)"
+"88" = "USART2_CK (PD7) (AF7)"
+[models.pin_capability.spi_mosi]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["25", "63", "68", "70", "77", "86", "92"]
+[models.pin_capability.spi_mosi.pads]
+"5" = "SPI4_MOSI, SPI5_MOSI (PE6)"
+"18" = "SPI2_MOSI (PC3)"
+"24" = "SPI4_MOSI (PA1)"
+"32" = "SPI1_MOSI (PA7)"
+"45" = "SPI4_MOSI, SPI5_MOSI (PE14)"
+"54" = "SPI2_MOSI (PB15)"
+"69" = "SPI5_MOSI (PA10)"
+"80" = "SPI3_MOSI (PC12)"
+"87" = "SPI3_MOSI (PD6)"
+"91" = "SPI1_MOSI, SPI3_MOSI (PB5)"
+"95" = "SPI5_MOSI (PB8)"
+"25" = "USART2_TX (PA2) (AF7)"
+"63" = "USART6_TX (PC6) (AF8)"
+"68" = "USART1_TX (PA9) (AF7)"
+"70" = "USART6_TX (PA11) (AF8)"
+"77" = "USART1_TX (PA15) (AF7)"
+"86" = "USART2_TX (PD5) (AF7)"
+"92" = "USART1_TX (PB6) (AF7)"
+[models.pin_capability.spi_miso]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MISO per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["26", "64", "69", "87", "89", "93"]
+[models.pin_capability.spi_miso.pads]
+"4" = "SPI4_MISO, SPI5_MISO (PE5)"
+"17" = "SPI2_MISO (PC2)"
+"31" = "SPI1_MISO (PA6)"
+"44" = "SPI4_MISO, SPI5_MISO (PE13)"
+"53" = "SPI2_MISO (PB14)"
+"70" = "SPI4_MISO (PA11)"
+"71" = "SPI5_MISO (PA12)"
+"79" = "SPI3_MISO (PC11)"
+"90" = "SPI1_MISO, SPI3_MISO (PB4)"
+"26" = "USART2_RX (PA3) (AF7)"
+"64" = "USART6_RX (PC7) (AF8)"
+"69" = "USART1_RX (PA10) (AF7)"
+"87" = "USART2_RX (PD6) (AF7)"
+"89" = "USART1_RX (PB3) (AF7)"
+"93" = "USART1_RX (PB7) (AF7)"
+[models.pin_capability.i2c_sda]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SDA per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"66" = "I2C3_SDA (PC9)"
+"89" = "I2C2_SDA (PB3)"
+"90" = "I2C3_SDA (PB4)"
+"93" = "I2C1_SDA (PB7)"
+"95" = "I2C3_SDA (PB8)"
+"96" = "I2C1_SDA, I2C2_SDA (PB9)"
+[models.pin_capability.i2c_scl]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SCL per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"47" = "I2C2_SCL (PB10)"
+"67" = "I2C3_SCL (PA8)"
+"92" = "I2C1_SCL (PB6)"
+"95" = "I2C1_SCL (PB8)"
+[models.pin_capability.uart_tx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_TX/UARTx_TX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"25" = "USART2_TX (PA2)"
+"63" = "USART6_TX (PC6)"
+"68" = "USART1_TX (PA9)"
+"70" = "USART6_TX (PA11)"
+"77" = "USART1_TX (PA15)"
+"86" = "USART2_TX (PD5)"
+"92" = "USART1_TX (PB6)"
+[models.pin_capability.uart_rx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_RX/UARTx_RX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"26" = "USART2_RX (PA3)"
+"64" = "USART6_RX (PC7)"
+"69" = "USART1_RX (PA10)"
+"71" = "USART6_RX (PA12)"
+"87" = "USART2_RX (PD6)"
+"89" = "USART1_RX (PB3)"
+"93" = "USART1_RX (PB7)"
+[models.pin_capability.pwm]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy and TIMx_CHyN timer outputs (all timers with output channels; TIM6/TIM7 basic timers have none) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"4" = "TIM9_CH1 (PE5)"
+"5" = "TIM9_CH2 (PE6)"
+"23" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"24" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"25" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"26" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"30" = "TIM2_CH1 (PA5)"
+"31" = "TIM3_CH1 (PA6)"
+"32" = "TIM1_CH1N, TIM3_CH2 (PA7)"
+"35" = "TIM1_CH2N, TIM3_CH3 (PB0)"
+"36" = "TIM1_CH3N, TIM3_CH4 (PB1)"
+"39" = "TIM1_CH1N (PE8)"
+"40" = "TIM1_CH1 (PE9)"
+"41" = "TIM1_CH2N (PE10)"
+"42" = "TIM1_CH2 (PE11)"
+"43" = "TIM1_CH3N (PE12)"
+"44" = "TIM1_CH3 (PE13)"
+"45" = "TIM1_CH4 (PE14)"
+"47" = "TIM2_CH3 (PB10)"
+"52" = "TIM1_CH1N (PB13)"
+"53" = "TIM1_CH2N (PB14)"
+"54" = "TIM1_CH3N (PB15)"
+"59" = "TIM4_CH1 (PD12)"
+"60" = "TIM4_CH2 (PD13)"
+"61" = "TIM4_CH3 (PD14)"
+"62" = "TIM4_CH4 (PD15)"
+"63" = "TIM3_CH1 (PC6)"
+"64" = "TIM3_CH2 (PC7)"
+"65" = "TIM3_CH3 (PC8)"
+"66" = "TIM3_CH4 (PC9)"
+"67" = "TIM1_CH1 (PA8)"
+"68" = "TIM1_CH2 (PA9)"
+"69" = "TIM1_CH3 (PA10)"
+"70" = "TIM1_CH4 (PA11)"
+"77" = "TIM2_CH1 (PA15)"
+"89" = "TIM2_CH2 (PB3)"
+"90" = "TIM3_CH1 (PB4)"
+"91" = "TIM3_CH2 (PB5)"
+"92" = "TIM4_CH1 (PB6)"
+"93" = "TIM4_CH2 (PB7)"
+"95" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"96" = "TIM4_CH4, TIM11_CH1 (PB9)"
+[models.pin_capability.timer_capture]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy timer channels usable as input capture (complementary CHyN pins excluded) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"4" = "TIM9_CH1 (PE5)"
+"5" = "TIM9_CH2 (PE6)"
+"23" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"24" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"25" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"26" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"30" = "TIM2_CH1 (PA5)"
+"31" = "TIM3_CH1 (PA6)"
+"32" = "TIM3_CH2 (PA7)"
+"35" = "TIM3_CH3 (PB0)"
+"36" = "TIM3_CH4 (PB1)"
+"40" = "TIM1_CH1 (PE9)"
+"42" = "TIM1_CH2 (PE11)"
+"44" = "TIM1_CH3 (PE13)"
+"45" = "TIM1_CH4 (PE14)"
+"47" = "TIM2_CH3 (PB10)"
+"59" = "TIM4_CH1 (PD12)"
+"60" = "TIM4_CH2 (PD13)"
+"61" = "TIM4_CH3 (PD14)"
+"62" = "TIM4_CH4 (PD15)"
+"63" = "TIM3_CH1 (PC6)"
+"64" = "TIM3_CH2 (PC7)"
+"65" = "TIM3_CH3 (PC8)"
+"66" = "TIM3_CH4 (PC9)"
+"67" = "TIM1_CH1 (PA8)"
+"68" = "TIM1_CH2 (PA9)"
+"69" = "TIM1_CH3 (PA10)"
+"70" = "TIM1_CH4 (PA11)"
+"77" = "TIM2_CH1 (PA15)"
+"89" = "TIM2_CH2 (PB3)"
+"90" = "TIM3_CH1 (PB4)"
+"91" = "TIM3_CH2 (PB5)"
+"92" = "TIM4_CH1 (PB6)"
+"93" = "TIM4_CH2 (PB7)"
+"95" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"96" = "TIM4_CH4, TIM11_CH1 (PB9)"
+
 
 # Bootloader UART RX pad bias. Sources, each read from the PDF:
 #   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
@@ -1357,6 +1931,190 @@ basis = "STM32F411xC/xE DS10314 Rev 8, Table 53 p.98 I/O input leakage current I
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "reset_pin_strap", "boot0_input_thresholds", "adc_pin_map", "boot0_overvoltage_tolerance"]
 missing = ["boot0_normal_boot_polarity", "boot0_internal_pull", "vcap_regulator_output", "ft_pin_five_volt_tolerance", "alternate_function_tables", "gpio_vih_vil_voh_vol_on_non_strap_pads", "f411_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_SCK (shared with I2Sx_CK) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["A5", "M3", "D11", "E10"]
+[models.pin_capability.spi_sck.pads]
+"A8" = "SPI1_SCK, SPI3_SCK (PB3)"
+"B2" = "SPI4_SCK, SPI5_SCK (PE2)"
+"B8" = "SPI2_SCK (PD3)"
+"B11" = "SPI3_SCK (PC10)"
+"E11" = "SPI2_SCK (PC7)"
+"K4" = "SPI1_SCK (PA5)"
+"K12" = "SPI2_SCK, SPI4_SCK (PB13)"
+"L9" = "SPI4_SCK, SPI5_SCK (PE12)"
+"L10" = "SPI2_SCK (PB10)"
+"L12" = "SPI3_SCK (PB12)"
+"M5" = "SPI5_SCK (PB0)"
+"A5" = "USART2_CK (PD7) (AF7)"
+"M3" = "USART2_CK (PA4) (AF7)"
+"D11" = "USART1_CK (PA8) (AF7)"
+"E10" = "USART6_CK (PC8) (AF8)"
+[models.pin_capability.spi_mosi]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["A6", "A9", "B5", "K3", "B12", "D10", "E12"]
+[models.pin_capability.spi_mosi.pads]
+"A3" = "SPI5_MOSI (PB8)"
+"B6" = "SPI3_MOSI (PD6)"
+"B10" = "SPI3_MOSI (PC12)"
+"C5" = "SPI1_MOSI, SPI3_MOSI (PB5)"
+"C12" = "SPI5_MOSI (PA10)"
+"D2" = "SPI4_MOSI, SPI5_MOSI (PE6)"
+"K2" = "SPI2_MOSI (PC3)"
+"K10" = "SPI2_MOSI (PB15)"
+"M2" = "SPI4_MOSI (PA1)"
+"M4" = "SPI1_MOSI (PA7)"
+"M11" = "SPI4_MOSI, SPI5_MOSI (PE14)"
+"A6" = "USART2_TX (PD5) (AF7)"
+"A9" = "USART1_TX (PA15) (AF7)"
+"B5" = "USART1_TX (PB6) (AF7)"
+"K3" = "USART2_TX (PA2) (AF7)"
+"B12" = "USART6_TX (PA11) (AF8)"
+"D10" = "USART1_TX (PA9) (AF7)"
+"E12" = "USART6_TX (PC6) (AF8)"
+[models.pin_capability.spi_miso]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MISO per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
+master_only = ["A8", "B4", "B6", "L3", "C12", "E11"]
+[models.pin_capability.spi_miso.pads]
+"A7" = "SPI1_MISO, SPI3_MISO (PB4)"
+"A12" = "SPI5_MISO (PA12)"
+"B12" = "SPI4_MISO (PA11)"
+"C2" = "SPI4_MISO, SPI5_MISO (PE5)"
+"C10" = "SPI3_MISO (PC11)"
+"J3" = "SPI2_MISO (PC2)"
+"K11" = "SPI2_MISO (PB14)"
+"L4" = "SPI1_MISO (PA6)"
+"M10" = "SPI4_MISO, SPI5_MISO (PE13)"
+"A8" = "USART1_RX (PB3) (AF7)"
+"B4" = "USART1_RX (PB7) (AF7)"
+"B6" = "USART2_RX (PD6) (AF7)"
+"L3" = "USART2_RX (PA3) (AF7)"
+"C12" = "USART1_RX (PA10) (AF7)"
+"E11" = "USART6_RX (PC7) (AF8)"
+[models.pin_capability.i2c_sda]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SDA per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"A3" = "I2C3_SDA (PB8)"
+"A7" = "I2C3_SDA (PB4)"
+"A8" = "I2C2_SDA (PB3)"
+"B3" = "I2C1_SDA, I2C2_SDA (PB9)"
+"B4" = "I2C1_SDA (PB7)"
+"D12" = "I2C3_SDA (PC9)"
+"K9" = "I2C2_SDA (PB11)"
+[models.pin_capability.i2c_scl]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): I2Cx_SCL per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"A3" = "I2C1_SCL (PB8)"
+"B5" = "I2C1_SCL (PB6)"
+"D11" = "I2C3_SCL (PA8)"
+"L10" = "I2C2_SCL (PB10)"
+[models.pin_capability.uart_tx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_TX/UARTx_TX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"A6" = "USART2_TX (PD5)"
+"A9" = "USART1_TX (PA15)"
+"B5" = "USART1_TX (PB6)"
+"B12" = "USART6_TX (PA11)"
+"D10" = "USART1_TX (PA9)"
+"E12" = "USART6_TX (PC6)"
+"K3" = "USART2_TX (PA2)"
+[models.pin_capability.uart_rx]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): USARTx_RX/UARTx_RX per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"A8" = "USART1_RX (PB3)"
+"A12" = "USART6_RX (PA12)"
+"B4" = "USART1_RX (PB7)"
+"B6" = "USART2_RX (PD6)"
+"C12" = "USART1_RX (PA10)"
+"E11" = "USART6_RX (PC7)"
+"L3" = "USART2_RX (PA3)"
+[models.pin_capability.pwm]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy and TIMx_CHyN timer outputs (all timers with output channels; TIM6/TIM7 basic timers have none) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"A3" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"A7" = "TIM3_CH1 (PB4)"
+"A8" = "TIM2_CH2 (PB3)"
+"A9" = "TIM2_CH1 (PA15)"
+"B3" = "TIM4_CH4, TIM11_CH1 (PB9)"
+"B4" = "TIM4_CH2 (PB7)"
+"B5" = "TIM4_CH1 (PB6)"
+"B12" = "TIM1_CH4 (PA11)"
+"C2" = "TIM9_CH1 (PE5)"
+"C5" = "TIM3_CH2 (PB5)"
+"C12" = "TIM1_CH3 (PA10)"
+"D2" = "TIM9_CH2 (PE6)"
+"D10" = "TIM1_CH2 (PA9)"
+"D11" = "TIM1_CH1 (PA8)"
+"D12" = "TIM3_CH4 (PC9)"
+"E10" = "TIM3_CH3 (PC8)"
+"E11" = "TIM3_CH2 (PC7)"
+"E12" = "TIM3_CH1 (PC6)"
+"H10" = "TIM4_CH4 (PD15)"
+"H11" = "TIM4_CH3 (PD14)"
+"H12" = "TIM4_CH2 (PD13)"
+"J10" = "TIM4_CH1 (PD12)"
+"K3" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"K4" = "TIM2_CH1 (PA5)"
+"K9" = "TIM2_CH4 (PB11)"
+"K10" = "TIM1_CH3N (PB15)"
+"K11" = "TIM1_CH2N (PB14)"
+"K12" = "TIM1_CH1N (PB13)"
+"L2" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"L3" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"L4" = "TIM3_CH1 (PA6)"
+"L7" = "TIM1_CH1N (PE8)"
+"L8" = "TIM1_CH2N (PE10)"
+"L9" = "TIM1_CH3N (PE12)"
+"L10" = "TIM2_CH3 (PB10)"
+"M2" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"M4" = "TIM1_CH1N, TIM3_CH2 (PA7)"
+"M5" = "TIM1_CH2N, TIM3_CH3 (PB0)"
+"M6" = "TIM1_CH3N, TIM3_CH4 (PB1)"
+"M8" = "TIM1_CH1 (PE9)"
+"M9" = "TIM1_CH2 (PE11)"
+"M10" = "TIM1_CH3 (PE13)"
+"M11" = "TIM1_CH4 (PE14)"
+[models.pin_capability.timer_capture]
+basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): TIMx_CHy timer channels usable as input capture (complementary CHyN pins excluded) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.timer_capture.pads]
+"A3" = "TIM4_CH3, TIM10_CH1 (PB8)"
+"A7" = "TIM3_CH1 (PB4)"
+"A8" = "TIM2_CH2 (PB3)"
+"A9" = "TIM2_CH1 (PA15)"
+"B3" = "TIM4_CH4, TIM11_CH1 (PB9)"
+"B4" = "TIM4_CH2 (PB7)"
+"B5" = "TIM4_CH1 (PB6)"
+"B12" = "TIM1_CH4 (PA11)"
+"C2" = "TIM9_CH1 (PE5)"
+"C5" = "TIM3_CH2 (PB5)"
+"C12" = "TIM1_CH3 (PA10)"
+"D2" = "TIM9_CH2 (PE6)"
+"D10" = "TIM1_CH2 (PA9)"
+"D11" = "TIM1_CH1 (PA8)"
+"D12" = "TIM3_CH4 (PC9)"
+"E10" = "TIM3_CH3 (PC8)"
+"E11" = "TIM3_CH2 (PC7)"
+"E12" = "TIM3_CH1 (PC6)"
+"H10" = "TIM4_CH4 (PD15)"
+"H11" = "TIM4_CH3 (PD14)"
+"H12" = "TIM4_CH2 (PD13)"
+"J10" = "TIM4_CH1 (PD12)"
+"K3" = "TIM2_CH3, TIM5_CH3, TIM9_CH1 (PA2)"
+"K4" = "TIM2_CH1 (PA5)"
+"K9" = "TIM2_CH4 (PB11)"
+"L2" = "TIM2_CH1, TIM5_CH1 (PA0)"
+"L3" = "TIM2_CH4, TIM5_CH4, TIM9_CH2 (PA3)"
+"L4" = "TIM3_CH1 (PA6)"
+"L10" = "TIM2_CH3 (PB10)"
+"M2" = "TIM2_CH2, TIM5_CH2 (PA1)"
+"M4" = "TIM3_CH2 (PA7)"
+"M5" = "TIM3_CH3 (PB0)"
+"M6" = "TIM3_CH4 (PB1)"
+"M8" = "TIM1_CH1 (PE9)"
+"M9" = "TIM1_CH2 (PE11)"
+"M10" = "TIM1_CH3 (PE13)"
+"M11" = "TIM1_CH4 (PE14)"
+
 
 # Bootloader UART RX pad bias. Sources, each read from the PDF:
 #   AN2606 Rev 70 (February 2026), https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf sha256 25b466e39ecc61671dcb988d8ca538462d6452d85f68140cb981ed728f57e654;
@@ -1498,6 +2256,10 @@ abs_max_basis = "Nordic nRF52832 Product Specification v1.9, Table 8 p.20 absolu
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "adc_pin_map"]
 missing = ["boot_strap_levels_not_applicable_no_strap_pins", "reset_pin_uicr_configuration", "theta_ja_not_in_specification", "per_pin_current_rating", "gpio_vih_vil_voh_vol_on_pads", "alternate_function_tables", "nfc_pin_ratings", "nrf52832_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.routed]
+basis = "Nordic nRF52832 Product Specification v1.9 (page numbers are PDF pages, which equal the printed 'Page N' footers; copy nRF52832_PS.pdf sha256 2ea4a573c232d2b2b52056e718d4bc173e2cc019b08394ce03c848b15d577093): section 20 GPIO feature list (p.114): 'All pins can be individually mapped to interface blocks for layout flexibility' and 'All pins can be used by the PPI task/event system'. SPIM section 31 (p.285) 'Individual selection of IO pin for each SPI signal' and 31.5 Master mode pin configuration (p.288): SCK, MOSI and MISO mapped by PSEL.SCK/PSEL.MOSI/PSEL.MISO. TWIM section 33.7 Master mode pin configuration (p.314): SCL and SDA mapped by PSEL.SCL/PSEL.SDA. UARTE section 35.9 Pin configuration (p.341): RXD, CTS, RTS and TXD mapped by PSEL.RXD/PSEL.CTS/PSEL.RTS/PSEL.TXD. PWM section 47.4 Pin configuration (p.507): OUT[n] mapped by PSEL.OUT[n]. timer_capture is routed through GPIOTE and PPI, not a dedicated pin: section GPIOTE (p.161) IN[n] events 'generated from changes occurring at the inputs of individual pins' selected by CONFIG[n].PSEL (8 channels), PPI (p.172) connects that event to the TIMER TASKS_CAPTURE[n] task (TIMER section p.238, TASKS_CAPTURE[n] p.240); at most 8 pins at a time can be captured this way. Restrictions found: the GPIO is the single 32-pin port P0.00-P0.31; section 4.3 GPIO usage restrictions (p.18) Tables 5 and 6 recommend P0.22-P0.31 (the pads near the radio) for 'Low drive, low frequency I/O only' (up to 10 kHz) to protect radio performance, a recommendation not a hardware limit, so a fast bus on those pads works but degrades radio sensitivity; P0.00/P0.01 are the XL1/XL2 32.768 kHz crystal pads, P0.09/P0.10 are NFC1/NFC2 until UICR NFCPINS is set (Table 7 p.18), and P0.21 is nRESET only when UICR PSELRESET is programmed; one peripheral may drive a pin at a time; hardware peripheral only, a software implementation can use any pad"
+functions = ["spi_sck", "spi_mosi", "spi_miso", "i2c_sda", "i2c_scl", "uart_tx", "uart_rx", "pwm", "timer_capture"]
+
 
 [models.pin_capability.reset_mode]
 basis = "nRF52832 Product Specification v1.9, section 20.3.10 PIN_CNF[n] reset value 0x00000002: input, buffer disconnected, no pull (PDF p.136), so GPIOs are high impedance; section 16.1 DAP note: the SWDIO line has an internal pull-up and the SWDCLK line an internal pull-down (PDF p.73)"
@@ -1625,6 +2387,10 @@ abs_max_basis = "Nordic nRF52832 Product Specification v1.9, Table 8 p.20 absolu
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "absolute_ratings", "adc_pin_map"]
 missing = ["boot_strap_levels_not_applicable_no_strap_pins", "reset_pin_uicr_configuration", "theta_ja_not_in_specification", "per_pin_current_rating", "gpio_vih_vil_voh_vol_on_pads", "alternate_function_tables", "nfc_pin_ratings", "nrf52832_specific_renode_platform", "silicon_timing_and_errata"]
+[models.pin_capability.routed]
+basis = "Nordic nRF52832 Product Specification v1.9 (page numbers are PDF pages, which equal the printed 'Page N' footers; copy nRF52832_PS.pdf sha256 2ea4a573c232d2b2b52056e718d4bc173e2cc019b08394ce03c848b15d577093): section 20 GPIO feature list (p.114): 'All pins can be individually mapped to interface blocks for layout flexibility' and 'All pins can be used by the PPI task/event system'. SPIM section 31 (p.285) 'Individual selection of IO pin for each SPI signal' and 31.5 Master mode pin configuration (p.288): SCK, MOSI and MISO mapped by PSEL.SCK/PSEL.MOSI/PSEL.MISO. TWIM section 33.7 Master mode pin configuration (p.314): SCL and SDA mapped by PSEL.SCL/PSEL.SDA. UARTE section 35.9 Pin configuration (p.341): RXD, CTS, RTS and TXD mapped by PSEL.RXD/PSEL.CTS/PSEL.RTS/PSEL.TXD. PWM section 47.4 Pin configuration (p.507): OUT[n] mapped by PSEL.OUT[n]. timer_capture is routed through GPIOTE and PPI, not a dedicated pin: section GPIOTE (p.161) IN[n] events 'generated from changes occurring at the inputs of individual pins' selected by CONFIG[n].PSEL (8 channels), PPI (p.172) connects that event to the TIMER TASKS_CAPTURE[n] task (TIMER section p.238, TASKS_CAPTURE[n] p.240); at most 8 pins at a time can be captured this way. Restrictions found: the GPIO is the single 32-pin port P0.00-P0.31; section 4.3 GPIO usage restrictions (p.18) Tables 5 and 6 recommend P0.22-P0.31 (the pads near the radio) for 'Low drive, low frequency I/O only' (up to 10 kHz) to protect radio performance, a recommendation not a hardware limit, so a fast bus on those pads works but degrades radio sensitivity; P0.00/P0.01 are the XL1/XL2 32.768 kHz crystal pads, P0.09/P0.10 are NFC1/NFC2 until UICR NFCPINS is set (Table 7 p.18), and P0.21 is nRESET only when UICR PSELRESET is programmed; one peripheral may drive a pin at a time; hardware peripheral only, a software implementation can use any pad"
+functions = ["spi_sck", "spi_mosi", "spi_miso", "i2c_sda", "i2c_scl", "uart_tx", "uart_rx", "pwm", "timer_capture"]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Espressif ESP8266EX bare chip, QFN32 5 x 5 mm.
@@ -1798,6 +2564,50 @@ note = "U0TXD must not be pulled low externally while powering up"
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map", "per_pin_output_current_limit"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "strap_table_in_chip_datasheet", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPICLK on IO6 and HSPICLK on IO14; hardware peripheral only, a software (bit-banged) implementation can use any pad. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26)."
+[models.pin_capability.spi_sck.pads]
+"21" = "SPICLK (IO6)"
+"9" = "HSPICLK (IO14)"
+
+[models.pin_capability.spi_mosi]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPID/MOSI on IO8 and HSPID/MOSI on IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26)."
+[models.pin_capability.spi_mosi.pads]
+"23" = "SPID/MOSI (IO8)"
+"12" = "HSPID/MOSI (IO13)"
+
+[models.pin_capability.spi_miso]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPIQ/MISO on IO7 and HSPIQ/MISO on IO12; hardware peripheral only, a software (bit-banged) implementation can use any pad. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26)."
+[models.pin_capability.spi_miso.pads]
+"22" = "SPIQ/MISO (IO7)"
+"10" = "HSPIQ/MISO (IO12)"
+
+[models.pin_capability.i2c_sda]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26).; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.i2c_scl]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26).; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.uart_tx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0TXD on IO1 (U0TXD pin), U1TXD on IO2 (UART1 transmit only), and U0TXD swapped onto MTDO IO15; hardware peripheral only, a software (bit-banged) implementation can use any pad. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26)."
+[models.pin_capability.uart_tx.pads]
+"26" = "U0TXD (IO1)"
+"14" = "U1TXD (IO2)"
+"13" = "U0TXD swapped (IO15)"
+
+[models.pin_capability.uart_rx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0RXD on IO3, U1RXD on SD_D1 IO8, and U0RXD swapped onto MTCK IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26)."
+[models.pin_capability.uart_rx.pads]
+"25" = "U0RXD (IO3)"
+"23" = "U1RXD (IO8)"
+"12" = "U0RXD swapped (IO13)"
+
+[models.pin_capability.pwm]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.7 Pulse-Width Modulation, Table 4-7 (PDF p.21, printed 16/26): 'The functionality of PWM interfaces can be implemented via software programming ... the function of PWM is realized by interruption of the timer'. There is no hardware output-compare/PWM channel, so no pad can carry a hardware PWM; the Table 4-7 pins (PWM0 GPIO12, PWM1 GPIO15, PWM2 GPIO14, PWM3 GPIO4) are the software PWM defaults only. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26).; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.timer_capture]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Chapter 4 Peripheral Interface (PDF p.18-22, printed 13/26-17/26) lists GPIO, SDIO, SPI/HSPI, I2C (software), I2S, UART, PWM (software), IR Remote Control (software, Table 4-8, IR Rx on GPIO5) and ADC; no timer input-capture channel is described, so no pad can latch a hardware timer capture; edge timestamps need a GPIO interrupt read in software. Pad numbers are the QFN32 pin numbers of Table 2-1 Pin Definitions (PDF p.10, printed 5/26).; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ai-Thinker ESP-12F Wi-Fi module (ESP8266EX), 22 pads (structure only, no co-sim core).
@@ -1925,6 +2735,50 @@ note = "TXD high (floating or pulled up) at power-up; low selects the chip-test 
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPICLK on IO6 and HSPICLK on IO14; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash."
+[models.pin_capability.spi_sck.pads]
+"14" = "SPICLK (IO6, flash SCLK)"
+"5" = "HSPICLK (IO14)"
+
+[models.pin_capability.spi_mosi]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPID/MOSI on IO8 and HSPID/MOSI on IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash."
+[models.pin_capability.spi_mosi.pads]
+"13" = "SPID/MOSI (IO8, flash MOSI)"
+"7" = "HSPID/MOSI (IO13)"
+
+[models.pin_capability.spi_miso]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPIQ/MISO on IO7 and HSPIQ/MISO on IO12; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash."
+[models.pin_capability.spi_miso.pads]
+"10" = "SPIQ/MISO (IO7, flash MISO)"
+"6" = "HSPIQ/MISO (IO12)"
+
+[models.pin_capability.i2c_sda]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.i2c_scl]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.uart_tx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0TXD on IO1 (U0TXD pin), U1TXD on IO2 (UART1 transmit only), and U0TXD swapped onto MTDO IO15; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash."
+[models.pin_capability.uart_tx.pads]
+"22" = "U0TXD (IO1)"
+"17" = "U1TXD (IO2)"
+"16" = "U0TXD swapped (IO15)"
+
+[models.pin_capability.uart_rx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0RXD on IO3, U1RXD on SD_D1 IO8, and U0RXD swapped onto MTCK IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash."
+[models.pin_capability.uart_rx.pads]
+"21" = "U0RXD (IO3)"
+"13" = "U1RXD (IO8)"
+"7" = "U0RXD swapped (IO13)"
+
+[models.pin_capability.pwm]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.7 Pulse-Width Modulation, Table 4-7 (PDF p.21, printed 16/26): 'The functionality of PWM interfaces can be implemented via software programming ... the function of PWM is realized by interruption of the timer'. There is no hardware output-compare/PWM channel, so no pad can carry a hardware PWM; the Table 4-7 pins (PWM0 GPIO12, PWM1 GPIO15, PWM2 GPIO14, PWM3 GPIO4) are the software PWM defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.timer_capture]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Chapter 4 Peripheral Interface (PDF p.18-22, printed 13/26-17/26) lists GPIO, SDIO, SPI/HSPI, I2C (software), I2S, UART, PWM (software), IR Remote Control (software, Table 4-8, IR Rx on GPIO5) and ADC; no timer input-capture channel is described, so no pad can latch a hardware timer capture; edge timestamps need a GPIO interrupt read in software. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions (PDF p.10, printed page 6 of 23); the SPI flash pads CS0/MISO/MOSI/SCLK of the ESP-12F are the chip's flash SPI bus (SPICS0/SPIQ/SPID/SPICLK = IO11/IO7/IO8/IO6, ESP8266EX Table 4-2) and are wired to the module's own flash.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ai-Thinker ESP-07 / ESP-07S / ESP-12S Wi-Fi modules (ESP8266EX), 16 pads (structure only, no co-sim core).
@@ -2039,6 +2893,46 @@ note = "TXD high (floating or pulled up) at power-up; low selects the chip-test 
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPICLK on IO6 and HSPICLK on IO14; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules."
+[models.pin_capability.spi_sck.pads]
+"5" = "HSPICLK (IO14)"
+
+[models.pin_capability.spi_mosi]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPID/MOSI on IO8 and HSPID/MOSI on IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules."
+[models.pin_capability.spi_mosi.pads]
+"7" = "HSPID/MOSI (IO13)"
+
+[models.pin_capability.spi_miso]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPIQ/MISO on IO7 and HSPIQ/MISO on IO12; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules."
+[models.pin_capability.spi_miso.pads]
+"6" = "HSPIQ/MISO (IO12)"
+
+[models.pin_capability.i2c_sda]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.i2c_scl]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.uart_tx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0TXD on IO1 (U0TXD pin), U1TXD on IO2 (UART1 transmit only), and U0TXD swapped onto MTDO IO15; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules."
+[models.pin_capability.uart_tx.pads]
+"16" = "U0TXD (IO1)"
+"11" = "U1TXD (IO2)"
+"10" = "U0TXD swapped (IO15)"
+
+[models.pin_capability.uart_rx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0RXD on IO3, U1RXD on SD_D1 IO8, and U0RXD swapped onto MTCK IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules."
+[models.pin_capability.uart_rx.pads]
+"15" = "U0RXD (IO3)"
+"7" = "U0RXD swapped (IO13)"
+
+[models.pin_capability.pwm]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.7 Pulse-Width Modulation, Table 4-7 (PDF p.21, printed 16/26): 'The functionality of PWM interfaces can be implemented via software programming ... the function of PWM is realized by interruption of the timer'. There is no hardware output-compare/PWM channel, so no pad can carry a hardware PWM; the Table 4-7 pins (PWM0 GPIO12, PWM1 GPIO15, PWM2 GPIO14, PWM3 GPIO4) are the software PWM defaults only. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.timer_capture]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Chapter 4 Peripheral Interface (PDF p.18-22, printed 13/26-17/26) lists GPIO, SDIO, SPI/HSPI, I2C (software), I2S, UART, PWM (software), IR Remote Control (software, Table 4-8, IR Rx on GPIO5) and ADC; no timer input-capture channel is described, so no pad can latch a hardware timer capture; edge timestamps need a GPIO interrupt read in software. Module pad to chip GPIO mapping: Ai-Thinker ESP-01/07/12 Series Modules User's Manual V1.3, Table 2.2 ESP Series Module Pin Function Definitions, ESP-07/07S/12S column (PDF p.10, printed page 6 of 23: pad 5 IO14 HSPI_CLK, 6 IO12 HSPI_MISO, 7 IO13 HSPI_MOSI; UART0_CTS, 10 IO15 HSPI_CS; U0_RTS, 11 IO2 U1_TXD, 15 RXD, 16 TXD); the flash SPI bus is not brought out on the 16-pad modules.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Espressif ESP-WROOM-02 Wi-Fi module (ESP8266EX), 18 pins plus centre ground pad (structure only, no co-sim core).
@@ -2152,3 +3046,43 @@ note = "TXD high (floating or pulled up) at power-up; low selects the chip-test 
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "boot_strap_levels", "adc_pin_map"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "absolute_maximum_ratings", "pin_and_package_current_ratings", "alternate_function_tables", "thermal_resistance", "silicon_timing_and_errata"]
+[models.pin_capability.spi_sck]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPICLK on IO6 and HSPICLK on IO14; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out."
+[models.pin_capability.spi_sck.pads]
+"3" = "HSPICLK (IO14)"
+
+[models.pin_capability.spi_mosi]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPID/MOSI on IO8 and HSPID/MOSI on IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out."
+[models.pin_capability.spi_mosi.pads]
+"5" = "HSPID/MOSI (IO13)"
+
+[models.pin_capability.spi_miso]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.3 Serial Peripheral Interface, Table 4-2 Pin Definitions of SPIs and Table 4-3 Pin Definitions of HSPI (PDF p.19; the footer printed page is 14/26): SPIQ/MISO on IO7 and HSPIQ/MISO on IO12; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out."
+[models.pin_capability.spi_miso.pads]
+"4" = "HSPIQ/MISO (IO12)"
+
+[models.pin_capability.i2c_sda]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.i2c_scl]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.4 I2C Interface, Table 4-4 (PDF p.19-20, printed 14/26-15/26): 'ESP8266EX has one I2C, which is realized via software programming ... I2C interface functionality can be realized via software programming, and the clock frequency is 100 kHz at maximum'. There is no I2C hardware controller, so no pad can carry a hardware I2C; the Table 4-4 pins (SCL on MTMS/GPIO14, SDA on GPIO2) are the software bit-bang defaults only. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.uart_tx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0TXD on IO1 (U0TXD pin), U1TXD on IO2 (UART1 transmit only), and U0TXD swapped onto MTDO IO15; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out."
+[models.pin_capability.uart_tx.pads]
+"12" = "U0TXD (IO1)"
+"7" = "U1TXD (IO2)"
+"6" = "U0TXD swapped (IO15)"
+
+[models.pin_capability.uart_rx]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.6 UART, Table 4-6 Pin Definitions of UART (PDF p.20, printed 15/26) and the swap note (PDF p.21, printed 16/26: 'changing (U0TXD, U0RXD) to (MTDO, MTCK)'): U0RXD on IO3, U1RXD on SD_D1 IO8, and U0RXD swapped onto MTCK IO13; hardware peripheral only, a software (bit-banged) implementation can use any pad. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out."
+[models.pin_capability.uart_rx.pads]
+"11" = "U0RXD (IO3)"
+"5" = "U0RXD swapped (IO13)"
+
+[models.pin_capability.pwm]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Section 4.7 Pulse-Width Modulation, Table 4-7 (PDF p.21, printed 16/26): 'The functionality of PWM interfaces can be implemented via software programming ... the function of PWM is realized by interruption of the timer'. There is no hardware output-compare/PWM channel, so no pad can carry a hardware PWM; the Table 4-7 pins (PWM0 GPIO12, PWM1 GPIO15, PWM2 GPIO14, PWM3 GPIO4) are the software PWM defaults only. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+
+[models.pin_capability.timer_capture]
+basis = "Espressif ESP8266EX Datasheet Version 7.1 (2025.11), Chapter 4 Peripheral Interface (PDF p.18-22, printed 13/26-17/26) lists GPIO, SDIO, SPI/HSPI, I2C (software), I2S, UART, PWM (software), IR Remote Control (software, Table 4-8, IR Rx on GPIO5) and ADC; no timer input-capture channel is described, so no pad can latch a hardware timer capture; edge timestamps need a GPIO interrupt read in software. Module pad to chip GPIO mapping: Espressif ESP-WROOM-02 Datasheet v3.7, Figure 2-1 Pin Layout (PDF p.8) and Table 2-1 Pin Definitions (PDF p.8-9, printed 3/18-4/18: pad 3 IO14 HSPI_CLK, 4 IO12 HSPI_MISO, 5 IO13 HSPI_MOSI; UART0_CTS, 6 IO15, 7 IO2, 11 RXD, 12 TXD); the flash SPI bus is not brought out.; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+

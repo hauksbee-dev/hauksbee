@@ -411,6 +411,22 @@ fn mcu_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
             look: "Pin definitions / analog function table",
         });
     }
+    for (peripheral, name) in entry.named_peripherals() {
+        if let crate::schema::NamedPeripheral::Function(f) = peripheral {
+            out.push(Need {
+                key: format!("pin_function:{}", f.key()),
+                ask: format!(
+                    "[models.pin_capability.{key}] listing every pad of [models.pins] that can \
+                     carry {label} (an empty table when the package has none), basis citing the \
+                     alternate-function table and page; or, for a part that routes it to any \
+                     pad, {key} under [models.pin_capability.routed]. The card names it at {name}",
+                    key = f.key(),
+                    label = f.label(),
+                ),
+                look: "Alternate function mapping / pin definitions",
+            });
+        }
+    }
     if has(&|r| r.starts_with("vcap")) {
         out.push(Need {
             key: "supply_outputs:vcap".into(),
@@ -512,6 +528,10 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
         ("backend", _) => entry.params.get_str("backend").is_some(),
         ("straps", _) => !entry.straps.is_empty(),
         ("adc_pins", _) => entry.adc_declared(),
+        ("pin_function", key) => hauksbee_ir::pin_functions::PeripheralFunction::ALL
+            .iter()
+            .find(|f| f.key() == key)
+            .is_some_and(|f| entry.pin_capability.declares(*f)),
         ("rail_order", _) => entry
             .envelope
             .iter()

@@ -60,6 +60,7 @@ pub mod ipc2581;
 mod ipc356;
 pub mod kicad_dru;
 mod layout_lint;
+pub mod mate;
 pub use layout_lint::{NOT_ROUTED_FIX, NOT_ROUTED_MESSAGE_PREFIX, PANEL_COPIES_MESSAGE_PREFIX};
 mod netlint;
 mod netlist;

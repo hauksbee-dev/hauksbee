@@ -4012,6 +4012,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::DebugHeaderPinout
         | LintCheck::SwitchShort
         | LintCheck::PinMuxCapability
+        | LintCheck::FirmwareUnconnectedPad
         | LintCheck::SymbolCardPinMismatch
         | LintCheck::LedReversed
         | LintCheck::UnwiredConnector
@@ -4036,6 +4037,9 @@ const fn wiring_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::PinMuxCapability => {
             "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it."
+        }
+        LintCheck::FirmwareUnconnectedPad => {
+            "Wire the signal the firmware times or counts to the pad the finding names, or take that interrupt out of the firmware."
         }
         LintCheck::LedReversed => {
             "Turn the LED round so its anode faces the positive rail and its cathode ground."

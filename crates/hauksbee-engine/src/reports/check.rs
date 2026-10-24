@@ -222,6 +222,8 @@ impl CheckReport<'_> {
         // findings are the same wherever they are gathered.
         lint.findings
             .extend(crate::checks::layout_lint(board, input.geo_text(), Some(board_path)).findings);
+        lint.findings
+            .extend(super::firmware_intent::findings(board, lib, input.firmware));
         let evidence = input.evidence(&bound.report)?;
         hauksbee_ir::progress::begin_copper();
         let (clearance_input, mut drc) = input.drc()?;

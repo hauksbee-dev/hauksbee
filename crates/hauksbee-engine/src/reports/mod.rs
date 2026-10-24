@@ -21,6 +21,7 @@ pub mod ci_artifacts;
 pub mod cosim;
 pub mod coverage;
 pub mod drc;
+pub(crate) mod firmware_intent;
 pub mod lint;
 pub mod si;
 pub mod thermal;
@@ -297,6 +298,9 @@ pub(crate) struct StaticInputs<'a> {
     pub lib: &'a hauksbee_models::ModelLibrary,
     pub reader_notes: &'a [String],
     pub inputs: &'a [crate::result::JsonInputEvidence],
+    /// The `--firmware` image, which the static suite reads for what the program
+    /// means to use (see [`firmware_intent`]).
+    pub firmware: Option<&'a Path>,
 }
 
 impl StaticInputs<'_> {

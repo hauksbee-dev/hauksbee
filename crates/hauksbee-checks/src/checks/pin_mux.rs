@@ -758,4 +758,63 @@ mod tests {
         let spi = [(GND, "GND"), (LINK, "SPI_SCK")];
         assert!(run(&spi, vec![mcu(&[("14", LINK)]), at("output")]).is_empty());
     }
+    /// A made-up MCU whose card lists pad 13, and only pad 13, for the SPI clock.
+    fn synthetic_library() -> ModelLibrary {
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-pinmux-synth-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let table = |key: &str, pads: &str| {
+            format!(
+                "[models.pin_capability.{key}]\nbasis = \"synthetic card, table 1 p.1\"\n{pads}\n"
+            )
+        };
+        let mut card = String::from(
+            "[[models]]\nid = \"synth_spi_mcu\"\nkind = \"mcu\"\n\
+             [models.match]\nvalue_re = \"(?i)^SYNTHSPI\"\n\
+             [models.pins]\n\"1\" = \"vcc\"\n\"2\" = \"gnd\"\n\"13\" = \"pb5_sck\"\n\"14\" = \"pb6\"\n",
+        );
+        card += &table(
+            "spi_sck",
+            "[models.pin_capability.spi_sck.pads]\n\"13\" = \"SCK\"",
+        );
+        for key in [
+            "spi_mosi",
+            "spi_miso",
+            "i2c_sda",
+            "i2c_scl",
+            "uart_tx",
+            "uart_rx",
+            "pwm",
+            "timer_capture",
+        ] {
+            card += &table(key, "");
+        }
+        std::fs::write(dir.join("synth.toml"), card).expect("write card");
+        ModelLibrary::builtin()
+            .with_user_dir(&dir)
+            .expect("synthetic card loads")
+    }
+
+    #[test]
+    fn an_spi_clock_wired_to_a_pad_the_card_does_not_list_is_flagged_and_the_listed_pad_is_silent()
+    {
+        let lib = synthetic_library();
+        let nets = [(GND, "GND"), (A, "SCLK")];
+        let dev = || sensor(&[("1", "SCLK", A)]);
+        let on = |pad: &str| {
+            pin_mux_lint(
+                &board(&nets, vec![part("U1", "SYNTHSPI", &[(pad, A)]), dev()]),
+                &lib,
+            )
+            .findings
+        };
+        let found = on("14");
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].check, LintCheck::PinMuxCapability);
+        assert_eq!(found[0].severity, Severity::Medium);
+        assert!(found[0].message.contains("pad 14") && found[0].message.contains("SPI clock"));
+        assert!(found[0].message.contains("pad 13"), "{}", found[0].message);
+        // The control: the same part, the clock on pad 13.
+        assert!(on("13").is_empty());
+    }
 }

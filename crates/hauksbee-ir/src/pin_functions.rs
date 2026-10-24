@@ -253,11 +253,14 @@ pub enum PeripheralFunction {
     UartRx,
     /// A timer's PWM output.
     Pwm,
+    /// A timer's input-capture channel: the pad whose edge latches the counter
+    /// (an AVR `ICPn`, an STM32 `TIMx_CHy` pad read in input mode).
+    TimerCapture,
 }
 
 impl PeripheralFunction {
     /// Every function, for the drift tests and for a surface that lists them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::SpiSck,
         Self::SpiMosi,
         Self::SpiMiso,
@@ -266,6 +269,7 @@ impl PeripheralFunction {
         Self::UartTx,
         Self::UartRx,
         Self::Pwm,
+        Self::TimerCapture,
     ];
 
     /// The table key on a card (`spi_sck`).
@@ -280,6 +284,7 @@ impl PeripheralFunction {
             Self::UartTx => "uart_tx",
             Self::UartRx => "uart_rx",
             Self::Pwm => "pwm",
+            Self::TimerCapture => "timer_capture",
         }
     }
 
@@ -295,6 +300,7 @@ impl PeripheralFunction {
             Self::UartTx => "UART transmit (TX)",
             Self::UartRx => "UART receive (RX)",
             Self::Pwm => "hardware PWM output",
+            Self::TimerCapture => "timer input capture",
         }
     }
 }
@@ -330,6 +336,27 @@ pub fn peripheral_functions_named(name: &str) -> BTreeSet<PeripheralFunction> {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter_map(|w| WORDS.iter().find(|(k, _)| *k == w).map(|(_, f)| *f))
         .collect()
+}
+
+/// Whether the card pad role `role` names a timer input-capture pad.
+///
+/// A part `icp` or `icpN` (`pb0_icp1`, `pd4_icp1_xck1`) is the AVR input-capture
+/// pin. Only a card's own role says it; a net or a symbol pin called `ICP` is
+/// another matter and [`peripheral_functions_named`] does not read it.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::role_names_timer_capture;
+/// assert!(role_names_timer_capture("pb0_icp1"));
+/// assert!(!role_names_timer_capture("pb0_oc1a"));
+/// ```
+#[must_use]
+pub fn role_names_timer_capture(role: &str) -> bool {
+    role.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| {
+            w.strip_prefix("icp")
+                .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+        })
 }
 
 /// Whether `name` names a serial port by a whole word (`UART`, `USART`, `TXD`,

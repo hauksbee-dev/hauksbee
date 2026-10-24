@@ -2191,7 +2191,9 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
     check_xtal_int_caps(entry, p);
     check_reset_mode(entry, p);
     let cap = &entry.pin_capability;
+    check_named_peripherals_have_tables(entry, p);
     let mcu_tables = cap.adc.is_some()
+        || cap.routed.is_some()
         || PeripheralFunction::ALL
             .iter()
             .any(|f| cap.table(*f).is_some());
@@ -2201,6 +2203,7 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
     p.require(entry.kind == ComponentKind::Mcu, || {
         "[models.pin_capability.adc] belongs on an mcu card".into()
     });
+    check_routed_functions(entry, p);
     if let Some(adc) = &entry.pin_capability.adc {
         check_capability_table(
             entry,
@@ -2233,6 +2236,64 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
                 });
             }
         }
+    }
+}
+
+/// `[models.pin_capability.routed]`: a basis that cites the page, and only
+/// functions that exist and have no pad table of their own.
+fn check_routed_functions(entry: &ModelEntry, p: &mut Problems) {
+    let Some(routed) = &entry.pin_capability.routed else {
+        return;
+    };
+    p.require(!routed.basis.trim().is_empty(), || {
+        "[models.pin_capability.routed] needs a basis citing the sentence and page that say \
+         any pad can be selected"
+            .into()
+    });
+    p.require(!routed.functions.is_empty(), || {
+        "[models.pin_capability.routed] lists no function: leave the table out instead".into()
+    });
+    for key in &routed.functions {
+        let Some(function) = PeripheralFunction::ALL.iter().find(|f| f.key() == key) else {
+            p.push(format!(
+                "[models.pin_capability.routed] function '{key}' is not one of: {}",
+                PeripheralFunction::ALL
+                    .map(PeripheralFunction::key)
+                    .join(", ")
+            ));
+            continue;
+        };
+        p.require(entry.pin_capability.table(*function).is_none(), || {
+            format!(
+                "[models.pin_capability.routed] lists '{key}', which also has its own pad \
+                 table: a function is either routed to any pad or listed pad by pad"
+            )
+        });
+    }
+}
+
+/// A card that names a peripheral carries the table for it.
+///
+/// A pad map is the card's statement of what the package is. When a role in it
+/// (`pa5_spi1_sck`, `pd1_txd`, `pb0_icp1`, `pa0_adc0`) or the card's
+/// `[models.peripherals]` names a peripheral, the part has it, so the card
+/// states where it can go: a `[models.pin_capability.<function>]` table (empty
+/// when the package has no pad for it) or the `routed` declaration for a part
+/// that reaches any pad.
+fn check_named_peripherals_have_tables(entry: &ModelEntry, p: &mut Problems) {
+    if entry.kind != ComponentKind::Mcu {
+        return;
+    }
+    for (peripheral, name) in entry.named_peripherals() {
+        let key = peripheral.key();
+        p.require(entry.declares(peripheral), || {
+            format!(
+                "the card names {key} ({name}) but has no [models.pin_capability.{key}] \
+                 table: read the datasheet's alternate-function table and list the pads \
+                 (an empty table when the package has none), or declare the function \
+                 under [models.pin_capability.routed] when any pad can carry it"
+            )
+        });
     }
 }
 
@@ -4651,5 +4712,92 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         let mut e = listed(ComponentKind::Mcu);
         pull_up(&mut e, "p.85", &[("3", "PORTD0")]);
         rejects(&e, "supply or ground role");
+    }
+    /// An MCU card whose pad 19 is named for the SPI clock and pad 3 for an
+    /// input capture.
+    fn named_mcu() -> ModelEntry {
+        let mut e = listed(ComponentKind::Mcu);
+        pins(
+            &mut e,
+            &[
+                ("1", "vcc"),
+                ("2", "gnd"),
+                ("3", "pb0_icp1"),
+                ("19", "pb5_sck"),
+            ],
+        );
+        e
+    }
+
+    fn fn_pads(basis: &str, pads: &[(&str, &str)]) -> crate::schema::FunctionPads {
+        crate::schema::FunctionPads {
+            basis: basis.into(),
+            pads: pads.iter().map(|&(p, n)| (p.into(), n.into())).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Declare every table the card above names, leaving `leave_out` undeclared.
+    fn declare_named(e: &mut ModelEntry, leave_out: &str) {
+        let cap = &mut e.pin_capability;
+        if leave_out != "spi_sck" {
+            cap.spi_sck = Some(fn_pads("DS table 14-3 p.91", &[("19", "SCK")]));
+        }
+        if leave_out != "timer_capture" {
+            cap.timer_capture = Some(fn_pads("DS table 14-3 p.91", &[("3", "ICP1")]));
+        }
+        // The roles also name PB5 for SPI: the MOSI and MISO tables are owed only
+        // when a role names them, so none is declared here.
+    }
+
+    #[test]
+    fn a_card_that_names_a_peripheral_without_its_table_is_refused() {
+        let mut e = named_mcu();
+        declare_named(&mut e, "timer_capture");
+        rejects(&e, "names timer_capture");
+        let mut e = named_mcu();
+        declare_named(&mut e, "spi_sck");
+        rejects(&e, "names spi_sck");
+    }
+
+    #[test]
+    fn declaring_every_named_peripheral_passes_the_gate() {
+        let mut e = named_mcu();
+        declare_named(&mut e, "");
+        accepts(&e);
+    }
+
+    #[test]
+    fn an_empty_table_and_a_routed_declaration_both_count_as_declared() {
+        let mut e = named_mcu();
+        declare_named(&mut e, "timer_capture");
+        // The package has no capture pad: an empty table is a complete statement.
+        e.pin_capability.timer_capture = Some(fn_pads("DS p.12: no capture unit", &[]));
+        accepts(&e);
+        let mut e = named_mcu();
+        declare_named(&mut e, "spi_sck");
+        e.pin_capability.routed = Some(crate::schema::RoutedFunctions {
+            basis: "TRM sec 6.1 p.116: any GPIO".into(),
+            functions: ["spi_sck".to_owned()].into(),
+        });
+        accepts(&e);
+    }
+
+    #[test]
+    fn a_routed_function_may_not_also_carry_a_pad_table_or_an_unknown_key() {
+        let mut e = named_mcu();
+        declare_named(&mut e, "");
+        e.pin_capability.routed = Some(crate::schema::RoutedFunctions {
+            basis: "TRM p.116".into(),
+            functions: ["spi_sck".to_owned()].into(),
+        });
+        rejects(&e, "also has its own pad table");
+        let mut e = named_mcu();
+        declare_named(&mut e, "");
+        e.pin_capability.routed = Some(crate::schema::RoutedFunctions {
+            basis: "TRM p.116".into(),
+            functions: ["spi_sclk".to_owned()].into(),
+        });
+        rejects(&e, "is not one of");
     }
 }

@@ -130,6 +130,27 @@ pub struct AvrImage {
     /// in file order, which is what the HEX loader copies into flash. Empty for
     /// an ELF, whose bytes simavr's own loader reads once the layout checks out.
     pub hex_runs: Vec<(u32, Vec<u8>)>,
+    /// The first [`FLASH_HEAD`] bytes of flash as the image fills them (bytes it
+    /// does not carry read 0xFF, an erased flash). The interrupt vector table
+    /// sits here; see [`crate::avr_vectors`]. Shorter when the image ends sooner.
+    pub flash_head: Vec<u8>,
+}
+
+/// How many leading flash bytes [`AvrImage::flash_head`] keeps: room for the
+/// largest AVR vector table (the `ATmega2560`'s 57 vectors of 4 bytes).
+pub const FLASH_HEAD: usize = 256;
+
+/// Lay `data`, which starts at flash address `at`, over `head`.
+fn fill_head(head: &mut Vec<u8>, at: u32, data: &[u8]) {
+    let at = at as usize;
+    if at >= FLASH_HEAD {
+        return;
+    }
+    let end = (at + data.len()).min(FLASH_HEAD);
+    if head.len() < end {
+        head.resize(end, 0xFF);
+    }
+    head[at..end].copy_from_slice(&data[..end - at]);
 }
 
 impl AvrImage {
@@ -278,9 +299,16 @@ fn parse_ihex(bytes: &[u8]) -> Result<AvrImage> {
             len: run.len() as u64,
         });
     }
+    let mut flash_head = Vec::new();
+    for (start, run) in &runs {
+        if Region::of(*start).is_some_and(|(region, _)| region == Region::Flash) {
+            fill_head(&mut flash_head, *start, run);
+        }
+    }
     Ok(AvrImage {
         segments,
         hex_runs: runs,
+        flash_head,
     })
 }
 
@@ -318,6 +346,7 @@ fn parse_elf(bytes: &[u8]) -> Result<AvrImage> {
         bail!("the ELF's program headers are {phentsize} bytes, short of ELF32's 32");
     }
     let mut segments = Vec::new();
+    let mut flash_head = Vec::new();
     for i in 0..phnum {
         let ph = phoff
             .checked_add(
@@ -343,6 +372,12 @@ fn parse_elf(bytes: &[u8]) -> Result<AvrImage> {
                 bytes.len()
             );
         }
+        if region == Region::Flash {
+            let from = offset as usize;
+            if let Some(data) = bytes.get(from..from + filesz as usize) {
+                fill_head(&mut flash_head, start, data);
+            }
+        }
         // EEPROM is copied, never zero-filled; the other regions fill to memsz.
         let len = if region == Region::Eeprom {
             filesz
@@ -361,6 +396,7 @@ fn parse_elf(bytes: &[u8]) -> Result<AvrImage> {
     Ok(AvrImage {
         segments,
         hex_runs: Vec::new(),
+        flash_head,
     })
 }
 
@@ -435,6 +471,7 @@ mod tests {
                 len: 20480,
             }],
             hex_runs: Vec::new(),
+            flash_head: Vec::new(),
         };
         let msg = image
             .check_fits(&MEGA168, "atmega168", Path::new("fw.elf"))
@@ -451,6 +488,7 @@ mod tests {
                 len: 16384,
             }],
             hex_runs: Vec::new(),
+            flash_head: Vec::new(),
         };
         assert!(fits
             .check_fits(&MEGA168, "atmega168", Path::new("fw"))

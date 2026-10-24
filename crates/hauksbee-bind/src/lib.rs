@@ -28,6 +28,7 @@ pub mod asbuilt;
 pub mod behavioral;
 pub mod bind_report;
 pub mod binder;
+pub mod board_assembly;
 pub mod board_input;
 pub mod component_evidence;
 pub mod control_inputs;
