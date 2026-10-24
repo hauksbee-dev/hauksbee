@@ -722,12 +722,19 @@ fn extend_with_transmit_contention(
 /// The part-number field check. A part the solved DC stress pass already
 /// holds over its rating is not judged against its rail a second time by its
 /// part number.
-fn part_field_findings(board: &ExtractedBoard, dc: &NetLintReport) -> Vec<LintFinding> {
+/// Both join `report`, the stress findings first.
+fn extend_with_dc_and_fields(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    dc: NetLintReport,
+) {
     let overstressed = |r: &str| {
         (dc.findings.iter())
             .any(|f| f.check == LintCheck::DcOverstress && f.refs.iter().any(|x| x == r))
     };
-    part_fields::part_field_lint(board, &overstressed).findings
+    let fields = part_fields::part_field_lint(board, &overstressed).findings;
+    report.findings.extend(dc.findings);
+    report.findings.extend(fields);
 }
 
 /// The regulator load, headroom and supply-drop budget, against the findings
@@ -834,9 +841,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(node_drive::node_drive_lint(board, lib).findings);
     extend_with_wiring_direction(&mut report, board, lib);
     extend_with_wiring_checks(&mut report, board, lib);
-    let fields = part_field_findings(board, &dc.report);
-    report.findings.extend(dc.report.findings);
-    report.findings.extend(fields);
+    extend_with_dc_and_fields(&mut report, board, dc.report);
     extend_with_regulator_budget(&mut report, board, &statics);
     lint_tick(14);
     add_unsolved_led_findings(&mut report, board, lib);
