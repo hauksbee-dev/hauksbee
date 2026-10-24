@@ -56,7 +56,7 @@ impl DnpPolicy {
             }
             Self::FitAll => "every DNP part is simulated as fitted, including links",
             Self::Honour => {
-                "parts the board file marks not-fitted (DNP, excluded from the BOM or the board) \
+                "parts the board file marks not-fitted (DNP, or kept off the board) \
                  are left out of the simulation, as a fab house would build it"
             }
         }
@@ -169,12 +169,21 @@ pub fn value_marks_dnp(value: &str) -> bool {
 }
 
 /// Whether the source says this part is absent from the board that is built:
-/// DNP, excluded from the BOM or the board (with a connection to judge), or a
-/// value field that says so. A BOM-excluded part with no connected pin
-/// (fiducial, mounting hole, logo) is inert either way and is left alone.
+/// DNP, kept off the board (with a connection to judge), or a value field that
+/// says so.
+///
+/// "Excluded from the BOM" is deliberately not on this list. It means the part
+/// is not bought, not that it is not there: card-edge fingers, test pads, net
+/// ties, copper keys and logos are fitted hardware that no assembler orders.
+/// Only an explicit do-not-populate statement, or `on_board no`, removes a part.
 fn source_marks_absent(c: &crate::Component) -> bool {
     let connected = || c.pins.iter().any(|p| p.net.is_some_and(|n| n != 0));
-    c.dnp || value_marks_dnp(&c.value) || (excluded_by_source(c) && connected())
+    let off_board = || {
+        c.properties
+            .iter()
+            .any(|(k, _)| k == EXCLUDED_FROM_BOARD_KEY)
+    };
+    c.dnp || value_marks_dnp(&c.value) || (off_board() && connected())
 }
 
 /// Why one DNP part ended up fitted or open.
@@ -922,7 +931,8 @@ mod jumper_class_tests {
 #[cfg(test)]
 mod source_absence_tests {
     use super::{
-        value_marks_dnp, DnpPolicy, DnpReason, EXCLUDED_FROM_BOARD_KEY, EXCLUDED_FROM_BOM_KEY,
+        unbought, value_marks_dnp, DnpPolicy, DnpReason, EXCLUDED_FROM_BOARD_KEY,
+        EXCLUDED_FROM_BOM_KEY,
     };
     use crate::testutil::{board, part, pin};
 
@@ -980,13 +990,13 @@ mod source_absence_tests {
     }
 
     /// Faulty: a second regulator the source keeps off the build (by value
-    /// field, BOM exclusion or board exclusion, not a `dnp` flag) is left out by
-    /// the default policy, so two sources never share a rail; the fitted one
-    /// and the named-fit override are unaffected.
+    /// field or board exclusion, not a `dnp` flag) is left out by the default
+    /// policy, so two sources never share a rail; the fitted one and the
+    /// named-fit override are unaffected.
     #[test]
     fn the_default_leaves_out_every_kind_of_source_exclusion() {
         assert_eq!(DnpPolicy::default(), DnpPolicy::Honour);
-        for how in ["value", "bom", "board"] {
+        for how in ["value", "board"] {
             let mut b = two_regulators();
             let u2 = b
                 .components
@@ -995,9 +1005,6 @@ mod source_absence_tests {
                 .unwrap();
             match how {
                 "value" => u2.value = "DNP".into(),
-                "bom" => u2
-                    .properties
-                    .push((EXCLUDED_FROM_BOM_KEY.into(), String::new())),
                 _ => u2
                     .properties
                     .push((EXCLUDED_FROM_BOARD_KEY.into(), String::new())),
@@ -1016,6 +1023,47 @@ mod source_absence_tests {
             .unwrap();
         assert_eq!(d.fitted[0].reason, DnpReason::NamedFit);
         assert!(!b.component("U2").unwrap().dnp);
+    }
+
+    /// Legal control: "excluded from the BOM" is not "not fitted". Card-edge
+    /// fingers, test pads, net ties and the like are on the board but are not
+    /// bought, so a connected part with only the BOM flag stays fitted and
+    /// still counts as unbought for the ordering checks. Its twin with a real
+    /// DNP marking is left open.
+    #[test]
+    fn a_bom_excluded_connected_part_is_still_fitted() {
+        let mut b = two_regulators();
+        let mut edge = part(
+            "P1",
+            "Edge",
+            "lib:CardEdge_Fingers",
+            "Edge",
+            vec![pin("1", Some(1))],
+        );
+        edge.properties
+            .push((EXCLUDED_FROM_BOM_KEY.into(), String::new()));
+        b.components.push(edge);
+        let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+        assert!(d.is_empty(), "{d:?}");
+        let p1 = b.component("P1").unwrap();
+        assert!(!p1.dnp);
+        assert!(unbought(p1), "still not on the bill of materials");
+
+        let mut b = two_regulators();
+        let mut tp = part(
+            "TP3",
+            "TP",
+            "lib:TestPoint_Pad",
+            "TP",
+            vec![pin("1", Some(1))],
+        );
+        tp.properties
+            .push((EXCLUDED_FROM_BOM_KEY.into(), String::new()));
+        tp.value = "DNP".into();
+        b.components.push(tp);
+        let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+        assert_eq!(d.left_open.len(), 1, "{d:?}");
+        assert_eq!(d.left_open[0].reference, "TP3");
     }
 
     /// Legal control: a BOM-excluded part with no connection (a fiducial, a

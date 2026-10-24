@@ -1294,8 +1294,9 @@ struct RunArgs {
     /// says it out loud.
     ///
     /// "DNP" here is anything the board file marks as not built: a DNP
-    /// attribute, excluded from the BOM or the board, or a value field of
-    /// `DNP`/`NC`/`DNF`. Every run prints which parts were left open.
+    /// attribute, a part kept off the board, or a value field of
+    /// `DNP`/`NC`/`DNF`. A part that is only excluded from the BOM (edge
+    /// fingers, test pads) is fitted. Every run prints which parts were left open.
     #[arg(
         long,
         conflicts_with_all = ["fit_all_dnp", "fit_dnp"],

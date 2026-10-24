@@ -614,3 +614,70 @@ fn part_number_properties_follow_the_same_boundary() {
         );
     }
 }
+
+/// A KiCad 10 board (nets named on each item): a connector whose four shell
+/// tabs share one pad number, one tab routed to a link to ground and the
+/// other three left without a track.
+fn shell_board(flag: &str) -> String {
+    format!(
+        r#"(kicad_pcb (version 20260206) (generator "pcbnew") (generator_version "10.0")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (footprint "lib:Receptacle" (layer "F.Cu") (at 30 30) {flag}
+    (property "Reference" "J1")
+    (attr smd)
+    (pad "S1" smd rect (at -4 -3) (size 1.5 1.5) (layers "F.Cu") (net "SHELL"))
+    (pad "S1" smd rect (at 4 -3) (size 1.5 1.5) (layers "F.Cu") (net "SHELL"))
+    (pad "S1" smd rect (at -4 3) (size 1.5 1.5) (layers "F.Cu") (net "SHELL"))
+    (pad "S1" smd rect (at 4 3) (size 1.5 1.5) (layers "F.Cu") (net "SHELL")))
+  (footprint "lib:R" (layer "F.Cu") (at 50 33)
+    (property "Reference" "R9")
+    (attr smd)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "SHELL"))
+    (pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net "GND")))
+  (footprint "lib:R" (layer "F.Cu") (at 50 40)
+    (property "Reference" "R8")
+    (attr smd)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "GND"))
+    (pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net "GND")))
+  (segment (start 34 33) (end 50 33) (width 0.25) (layer "F.Cu") (net "SHELL"))
+  (segment (start 53 33) (end 53 40) (width 0.25) (layer "F.Cu") (net "GND"))
+  (segment (start 53 40) (end 50 40) (width 0.25) (layer "F.Cu") (net "GND"))
+)
+"#
+    )
+}
+
+/// Same-numbered pads are one pin of the part only where the footprint says so.
+///
+/// Each case was run through `kicad-cli pcb drc` (KiCad 10.0.6) on the same
+/// text: `yes` reports 0 unconnected items, `no` reports 3 (the three tabs
+/// the copper does not reach) and so does a footprint with no flag, in files
+/// of every version from KiCad 7 on. This pins the first two against that
+/// oracle; the third is the older reading, kept quiet on purpose (see
+/// `lands_sharing_a_number_are_one_pin_unless_the_footprint_says_not`).
+#[test]
+fn shell_tabs_are_open_exactly_where_kicad_reports_them() {
+    let found = lint(&shell_board("(duplicate_pad_numbers_are_jumpers yes)"));
+    assert!(found.is_empty(), "KiCad reports 0 unconnected: {found:?}");
+
+    let found = lint(&shell_board("(duplicate_pad_numbers_are_jumpers no)"));
+    let open = high(&found);
+    assert_eq!(open.len(), 3, "KiCad reports 3 unconnected: {found:?}");
+    assert!(open.iter().all(|f| f.check == LintCheck::UnroutedPad));
+    // The reason is on the finding, with the setting that changes it.
+    assert!(
+        open.iter()
+            .all(|f| f.message.contains("J1.S1 is also on the other side")
+                && f.message.contains("pads with the same number are jumpers")),
+        "{open:?}"
+    );
+
+    // Control: a plainly unrouted pad (its own number) carries no such hint.
+    let plain = lint(&two_parts(GND_TRACK));
+    assert!(
+        high(&plain)
+            .iter()
+            .all(|f| !f.message.contains("same number")),
+        "{plain:?}"
+    );
+}

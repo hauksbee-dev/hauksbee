@@ -115,10 +115,24 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
         } else {
             format!(" (the rest of the net: {})", sample_list(&island.main_pads))
         };
+        // Pads of one footprint that share a number (a connector shell's tabs,
+        // a split thermal pad) appear on both sides under one label. KiCad
+        // joins them only when the footprint says so, and reports the same
+        // unconnected items otherwise; say what to change.
+        let twin = (island.pads.iter())
+            .find(|p| island.main_pads.contains(p))
+            .map_or_else(String::new, |p| {
+                format!(
+                    ". {p} is also on the other side: pads of one part that share a number are \
+                     joined only if the footprint has \"pads with the same number are jumpers\" \
+                     set (KiCad reports the same unconnected items without it); set it if the \
+                     part's own metal joins them"
+                )
+            });
         out.push(finding(
             Severity::High,
             format!(
-                "net '{}': {} {} not joined by copper to the rest of the net{rest}, near ({:.2}, {:.2}) mm. The board as drawn leaves this connection open",
+                "net '{}': {} {} not joined by copper to the rest of the net{rest}, near ({:.2}, {:.2}) mm. The board as drawn leaves this connection open{twin}",
                 island.net,
                 sample_list(&island.pads),
                 if island.pads.len() == 1 { "is" } else { "are" },
