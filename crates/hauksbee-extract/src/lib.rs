@@ -386,7 +386,7 @@ pub struct Component {
     pub layer: String,
     /// Extra properties (part number, datasheet, ...).
     pub properties: Vec<(String, String)>,
-    /// True when the component is marked Do-Not-Populate / excluded from the BOM
+    /// True when the component is marked Do-Not-Populate or kept off the board
     /// (KiCad `(dnp yes)` on a schematic symbol, or `(attr ... dnp)` on a PCB
     /// footprint). A DNP footprint is on the layout but not assembled, so it is
     /// electrically absent: checks that reason about populated parts (e.g. the

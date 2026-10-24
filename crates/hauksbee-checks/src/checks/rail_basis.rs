@@ -996,6 +996,64 @@ mod tests {
         assert!(unsourced(&found).is_empty(), "{found:#?}");
     }
 
+    /// A board with a +12V edge connector (footprint of fingers), a sense
+    /// resistor to the fused rail, a buck module on it and a test point on
+    /// the unfused side, run through the default fit policy as a real run is.
+    /// A USB connector on another rail makes this a board that takes power in
+    /// somewhere, which is when a rail with no way in is a finding.
+    fn edge_board(connector_dnp: bool) -> Vec<LintFinding> {
+        const V12: i64 = 8;
+        const V12F: i64 = 9;
+        let mut nets = nets();
+        nets.extend([(V12, "+12V_EDGE"), (V12F, "+12V")]);
+        let mut p1 = part("P1", "Edge_Fingers", &[("1", V12), ("2", GND)]);
+        p1.footprint = "Board:CardEdge_Fingers".into();
+        p1.properties.push((
+            hauksbee_extract::dnp::EXCLUDED_FROM_BOM_KEY.into(),
+            String::new(),
+        ));
+        p1.dnp = connector_dnp;
+        let mut tp = part("TP3", "TestPoint", &[("1", V12)]);
+        tp.dnp = true;
+        let mut buck = part("U4", "XYZ123", &[("1", V12F), ("2", GND), ("3", SDA)]);
+        buck.pins[0].function = "VIN".into();
+        buck.pins[0].kind = "power_in".into();
+        buck.pins[1].function = "GND".into();
+        buck.pins[1].kind = "power_in".into();
+        let mut b = board(
+            &nets,
+            vec![
+                usb(),
+                p1,
+                part("R5", "0.01", &[("1", V12), ("2", V12F)]),
+                tp,
+                buck,
+                part("C1", "22u", &[("1", V12F), ("2", GND)]),
+            ],
+        );
+        b.apply_dnp_policy(hauksbee_extract::dnp::DnpPolicy::default(), &[], &[])
+            .unwrap();
+        rail_basis_lint(&b, &ModelLibrary::builtin()).findings
+    }
+
+    /// Legal control: "excluded from the BOM" is not "not fitted". Edge
+    /// fingers are bare board copper that no assembler orders; they are the
+    /// rail's entry even though a test point beside them is not fitted.
+    #[test]
+    fn a_bom_excluded_edge_connector_is_still_the_rails_entry() {
+        let found = edge_board(false);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+        assert!(gating(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Faulty twin: the same connector marked do-not-populate really is
+    /// absent, so the rail has no way in.
+    #[test]
+    fn a_dnp_edge_connector_leaves_the_rail_unsourced() {
+        let found = edge_board(true);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+    }
+
     /// A rail with no entry and no unfitted source is held by its name: a
     /// condition naming what may source it, never a finding.
     #[test]

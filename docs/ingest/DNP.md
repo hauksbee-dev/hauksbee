@@ -19,13 +19,19 @@ difficulty:
 
 **hauksbee leaves every part the source says is not built out of the circuit
 and the checks.** That is a part marked DNP (KiCad 7/8/9 `dnp`, Eagle
-`populate="no"`, a netlist `dnp` property), a part excluded from the BOM or the
-board (`exclude_from_bom`, `exclude_from_board`, `on_board no`) that has
-connections, and a part whose value field says so (`DNP`, `DNF`, `NC`, `do not
-populate`, `not fitted`, in any case, as a whole word). A second regulator
-marked DNP no longer fights the fitted one for the rail, and a DNP load no
-longer appears as an overstressed part. A BOM-excluded part with no connection
-(a fiducial, a mounting hole) is inert and is not reported.
+`populate="no"`, a netlist `dnp` property), a part kept off the board
+(`exclude_from_board`, `on_board no`) that has connections, and a part whose
+value field says so (`DNP`, `DNF`, `NC`, `do not populate`, `not fitted`, in any
+case, as a whole word). A second regulator marked DNP no longer fights the
+fitted one for the rail, and a DNP load no longer appears as an overstressed
+part.
+
+**"Excluded from the BOM" does not mean "not fitted".** Card-edge fingers, test
+pads, net ties, copper-only keys, mounting holes and logos are on the board but
+are not bought, so KiCad's `exclude_from_bom` / `(in_bom no)` leaves a part
+fitted. Such a part still counts as not on the bill of materials for the value
+and ordering checks; it only stays in the circuit. Mark a part DNP (or put `DNP`
+in its value field) to leave it out.
 
 If you do want a DNP part simulated, say so:
 
