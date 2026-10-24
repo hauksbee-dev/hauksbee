@@ -19,13 +19,19 @@
 //!
 //! It abstains where it cannot know: a connector on the net (the pull-up may
 //! be off-board), and a net no other chip reads (an unused flag output).
+//!
+//! [`i2c_card_pullup_lint`] is the same question for an I2C bus the net names
+//! and the symbol pins do not state: a card gives a pad the role `sda` or
+//! `scl`. The extract layer's `MissingI2cPullup` judges the net.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use hauksbee_extract::{
-    is_capacitor, is_connector_like, is_led, is_resistor, is_unconnected_net, Component,
-    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity, REMEDY_MARKER,
+    i2c_pullup_finding_for_net, i2c_role, is_capacitor, is_connector_like, is_led, is_resistor,
+    is_unconnected_net, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin,
+    Severity, REMEDY_MARKER,
 };
+use hauksbee_ir::pin_functions::{dedicated_i2c_pin, names_spi_line, PeripheralFunction};
 use hauksbee_models::{ComponentKind, ModelLibrary};
 
 use super::node_drive::Index;
@@ -204,6 +210,82 @@ pub fn open_drain_pullup_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> Net
             refs: refs.into_iter().collect(),
             nets: vec![name.to_string()],
         });
+    }
+    report
+}
+
+/// The I2C line the cards state for the pads on `members`, with the pad that
+/// says so (`U2 pin 3 (card role 'sda')`). `None` when no card does, or two
+/// disagree.
+fn card_i2c_line(
+    idx: &Index<'_>,
+    members: &[(&Component, &Pin)],
+) -> Option<(&'static str, String)> {
+    let mut found: Option<(&'static str, String)> = None;
+    for (c, p) in members {
+        if is_connector_like(c) {
+            continue;
+        }
+        let Some(role) = idx.role(c, p) else { continue };
+        let line = match dedicated_i2c_pin(role) {
+            Some(PeripheralFunction::I2cSda) => "SDA",
+            Some(PeripheralFunction::I2cScl) => "SCL",
+            _ => continue,
+        };
+        // The card's role holds for either bus mode; the symbol may say SPI.
+        if names_spi_line(&p.function) {
+            continue;
+        }
+        match &found {
+            Some((l, _)) if *l != line => return None,
+            Some(_) => {}
+            None => {
+                found = Some((
+                    line,
+                    format!("{} pin {} (card role '{role}')", c.reference, p.number),
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// I2C buses with no pull-up that only the cards identify.
+///
+/// A net whose name and symbol pins state no I2C line, but on which a card
+/// gives a pad the role `sda` or `scl`, is judged by the extract layer's
+/// missing-pull-up rule: at least two parts, no resistor, resistor network
+/// element, translator with its own pull-ups or current-source transistor to a
+/// rail, and no connector (abstain). A net the extract layer named by itself is
+/// left to it. A part counts as read when its pin has a symbol name or its
+/// pad has a card.
+#[must_use]
+pub fn i2c_card_pullup_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    let idx = Index::new(board, lib);
+    let mut report = NetLintReport::default();
+    for net in &board.nets {
+        if net.id == 0 || is_unconnected_net(&net.name) || i2c_role(&net.name).is_some() {
+            continue;
+        }
+        let members = idx.members(net.id);
+        if members.len() < 2 {
+            continue;
+        }
+        if members
+            .iter()
+            .any(|(_, p)| dedicated_i2c_pin(&p.function).is_some())
+        {
+            // The symbol pins state it: the extract layer has already judged.
+            continue;
+        }
+        let Some((line, evidence)) = card_i2c_line(&idx, members) else {
+            continue;
+        };
+        let readable =
+            |c: &Component, p: &Pin| !p.function.trim().is_empty() || idx.model(c).is_some();
+        report.findings.extend(i2c_pullup_finding_for_net(
+            board, net.id, line, &evidence, &readable,
+        ));
     }
     report
 }
@@ -402,5 +484,95 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+}
+
+/// An I2C bus the nets do not name and the symbols do not state, found by the
+/// cards' pad roles.
+#[cfg(test)]
+mod i2c_card_tests {
+    use super::*;
+    use crate::checks::test_support::{board, part};
+    use crate::test_support::pin_fn;
+
+    const V33: i64 = 2;
+    const DATA: i64 = 20;
+    const CLOCK: i64 = 21;
+
+    /// An INA226: its card gives pad 4 the role `sda` and pad 5 `scl`.
+    /// `names` are the symbol's pin names for them.
+    fn monitor(names: (&str, &str)) -> Component {
+        let mut c = part("U1", "INA226AIDGSR", &[]);
+        c.pins = vec![pin_fn("4", DATA, names.0), pin_fn("5", CLOCK, names.1)];
+        c
+    }
+
+    /// A host whose pins the symbol names but no card describes.
+    fn host(names: (&str, &str)) -> Component {
+        let mut c = part("U2", "XYZ-HOST-9", &[]);
+        c.pins = vec![pin_fn("1", DATA, names.0), pin_fn("2", CLOCK, names.1)];
+        c
+    }
+
+    fn pull(reference: &str, net: i64) -> Component {
+        let mut c = part(reference, "4.7k", &[("1", V33), ("2", net)]);
+        c.lib_id = "Device:R".into();
+        c
+    }
+
+    fn run(parts: Vec<Component>) -> Vec<LintFinding> {
+        let nets = [(V33, "+3V3"), (DATA, "SENS_D"), (CLOCK, "SENS_C")];
+        i2c_card_pullup_lint(&board(&nets, parts), &ModelLibrary::builtin()).findings
+    }
+
+    #[test]
+    fn a_card_role_makes_an_unnamed_net_an_i2c_bus_with_no_pull_up() {
+        // The symbol names the pads `D` and `C`: only the card says they are I2C.
+        let found = run(vec![monitor(("D", "C")), host(("GPIO1", "GPIO2"))]);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        for f in &found {
+            assert_eq!(f.check, LintCheck::MissingI2cPullup);
+            assert_eq!(f.severity, Severity::High);
+            assert!(f.message.contains("card role"), "{}", f.message);
+        }
+        assert!(found
+            .iter()
+            .any(|f| f.nets == ["SENS_D"] && f.message.contains("I2C SDA")));
+        assert!(found
+            .iter()
+            .any(|f| f.nets == ["SENS_C"] && f.message.contains("I2C SCL")));
+    }
+
+    #[test]
+    fn a_pull_up_a_connector_or_an_unreadable_part_keeps_it_silent() {
+        let bare = || vec![monitor(("D", "C")), host(("GPIO1", "GPIO2"))];
+        let mut pulled = bare();
+        pulled.extend([pull("R1", DATA), pull("R2", CLOCK)]);
+        assert!(run(pulled).is_empty());
+        let mut with_header = bare();
+        let mut header = part("J1", "Conn_01x02", &[]);
+        header.lib_id = "Connector:Conn_01x02".into();
+        header.pins = vec![pin_fn("1", DATA, ""), pin_fn("2", CLOCK, "")];
+        with_header.push(header);
+        assert!(run(with_header).is_empty());
+        // A part with no card and no pin names cannot be read.
+        assert!(run(vec![monitor(("D", "C")), host(("", ""))]).is_empty());
+    }
+
+    #[test]
+    fn a_symbol_that_says_spi_or_states_the_bus_is_not_judged_here() {
+        // The same card pads wired as SPI data in / clock: the symbol says so.
+        assert!(run(vec![monitor(("SDI", "SPC")), host(("GPIO1", "GPIO2"))]).is_empty());
+        // The symbol states I2C itself: the extract layer judges that net.
+        assert!(run(vec![monitor(("SDA", "SCL")), host(("GPIO1", "GPIO2"))]).is_empty());
+    }
+
+    #[test]
+    fn a_net_named_for_the_bus_is_left_to_the_name_check() {
+        let nets = [(V33, "+3V3"), (DATA, "I2C_SDA"), (CLOCK, "I2C_SCL")];
+        let b = board(&nets, vec![monitor(("D", "C")), host(("GPIO1", "GPIO2"))]);
+        assert!(i2c_card_pullup_lint(&b, &ModelLibrary::builtin())
+            .findings
+            .is_empty());
     }
 }

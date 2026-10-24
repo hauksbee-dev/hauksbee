@@ -338,6 +338,65 @@ pub fn peripheral_functions_named(name: &str) -> BTreeSet<PeripheralFunction> {
         .collect()
 }
 
+/// The I2C line a symbol pin name states and nothing else.
+///
+/// The name must be the line itself: `SDA`, `SCL`, `I2C_SDA`, `TWI_SCL`,
+/// `SDA0`, `~{SCL1}`. A pad that also names another function (`PB6/SDA`,
+/// `SCL/SCLK`, `SDA/SDI`) is a multiplexed port or a part that speaks SPI as
+/// well, so the name alone does not say what the board wired it to; the SPI
+/// words `SDO`, `SDI`, `SCK` and `SCLK` are never I2C.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::{dedicated_i2c_pin, PeripheralFunction};
+/// assert_eq!(dedicated_i2c_pin("TWI_SDA"), Some(PeripheralFunction::I2cSda));
+/// assert_eq!(dedicated_i2c_pin("SCL1"), Some(PeripheralFunction::I2cScl));
+/// assert_eq!(dedicated_i2c_pin("PB6/SDA"), None);
+/// assert_eq!(dedicated_i2c_pin("SDO"), None);
+/// ```
+#[must_use]
+pub fn dedicated_i2c_pin(name: &str) -> Option<PeripheralFunction> {
+    let lower = name.to_ascii_lowercase();
+    let mut line = None;
+    for word in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let stem = word.trim_end_matches(|c: char| c.is_ascii_digit());
+        let bus_prefix = matches!(stem, "i2c" | "iic" | "twi");
+        let function = match stem {
+            "sda" => PeripheralFunction::I2cSda,
+            "scl" => PeripheralFunction::I2cScl,
+            _ if word.is_empty() || bus_prefix => continue,
+            _ => return None,
+        };
+        if line.replace(function).is_some() {
+            return None;
+        }
+    }
+    line
+}
+
+/// Whether a net or pin name says the line is SPI (or a bare clock), not I2C.
+///
+/// A display or sensor may name its SPI pins `SCL` and `SDA` (the clock and
+/// data of a 3- or 4-wire serial mode), so a pin that spells an I2C line is no
+/// evidence of one when the net it sits on is called `DISPLAY-CLK`, `SPI_CS`
+/// or `SDI`.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::names_spi_line;
+/// assert!(names_spi_line("DISPLAY-CLK") && names_spi_line("SDI/SDA"));
+/// assert!(!names_spi_line("SENSOR_D") && !names_spi_line("I2C_SCL"));
+/// ```
+#[must_use]
+pub fn names_spi_line(name: &str) -> bool {
+    const WORDS: [&str; 13] = [
+        "spi", "sck", "sclk", "clk", "mosi", "miso", "copi", "cipo", "sdi", "sdo", "spc", "cs",
+        "ss",
+    ];
+    let lower = name.to_ascii_lowercase();
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| WORDS.contains(&w))
+}
+
 /// Whether the card pad role `role` names a timer input-capture pad.
 ///
 /// A part `icp` or `icpN` (`pb0_icp1`, `pd4_icp1_xck1`) is the AVR input-capture
@@ -521,6 +580,31 @@ mod tests {
         assert!(contradict(&set("XTAL1"), &set("XTAL2")));
         // A name that states nothing contradicts nothing.
         assert!(!contradict(&set("PA4"), &set("GND")));
+    }
+
+    #[test]
+    fn a_pin_that_is_only_an_i2c_line_is_dedicated() {
+        use PeripheralFunction as P;
+        for (name, want) in [
+            ("SDA", Some(P::I2cSda)),
+            ("I2C_SDA", Some(P::I2cSda)),
+            ("I2C1_SCL", Some(P::I2cScl)),
+            ("TWI_SDA", Some(P::I2cSda)),
+            ("SDA0", Some(P::I2cSda)),
+            ("~{SCL}", Some(P::I2cScl)),
+            ("PB6/SDA", None),
+            ("SCL/SCLK", None),
+            ("SDA/SDI", None),
+            ("SDA_SCL", None),
+            ("SDO", None),
+            ("SDI", None),
+            ("SCK", None),
+            ("SCLK", None),
+            ("I2C", None),
+            ("", None),
+        ] {
+            assert_eq!(dedicated_i2c_pin(name), want, "{name}");
+        }
     }
 
     #[test]

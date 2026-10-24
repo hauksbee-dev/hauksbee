@@ -134,7 +134,9 @@
 //! - [`output_release`]: drops an output-contention finding when every driver
 //!   on the net is a card-stated tri-state pad released by its own chip select.
 //! - [`open_drain_pullup`]: a card-stated open-drain output on a net with no
-//!   pull-up resistor and no receiving MCU pin with a stated internal pull-up.
+//!   pull-up resistor and no receiving MCU pin with a stated internal pull-up;
+//!   and an I2C bus only the cards identify (a pad role `sda`/`scl`) with no
+//!   pull-up.
 //! - [`dc_stress`]: every card rating (junction, channel and driver-pin
 //!   current, resistor wattage, junction temperature) judged at the board's
 //!   solved DC operating point by the co-simulation's own stress monitor.
@@ -490,6 +492,15 @@ fn extend_with_wiring_direction(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
 ) {
+    for finding in open_drain_pullup::i2c_card_pullup_lint(board, lib).findings {
+        let seen = report
+            .findings
+            .iter()
+            .any(|r| r.check == finding.check && r.nets == finding.nets);
+        if !seen {
+            report.findings.push(finding);
+        }
+    }
     for finding in open_drain_pullup::open_drain_pullup_lint(board, lib).findings {
         let covered = report.findings.iter().any(|r| {
             matches!(
