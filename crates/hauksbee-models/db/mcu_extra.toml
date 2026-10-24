@@ -240,7 +240,7 @@ master_only = ["14", "29"]
 "29" = "USART1_CK (PA8) (AF7)"
 [models.pin_capability.spi_mosi]
 basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
-master_only = ["12", "30", "32", "38", "42"]
+master_only = ["12", "30", "38", "42"]
 [models.pin_capability.spi_mosi.pads]
 "11" = "SPI4_MOSI (PA1)"
 "17" = "SPI1_MOSI (PA7)"
@@ -250,7 +250,6 @@ master_only = ["12", "30", "32", "38", "42"]
 "45" = "SPI5_MOSI (PB8)"
 "12" = "USART2_TX (PA2) (AF7)"
 "30" = "USART1_TX (PA9) (AF7)"
-"32" = "USART6_TX (PA11) (AF8)"
 "38" = "USART1_TX (PA15) (AF7)"
 "42" = "USART1_TX (PB6) (AF7)"
 [models.pin_capability.spi_miso]
@@ -611,7 +610,7 @@ master_only = ["D1", "G6"]
 "G6" = "USART2_CK (PA4) (AF7)"
 [models.pin_capability.spi_mosi]
 basis = "STMicroelectronics STM32F411xC/xE datasheet DS10314 Rev 8, Table 9 Alternate function mapping, pp.48-53 (PDF page = printed page): SPIx_MOSI (shared with I2Sx_SD) per port pin; pads are the card's package pads whose port pin (named in [models.pins]) carries the signal in any AF column; hardware peripheral only, a software (bit-banged) implementation can use any pad; USART synchronous master pads (the SPI-like mode the datasheet's peripheral table lists as 'SPI master') are listed and marked master_only, as on the other STM32 cards"
-master_only = ["A2", "C1", "C4", "D2", "E5"]
+master_only = ["A2", "C4", "D2", "E5"]
 [models.pin_capability.spi_mosi.pads]
 "B4" = "SPI1_MOSI, SPI3_MOSI (PB5)"
 "B5" = "SPI5_MOSI (PB8)"
@@ -620,7 +619,6 @@ master_only = ["A2", "C1", "C4", "D2", "E5"]
 "F3" = "SPI1_MOSI (PA7)"
 "G7" = "SPI4_MOSI (PA1)"
 "A2" = "USART1_TX (PA15) (AF7)"
-"C1" = "USART6_TX (PA11) (AF8)"
 "C4" = "USART1_TX (PB6) (AF7)"
 "D2" = "USART1_TX (PA9) (AF7)"
 "E5" = "USART2_TX (PA2) (AF7)"

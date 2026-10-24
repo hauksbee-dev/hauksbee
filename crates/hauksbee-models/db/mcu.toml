@@ -8195,8 +8195,8 @@ must_not_float_roles = "en"
 "8"  = "gpio3"
 "51" = "gpio45"
 "52" = "gpio46"
-"6"  = "gpio1"       # Table 2-1 pin 6 (SPI download strap)
-"7"  = "gpio2"       # Table 2-1 pin 7 (SPI download strap)
+"6"  = "gpio1"       # Table 2-1 pin 6 (ADC1_CH0; not a strap)
+"7"  = "gpio2"       # Table 2-1 pin 7 (ADC1_CH1; not a strap)
 
 [models.pin_capability.adc]
 basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 6 GPIO1 ADC1_CH0, pin 7 GPIO2 ADC1_CH1 and pin 8 GPIO3 ADC1_CH2 (pins 6-8 are GPIO1-GPIO3 in Table 2-1 Pin Overview, PDF p.16); GPIO0, GPIO45 and GPIO46 carry no ADC channel"
@@ -8956,7 +8956,7 @@ backend = "qemu:esp32c3"
 "14" = "gpio8"
 "15" = "gpio9"
 "7"  = "en"          # CHIP_EN (Table 2-1 pin 7)
-"8"  = "gpio3"       # Table 2-1 pin 8 (SPI download strap)
+"8"  = "gpio3"       # Table 2-1 pin 8 (ADC1_CH3; not a strap)
 "28" = "p021_txd"
 "27" = "p020_rxd"
 
