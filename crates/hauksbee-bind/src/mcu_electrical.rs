@@ -60,6 +60,39 @@ impl DriveRow {
     }
 }
 
+/// What the card states about the part's internal pull-ups and its sleep
+/// current. Every field is `None` unless the card prints it: an absent figure
+/// is "unknown", never a default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SleepSpec {
+    /// Smallest resistance (ohm) of an I/O pin's internal pull-up
+    /// (`io_pull_up_min_ohms`); it sets the LARGEST pull-up current.
+    pub pull_up_min_ohms: Option<f64>,
+    /// Largest resistance (ohm) of an I/O pin's internal pull-up
+    /// (`io_pull_up_max_ohms`); it sets the SMALLEST pull-up current.
+    pub pull_up_max_ohms: Option<f64>,
+    /// The part's power-down supply current (A), typical
+    /// (`power_down_current_typ_a`).
+    pub power_down_typ_a: Option<f64>,
+    /// The part's power-down supply current (A), maximum
+    /// (`power_down_current_max_a`).
+    pub power_down_max_a: Option<f64>,
+}
+
+impl SleepSpec {
+    /// Read the card's pull-up and power-down params.
+    #[must_use]
+    pub fn from_card(model: &ModelEntry) -> Self {
+        let get = |key: &str| model.params.get_f64(key);
+        Self {
+            pull_up_min_ohms: get("io_pull_up_min_ohms"),
+            pull_up_max_ohms: get("io_pull_up_max_ohms"),
+            power_down_typ_a: get("power_down_current_typ_a"),
+            power_down_max_a: get("power_down_current_max_a"),
+        }
+    }
+}
+
 /// The card's electrical data for one MCU.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct McuElectrical {
@@ -69,6 +102,8 @@ pub struct McuElectrical {
     pub drive_select: Option<DriveSelect>,
     /// Brown-out and reset-pin thresholds.
     pub reset: Option<ResetSpec>,
+    /// Internal pull-up resistance and power-down supply current.
+    pub sleep: SleepSpec,
 }
 
 impl McuElectrical {
@@ -79,6 +114,7 @@ impl McuElectrical {
             drive: model.output_drive.iter().map(DriveRow::from_card).collect(),
             drive_select: model.drive_select.clone(),
             reset: model.reset.clone(),
+            sleep: SleepSpec::from_card(model),
         }
     }
 

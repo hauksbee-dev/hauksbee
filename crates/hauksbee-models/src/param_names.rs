@@ -117,6 +117,13 @@ const MCU: &[&str] = &[
     // internal pull-up, read by the held-off check to judge an external
     // pull-down against it.
     "reset_pull_up_ohms",
+    // The datasheet's minimum and maximum resistance of an I/O pin's internal
+    // pull-up (RPU), and the part's power-down supply current (typical and
+    // maximum, watchdog off), read by the co-sim's sleep-current account.
+    "io_pull_up_min_ohms",
+    "io_pull_up_max_ohms",
+    "power_down_current_typ_a",
+    "power_down_current_max_a",
 ];
 
 /// Gummel-Poon params, plus `pair_count` for a dual-transistor package.
@@ -269,6 +276,9 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "cl_f",
             "c0_f",
             "c1_f",
+            // A crystal's start-up time, from enable to usable oscillation
+            // (the co-sim holds the core clock invalid that long).
+            "startup_s",
         ],
         ComponentKind::Diode => DIODE,
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => BJT,

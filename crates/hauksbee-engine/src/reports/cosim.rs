@@ -223,7 +223,49 @@ pub fn build_cosim_json(
                 },
             )
             .collect(),
+        sleep_current: sleep_current_json(sched),
     }))
+}
+
+/// The per-MCU sleep-current accounts as report JSON.
+#[must_use]
+pub fn sleep_current_json(
+    sched: &crate::scheduler::Scheduler,
+) -> Vec<crate::result::CosimSleepCurrent> {
+    use crate::result::{CosimSleepCurrent, CosimSleepPin};
+    sched
+        .sleep_currents()
+        .into_iter()
+        .map(|a| CosimSleepCurrent {
+            message: a.message(),
+            flagged: a.flagged(),
+            pins: a
+                .pins
+                .iter()
+                .map(|p| CosimSleepPin {
+                    pin: p.pin.pin.clone(),
+                    pad: p.pin.pad.clone(),
+                    net: p.pin.net.clone(),
+                    low_path: p.pin.low_path.clone(),
+                    min_a: p.min_a,
+                    max_a: p.max_a,
+                })
+                .collect(),
+            mcu_ref: a.mcu_ref,
+            part: a.part,
+            mode: a.mode,
+            vdd_v: a.vdd_v,
+            t_s: a.t_s,
+            total_min_a: a.total_min_a,
+            total_max_a: a.total_max_a,
+            card_sleep_typ_a: a.card_typ_a,
+            card_sleep_max_a: a.card_max_a,
+            budget_a: a.budget_a,
+            over_budget: a.over_budget,
+            over_card: a.over_card,
+            unknown: a.unknown,
+        })
+        .collect()
 }
 
 /// One canonical warning per HEURISTIC-framed SPI bus.
@@ -772,6 +814,14 @@ pub fn run_headless(
                 "\nWARNING: {}",
                 crate::scheduler::timing_limitation_message(&mcu_ref, &limitation)
             );
+        }
+        // Sleep current: an internal pull-up left on into a closed switch
+        // while the part sleeps. The pull-up is inside the chip, so the analog
+        // circuit never shows this current.
+        for a in sched.sleep_currents() {
+            if let Some(message) = a.message() {
+                println!("\nWARNING: {message}");
+            }
         }
         // Per-bus SPI transaction-framing tier. `heuristic` is the
         // documented actively-wrong tier (merges two transactions in a chunk;

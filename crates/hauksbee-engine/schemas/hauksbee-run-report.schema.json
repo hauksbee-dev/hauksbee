@@ -1123,6 +1123,13 @@
           },
           "type": "array"
         },
+        "sleep_current": {
+          "description": "Per-MCU sleep-current accounts: a core that went to sleep with an\ninternal pull-up still enabled on a pin a real low path holds low (a\nclosed switch contact, a resistor to ground) passes `Vdd / R_pu` through\nthat path for the whole sleep. The pull-up is inside the chip, not in\nthe analog circuit, so nothing else in the run shows this current. Each\nentry states the worst sleeping chunk; `flagged` says whether it\nexceeds the stated sleep budget or ten times the card's power-down\ncurrent. Empty (and omitted) when no core slept with a pull-up into a\nlow path.",
+          "items": {
+            "$ref": "#/definitions/CosimSleepCurrent"
+          },
+          "type": "array"
+        },
         "spi_framing": {
           "description": "Per-SPI-bus transaction-framing tier: \"exact\" (framed on real CS GPIO\nedges), \"backend\" (the emulator frames CS itself), or \"heuristic\" (the\nchunk-boundary fallback, honest about its two documented failure\nmodes). Empty (and omitted) when the board has no SPI buses; mirrors\nthe web co-sim section so the CLI JSON carries the same coverage.",
           "items": {
@@ -1252,6 +1259,164 @@
         "pulse_s",
         "chunk_s",
         "parts"
+      ],
+      "type": "object"
+    },
+    "CosimSleepCurrent": {
+      "description": "One MCU's sleep-current account (see [`CosimJson::sleep_current`]).",
+      "properties": {
+        "budget_a": {
+          "description": "The sleep budget (A) the run was given, when it was given one.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "card_sleep_max_a": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "card_sleep_typ_a": {
+          "description": "The card's power-down supply current (A), typical and maximum.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "flagged": {
+          "description": "Either of the above: the account is a warning.",
+          "type": "boolean"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "message": {
+          "description": "The warning sentence, when `flagged`: what is wrong, why, and the fix.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "The datasheet's name of the sleep mode the firmware selected, when the\ncore reports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "over_budget": {
+          "description": "Total above the budget.",
+          "type": "boolean"
+        },
+        "over_card": {
+          "description": "Total above ten times the card's power-down current (power-down only).",
+          "type": "boolean"
+        },
+        "part": {
+          "description": "The part the board asked for, e.g. `\"ATmega328P\"`.",
+          "type": "string"
+        },
+        "pins": {
+          "description": "Every pin with its pull-up on and a low path under it.",
+          "items": {
+            "$ref": "#/definitions/CosimSleepPin"
+          },
+          "type": "array"
+        },
+        "t_s": {
+          "description": "Sim time (s) of the chunk this account was taken from.",
+          "format": "double",
+          "type": "number"
+        },
+        "total_max_a": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_min_a": {
+          "description": "Sum over the pins, smallest and largest (A). Absent when the card does\nnot state the pull-up resistance, see `unknown`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unknown": {
+          "description": "Why the current is unknown (the missing card field), when it is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vdd_v": {
+          "description": "The MCU supply pad voltage (V) in the solve.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "part",
+        "vdd_v",
+        "t_s",
+        "pins",
+        "over_budget",
+        "over_card",
+        "flagged"
+      ],
+      "type": "object"
+    },
+    "CosimSleepPin": {
+      "description": "One pin of a [`CosimSleepCurrent`].",
+      "properties": {
+        "low_path": {
+          "description": "The parts that hold the net low (a closed switch contact, a resistor).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_a": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min_a": {
+          "description": "Pull-up current through this pin, smallest and largest (A).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "net": {
+          "type": "string"
+        },
+        "pad": {
+          "description": "The package pad the card maps to it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pin": {
+          "description": "The port pin, e.g. `\"PD2\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pin",
+        "net",
+        "low_path"
       ],
       "type": "object"
     },

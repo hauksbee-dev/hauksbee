@@ -100,31 +100,9 @@ fn entries_literal(config: &RenodeConfig) -> String {
     out
 }
 
-/// The Python module that implements oscillator readiness for `config`.
-///
-/// `external` is whether the board has a crystal. The returned source is
-/// executed once in Renode's Python scope; the hooks it defines are looked up
-/// by name from `__builtin__`, so the per-access hook command stays one short
-/// line and the (large) body is parsed once.
-pub(super) fn readiness_script(config: &RenodeConfig, external: bool) -> String {
-    let head = format!(
-        "import __builtin__ as b\n\
-         from Antmicro.Renode.Core import EmulationManager\n\
-         _m = None\n\
-         for _mm in EmulationManager.Instance.CurrentEmulation.Machines:\n\
-         \x20   if str(_mm) == '{machine}':\n\
-         \x20       _m = _mm\n\
-         b.hkb_cpu = _m['{cpu}']\n\
-         b.hkb_bus = _m.SystemBus\n\
-         b.hkb_ext = {ext}\n\
-         b.hkb_t0 = 0.0\n\
-         b.hkb_i0 = 0\n\
-         b.hkb_on = {{}}\n",
-        machine = config.machine,
-        cpu = config.cpu,
-        ext = if external { "True" } else { "False" },
-    );
-    let body = r"
+/// The readiness model's functions, shared by every part (the per-part data
+/// is the `ENT` and `UF` literals the script prepends).
+const READINESS_BODY: &str = r"
 def now_us():
     return b.hkb_t0 + (b.hkb_cpu.ExecutedInstructions - b.hkb_i0) / float(b.hkb_cpu.PerformanceInMips)
 
@@ -146,7 +124,22 @@ def ready(p, name):
         su = (r & e['scale'][1]) * e['scale'][2]
         if (r & e['scale'][3]) != 0:
             su = su * e['scale'][4]
-    return now_us() - t >= su
+    elif e['ext'] and b.hkb_xstated and b.hkb_xsu is not None:
+        su = b.hkb_xsu
+    el = now_us() - t
+    if el < su:
+        return False
+    if e['ext'] and e['scale'] is not None and b.hkb_xsu is not None and el < b.hkb_xsu:
+        # The firmware's delay counter expired before the crystal started:
+        # the flag says stable, the oscillator is not. Record the first such
+        # read and stop the core, which on silicon has no usable clock.
+        if b.hkb_fault is None:
+            b.hkb_fault = (name, el, b.hkb_xsu)
+        try:
+            b.hkb_cpu.IsHalted = True
+        except Exception:
+            pass
+    return True
 
 def on_read(p, pname, offset, value):
     for n in ENT:
@@ -201,13 +194,74 @@ b.hkb_uf_write = uf_write
 b.hkb_uf_read = uf_read
 b.hkb_fw = {}
 b.hkb_rd = rd
+
+def fault():
+    f = b.hkb_fault
+    if f is None:
+        return 'none'
+    return '%s %r %r' % (f[0], f[1], f[2])
+
+b.hkb_fault_text = fault
 b.hkb_ok = 1
 ";
+
+/// The Python module that implements oscillator readiness for `config`.
+///
+/// `external` is whether the board has a crystal. The returned source is
+/// executed once in Renode's Python scope; the hooks it defines are looked up
+/// by name from `__builtin__`, so the per-access hook command stays one short
+/// line and the (large) body is parsed once.
+pub(super) fn readiness_script(config: &RenodeConfig, external: bool) -> String {
+    let head = format!(
+        "import __builtin__ as b\n\
+         from Antmicro.Renode.Core import EmulationManager\n\
+         _m = None\n\
+         for _mm in EmulationManager.Instance.CurrentEmulation.Machines:\n\
+         \x20   if str(_mm) == '{machine}':\n\
+         \x20       _m = _mm\n\
+         b.hkb_cpu = _m['{cpu}']\n\
+         b.hkb_bus = _m.SystemBus\n\
+         b.hkb_ext = {ext}\n\
+         b.hkb_xsu = {xsu}\n\
+         b.hkb_xstated = {xstated}\n\
+         b.hkb_fault = None\n\
+         b.hkb_t0 = 0.0\n\
+         b.hkb_i0 = 0\n\
+         b.hkb_on = {{}}\n",
+        machine = config.machine,
+        cpu = config.cpu,
+        ext = if external { "True" } else { "False" },
+        xsu = config
+            .crystal_startup
+            .as_ref()
+            .map_or_else(|| "None".to_string(), |s| format!("{}.0", s.startup_us)),
+        xstated = if config.crystal_startup.as_ref().is_some_and(|s| s.stated) {
+            "True"
+        } else {
+            "False"
+        },
+    );
     format!(
-        "{head}{}{}{body}",
+        "{head}{}{}{READINESS_BODY}",
         entries_literal(config),
         timer_fixes_literal(config)
     )
+}
+
+/// Parse the readiness model's fault line, `<name> <waited_us> <needed_us>`,
+/// from the last line of a Monitor reply that has one.
+fn parse_fault(reply: &str) -> Option<crate::traits::ClockFault> {
+    reply.lines().rev().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let oscillator = it.next()?.to_string();
+        let waited_us = it.next()?.parse().ok()?;
+        let needed_us = it.next()?.parse().ok()?;
+        it.next().is_none().then_some(crate::traits::ClockFault {
+            oscillator,
+            waited_us,
+            needed_us,
+        })
+    })
 }
 
 /// Write `script` to a fresh temp file and return its path.
@@ -392,8 +446,11 @@ impl RenodeBackend {
             return Ok(());
         }
         let addresses = clock_addresses(&self.config);
+        // A recorded clock fault keeps the core halted: the halt the hook
+        // requested is re-asserted at every slice boundary.
         let mut stmt = format!(
-            "import __builtin__ as b; b.hkb_t0 = {:?}; b.hkb_i0 = b.hkb_cpu.ExecutedInstructions; ",
+            "import __builtin__ as b; b.hkb_t0 = {:?}; b.hkb_i0 = b.hkb_cpu.ExecutedInstructions; \
+             b.hkb_cpu.IsHalted = b.hkb_cpu.IsHalted or b.hkb_fault is not None; ",
             self.clock.virtual_us
         );
         if addresses.is_empty() {
@@ -450,6 +507,20 @@ impl RenodeBackend {
         }
         self.clock.last = Some(clock);
         Ok(())
+    }
+
+    /// The first premature oscillator-ready read the readiness model recorded
+    /// (see [`crate::ClockFault`]), or `None` when there was none or the model
+    /// is not loaded.
+    pub(super) fn read_clock_fault(&mut self) -> Option<crate::traits::ClockFault> {
+        if !self.clock.model_loaded || self.config.crystal_startup.is_none() {
+            return None;
+        }
+        let reply = self
+            .monitor
+            .run("python \"import __builtin__ as b; print(b.hkb_fault_text())\"")
+            .ok()?;
+        parse_fault(&reply)
     }
 
     /// Decode every block the descriptor declares from the machine's current
@@ -558,5 +629,37 @@ mod tests {
             s.contains("e['scale'][3]") && s.contains("e['scale'][4]"),
             "{s}"
         );
+    }
+
+    /// The board crystal's start-up reaches the model: without one the model
+    /// knows none and never records a fault; with one it carries the time and
+    /// whether the card states it, and the fault branch compares the
+    /// programmed delay against it.
+    #[test]
+    fn script_carries_the_crystal_startup() {
+        let mut c = config_with(vec![]);
+        let s = readiness_script(&c, true);
+        assert!(s.contains("b.hkb_xsu = None"), "{s}");
+        assert!(s.contains("b.hkb_xstated = False"), "{s}");
+        c = c.with_crystal_startup(Some(crate::traits::CrystalStartup {
+            reference: "Y1".into(),
+            startup_us: 10_000,
+            stated: true,
+        }));
+        let s = readiness_script(&c, true);
+        assert!(s.contains("b.hkb_xsu = 10000.0"), "{s}");
+        assert!(s.contains("b.hkb_xstated = True"), "{s}");
+        assert!(s.contains("el < b.hkb_xsu"), "{s}");
+        assert!(s.contains("b.hkb_cpu.IsHalted = True"), "{s}");
+    }
+
+    #[test]
+    fn fault_line_parses_and_none_does_not() {
+        let f = parse_fault("xosc 1003.2 10000.0\n").expect("parses");
+        assert_eq!(f.oscillator, "xosc");
+        assert!((f.waited_us - 1003.2).abs() < 1e-9);
+        assert!((f.needed_us - 10_000.0).abs() < 1e-9);
+        assert_eq!(parse_fault("none\n"), None);
+        assert_eq!(parse_fault(""), None);
     }
 }

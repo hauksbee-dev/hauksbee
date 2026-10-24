@@ -19,6 +19,8 @@ mod avr_at28_atomic_cosim;
 mod avr_cosim_speed;
 #[path = "avr_gpio_release_cosim.rs"]
 mod avr_gpio_release_cosim;
+#[path = "avr_sleep_pull_up_cosim.rs"]
+mod avr_sleep_pull_up_cosim;
 #[path = "behavioral_faults.rs"]
 mod behavioral_faults;
 #[path = "behavioral_framework.rs"]
@@ -276,6 +278,8 @@ mod verdict_contract;
 mod waiver_gate;
 #[path = "watchdog_coverage_surfaces.rs"]
 mod watchdog_coverage_surfaces;
+#[path = "xosc_startup_cosim.rs"]
+mod xosc_startup_cosim;
 #[path = "zero_ohm_jumper.rs"]
 mod zero_ohm_jumper;
 #[path = "zero_ohm_link.rs"]

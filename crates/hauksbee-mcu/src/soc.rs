@@ -676,6 +676,7 @@ mod renode_schema {
                 clock_ready: self.clock_ready,
                 timer_fixes: self.timer_fixes,
                 external_clock: None,
+                crystal_startup: None,
                 i2c_controllers: self.i2c.controllers,
                 spi_controllers: self.spi.controllers,
                 spi_extra_repl: self.spi.extra_repl,

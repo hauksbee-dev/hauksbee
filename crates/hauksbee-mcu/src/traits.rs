@@ -38,6 +38,58 @@ impl PinId {
     }
 }
 
+/// The sleep mode a firmware selected, as the part's sleep-control register
+/// states it.
+///
+/// A backend reports what the register says; whether the core is asleep right
+/// now is [`McuState::sleeping`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SleepMode {
+    Idle,
+    AdcNoiseReduction,
+    PowerDown,
+    PowerSave,
+    Standby,
+    ExtendedStandby,
+    /// A code the part reserves, or a mode this list has no name for.
+    Other(String),
+}
+
+impl SleepMode {
+    /// The datasheet's name for the mode.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Idle => "Idle",
+            Self::AdcNoiseReduction => "ADC Noise Reduction",
+            Self::PowerDown => "Power-down",
+            Self::PowerSave => "Power-save",
+            Self::Standby => "Standby",
+            Self::ExtendedStandby => "Extended Standby",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// Whether the oscillator is stopped (or the part is otherwise in the
+    /// microamp state its sleep-current figure describes). Idle and ADC Noise
+    /// Reduction keep the CPU-adjacent clocks running and draw far more.
+    #[must_use]
+    pub const fn is_deep(&self) -> bool {
+        matches!(
+            self,
+            Self::PowerDown | Self::PowerSave | Self::Standby | Self::ExtendedStandby
+        )
+    }
+
+    /// Whether the card's POWER-DOWN sleep current is the right yardstick for
+    /// this mode: only power-down itself. Power-save and the standbys keep a
+    /// timer or oscillator running and draw more than the power-down figure.
+    #[must_use]
+    pub const fn is_power_down(&self) -> bool {
+        matches!(self, Self::PowerDown)
+    }
+}
+
 /// One synchronous external-input ownership update.
 ///
 /// `Drive` persists until the same responder emits `Release`; release is a
@@ -120,6 +172,37 @@ pub struct ExecutionProbe {
     /// The part's mask ROM prints on the same UART before the image runs (the
     /// ESP boot log), so UART bytes alone do not show the firmware executed.
     pub boot_rom_console: bool,
+}
+
+/// The bound board's crystal and how long it takes to start, handed to a
+/// backend that models oscillator readiness so the clock it feeds stays
+/// invalid until the crystal has really started.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CrystalStartup {
+    /// Board reference of the crystal (`Y1`).
+    pub reference: String,
+    /// Enable-to-usable-oscillation time, in microseconds.
+    pub startup_us: u64,
+    /// Whether the crystal's card states the time. A stated time replaces the
+    /// part descriptor's typical start-up for a ready flag the oscillator
+    /// raises itself (STM32 `HSERDY`); an assumed class default does not, so
+    /// it never makes a board slower than the descriptor already models.
+    pub stated: bool,
+}
+
+/// Firmware took an oscillator as ready before its crystal had started.
+///
+/// It trusted a fixed delay (the RP2040 `XOSC_STARTUP.DELAY` counter) shorter
+/// than the crystal's start-up time, and switched a clock onto it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClockFault {
+    /// The descriptor's name for the oscillator (`xosc`).
+    pub oscillator: String,
+    /// How long the oscillator had been enabled when the firmware read it as
+    /// ready, in microseconds: the firmware's effective wait.
+    pub waited_us: f64,
+    /// The crystal's start-up time, in microseconds.
+    pub needed_us: f64,
 }
 
 /// Cap on distinct program counters a backend remembers for
@@ -502,6 +585,21 @@ pub trait Mcu {
         None
     }
 
+    /// The pins whose INTERNAL pull-up the firmware has enabled right now (on an
+    /// AVR: `DDRxn = 0`, `PORTxn = 1` and `PUD = 0`). The pull-up is part of the
+    /// chip, not of the analog circuit, so this is how the co-sim learns of a
+    /// current path the circuit itself does not contain. `None` when the backend
+    /// cannot tell (the default); `Some(vec![])` means it can and none is on.
+    fn internal_pull_ups(&self) -> Option<Vec<PinId>> {
+        None
+    }
+
+    /// The sleep mode the firmware has selected, from the part's sleep-control
+    /// register. `None` when the backend cannot read it (the default).
+    fn sleep_mode(&self) -> Option<SleepMode> {
+        None
+    }
+
     /// Whether this backend can actually observe pin drive DIRECTION, i.e.
     /// whether an empty [`Mcu::pins_configured_output`] means "no pin is an
     /// output" (trustworthy) rather than "I cannot tell" (the conservative
@@ -657,6 +755,14 @@ pub trait Mcu {
     /// does.
     fn external_clock_modelled(&self) -> bool {
         false
+    }
+
+    /// The first time the firmware read an oscillator as ready before its
+    /// crystal had started, or `None`. A backend that models it halts the core
+    /// there: the clock it switched to is not oscillating yet, so on silicon
+    /// the core glitches or stops instead of running on. Read at report time.
+    fn clock_fault(&mut self) -> Option<ClockFault> {
+        None
     }
 
     /// Whether this core's simulated time is credited from HOST wall-clock

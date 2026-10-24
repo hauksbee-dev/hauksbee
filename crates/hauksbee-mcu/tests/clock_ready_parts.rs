@@ -136,6 +136,37 @@ fn stm32g4_crystal_gates_hse_and_pll() {
     );
 }
 
+/// A crystal card's stated start-up replaces the descriptor's typical one for a
+/// ready flag the oscillator raises itself: HSERDY on the F4 rises after the
+/// card's 5 ms, not the datasheet-typical 2 ms. An assumed class default (not
+/// stated) never moves it, so a crystal nobody characterised keeps the
+/// descriptor's time.
+#[test]
+fn stm32f4_hserdy_follows_a_stated_crystal_startup() {
+    let with = |startup_us: u64, stated: bool| {
+        RenodeConfig::stm32f4_discovery().with_crystal_startup(Some(hauksbee_mcu::CrystalStartup {
+            reference: "X1".into(),
+            startup_us,
+            stated,
+        }))
+    };
+    let elf = "stm32f4_ready_probe.elf";
+    if let Some((h, _)) = marker_times("stm32f4", with(5_000, true), elf, true, 6_000) {
+        let h = h.expect("HSERDY rises once the stated start-up has passed");
+        assert!(
+            (5_000..=5_150).contains(&h),
+            "HSERDY at {h} us, card says 5 ms"
+        );
+    }
+    if let Some((h, _)) = marker_times("stm32f4", with(500, false), elf, true, 2_800) {
+        let h = h.expect("HSERDY rises at the descriptor time");
+        assert!(
+            (2_000..=2_150).contains(&h),
+            "HSERDY at {h} us, descriptor says 2 ms"
+        );
+    }
+}
+
 /// RP2040: the pico-sdk image blocks in `xosc_init` without a crystal, so GP25
 /// never toggles and nothing reaches the UART; with one it boots, no earlier
 /// than the 1 ms the SDK's `STARTUP.DELAY` encodes.

@@ -499,6 +499,14 @@ impl Mcu for DeferredMcu {
         self.core().drive_direction_observable()
     }
 
+    fn internal_pull_ups(&self) -> Option<Vec<PinId>> {
+        self.core().internal_pull_ups()
+    }
+
+    fn sleep_mode(&self) -> Option<crate::traits::SleepMode> {
+        self.core().sleep_mode()
+    }
+
     fn pins_routed_to_peripheral(&self) -> Vec<PinId> {
         self.core().pins_routed_to_peripheral()
     }
@@ -533,6 +541,10 @@ impl Mcu for DeferredMcu {
 
     fn external_clock_modelled(&self) -> bool {
         self.core().external_clock_modelled()
+    }
+
+    fn clock_fault(&mut self) -> Option<crate::traits::ClockFault> {
+        self.core_mut().clock_fault()
     }
 
     fn clock_host_paced(&self) -> bool {

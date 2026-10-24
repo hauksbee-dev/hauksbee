@@ -188,6 +188,9 @@ fn core_state(
             "this backend cannot say where the core is".into(),
         );
     };
+    if let Some(words) = &ev.clock_not_ready {
+        return (CoreState::Faulted, None, words.clone());
+    }
     if !ev.faults.is_empty() {
         return (
             CoreState::Faulted,
@@ -617,6 +620,7 @@ mod tests {
             supply_v: Some(3.3),
             clock: hauksbee_bind::mcu_clock::McuClock::default(),
             external_clock_modelled: false,
+            clock_fault: None,
         };
         ExecutionEvidence::new(
             "U1",

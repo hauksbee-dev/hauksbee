@@ -122,6 +122,7 @@ fn drive_strength_follows_the_setting_the_firmware_programmed() {
         drive: vec![rp2040_row(0, 2.0), rp2040_row(1, 4.0), rp2040_row(3, 12.0)],
         drive_select: Some(pads_drive_select()),
         reset: None,
+        ..McuElectrical::default()
     };
     let (mut sched, h) = sched_with(c, &[("LED", led)], &[(('A', 0), "LED")], &[], electrical);
     let high = sched.mcus[0].logic_high_v;
@@ -193,6 +194,7 @@ fn an_open_drain_setting_floats_the_high_level() {
         drive: vec![DriveRow::from_card(&open_drain)],
         drive_select: None,
         reset: None,
+        ..McuElectrical::default()
     };
     let (mut sched, _h) = sched_with(
         c,

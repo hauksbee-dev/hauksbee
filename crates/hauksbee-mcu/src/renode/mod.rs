@@ -337,6 +337,11 @@ pub struct RenodeConfig {
     /// fault.
     #[serde(default)]
     pub external_clock: Option<bool>,
+    /// The bound board's crystal and its start-up time
+    /// ([`Self::with_crystal_startup`]); `None` when no board is bound or the
+    /// board has no crystal.
+    #[serde(default)]
+    pub crystal_startup: Option<crate::traits::CrystalStartup>,
     /// Renode I2C controller names that can host engine-provided I2C slaves.
     /// The STM32F103 thermostat firmware uses `i2c1`.
     pub i2c_controllers: Vec<String>,
@@ -441,6 +446,17 @@ impl RenodeConfig {
     #[must_use]
     pub const fn with_external_clock_present(mut self, present: bool) -> Self {
         self.external_clock = Some(present);
+        self
+    }
+
+    /// Declare the bound board's crystal start-up time. Crystal-dependent
+    /// `[[soc.clock_ready]]` entries then hold the clock invalid until the
+    /// crystal has started: a ready flag the oscillator raises itself waits a
+    /// card-stated time, and a firmware-programmed delay counter that expires
+    /// first is recorded as a [`crate::ClockFault`] and halts the core.
+    #[must_use]
+    pub fn with_crystal_startup(mut self, startup: Option<crate::traits::CrystalStartup>) -> Self {
+        self.crystal_startup = startup;
         self
     }
 }
@@ -2227,6 +2243,10 @@ impl Mcu for RenodeBackend {
 
     fn external_clock_modelled(&self) -> bool {
         self.config.clock_ready.iter().any(|e| e.requires_external)
+    }
+
+    fn clock_fault(&mut self) -> Option<crate::traits::ClockFault> {
+        self.read_clock_fault()
     }
 
     fn execution_probe(&mut self) -> crate::traits::ExecutionProbe {

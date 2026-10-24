@@ -40,6 +40,19 @@ max_adc_source_impedance_ohms = 10000.0
 # DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
 # The minimum, for the held-off check's divider against an external pull-down.
 reset_pull_up_ohms = 30000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common DC
+# characteristics" (Continued, PDF page 323, printed DS40002061B-page 323): RPU "I/O Pin
+# Pull-up Resistor", 20 kOhm min, 50 kOhm max (no typical; the range covers TA -40 to 105 C,
+# VCC 1.8 to 5.5 V). The co-sim's sleep-current account turns this into a current RANGE: the
+# minimum resistance gives the largest current.
+io_pull_up_min_ohms = 20000.0
+io_pull_up_max_ohms = 50000.0
+# Same datasheet, Table 30-5 "ATmega328P DC characteristics" (PDF page 325, printed
+# DS40002061B-page 325): ICC Power-down mode, WDT disabled, VCC = 3 V: typical 0.1 uA, maximum
+# 5 uA (maximum is a production test limit; the figures include input leakage current). With
+# the watchdog enabled the same table gives 4.2 uA typical and 10 uA maximum.
+power_down_current_typ_a = 1.0e-7
+power_down_current_max_a = 5.0e-6
 
 [models.pins]
 # DIP-28 pin map (KiCad Device:ATmega328P-P symbol). The 32-pad TQFP/QFN/MLF
@@ -419,6 +432,19 @@ max_adc_source_impedance_ohms = 10000.0
 # DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
 # The minimum, for the held-off check's divider against an external pull-down.
 reset_pull_up_ohms = 30000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common DC
+# characteristics" (Continued, PDF page 323, printed DS40002061B-page 323): RPU "I/O Pin
+# Pull-up Resistor", 20 kOhm min, 50 kOhm max (no typical; the range covers TA -40 to 105 C,
+# VCC 1.8 to 5.5 V). The co-sim's sleep-current account turns this into a current RANGE: the
+# minimum resistance gives the largest current.
+io_pull_up_min_ohms = 20000.0
+io_pull_up_max_ohms = 50000.0
+# Same datasheet, Table 30-5 "ATmega328P DC characteristics" (PDF page 325, printed
+# DS40002061B-page 325): ICC Power-down mode, WDT disabled, VCC = 3 V: typical 0.1 uA, maximum
+# 5 uA (maximum is a production test limit; the figures include input leakage current). With
+# the watchdog enabled the same table gives 4.2 uA typical and 10 uA maximum.
+power_down_current_typ_a = 1.0e-7
+power_down_current_max_a = 5.0e-6
 
 [models.pins]
 "1"  = "pd3_int1_oc2b"
@@ -795,6 +821,19 @@ max_adc_source_impedance_ohms = 10000.0
 # DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
 # The minimum, for the held-off check's divider against an external pull-down.
 reset_pull_up_ohms = 30000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common DC
+# characteristics" (Continued, PDF page 323, printed DS40002061B-page 323): RPU "I/O Pin
+# Pull-up Resistor", 20 kOhm min, 50 kOhm max (no typical; the range covers TA -40 to 105 C,
+# VCC 1.8 to 5.5 V). The co-sim's sleep-current account turns this into a current RANGE: the
+# minimum resistance gives the largest current.
+io_pull_up_min_ohms = 20000.0
+io_pull_up_max_ohms = 50000.0
+# Same datasheet, Table 30-5 "ATmega328P DC characteristics" (PDF page 325, printed
+# DS40002061B-page 325): ICC Power-down mode, WDT disabled, VCC = 3 V: typical 0.1 uA, maximum
+# 5 uA (maximum is a production test limit; the figures include input leakage current). With
+# the watchdog enabled the same table gives 4.2 uA typical and 10 uA maximum.
+power_down_current_typ_a = 1.0e-7
+power_down_current_max_a = 5.0e-6
 
 [models.pins]
 "1"  = "pd3_int1_oc2b"

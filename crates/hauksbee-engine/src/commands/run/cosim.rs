@@ -460,6 +460,7 @@ fn shared_coverage_messages(
             .iter()
             .map(DriverContention::message),
     );
+    out.extend(scheduler.sleep_current_warnings());
     out
 }
 
