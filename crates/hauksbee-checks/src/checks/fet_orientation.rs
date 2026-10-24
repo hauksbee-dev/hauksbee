@@ -116,13 +116,13 @@ fn is_battery_part(c: &Component) -> bool {
 }
 
 /// A part the board's supply comes in through: a connector or a battery.
-fn is_supply_source(c: &Component) -> bool {
+pub(super) fn is_supply_source(c: &Component) -> bool {
     is_connector_like(c) || is_battery_part(c)
 }
 
 /// A two-pin part that is a wire at DC for this question: a fuse, a ferrite
 /// bead, an inductor or a resistor of a few ohms or less.
-fn is_series_element(c: &Component) -> bool {
+pub(super) fn is_series_element(c: &Component) -> bool {
     if c.pins.len() != 2 {
         return false;
     }
@@ -239,7 +239,7 @@ fn supply_side(idx: &Index<'_>, q: &Component, (first, second): (i64, i64)) -> O
 
 /// A pin that drives its net: an output of any type, a GPIO, a logic output,
 /// or the collector of a driver transistor.
-fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
+pub(super) fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
     if is_connector_like(o) {
         return false;
     }
@@ -881,6 +881,21 @@ mod tests {
         let bad = lint(vec![nfet(SW, GND, GATE), mcu(GATE)], &[]);
         assert_eq!(bad.len(), 1, "{bad:#?}");
         assert_eq!(bad[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn a_low_side_nfet_with_its_gate_pulled_to_its_grounded_source_is_off_not_protection() {
+        // Source on ground (which the header also carries), gate pulled to
+        // the source and nothing else on it: VGS is 0 V, the FET is off. It is
+        // not an always-on reverse-polarity FET whose source faces the input.
+        let parts = vec![
+            header(V5),
+            part("R2", "1k", "Device:R", &[("1", V5), ("2", SW)]),
+            nfet(GND, SW, GATE),
+            part("R1", "100k", "Device:R", &[("1", GATE), ("2", GND)]),
+        ];
+        let found = lint(parts, &[]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     const VIN: i64 = 20;

@@ -423,6 +423,23 @@ pub struct MosfetModel {
     pub rs: f64,
 }
 
+/// Body-diode saturation current (A, ideality 1) for a card that states no `is`.
+///
+/// Every discrete power MOSFET has a source-drain body diode, and a binder
+/// that omits it cannot see a FET wired backwards (the diode bypassing the
+/// switch, or a reverse-polarity FET that does not block). An ASSUMED value:
+/// the binder records each part bound with it
+/// (`BindReport::assumed_body_diodes`).
+///
+/// Chosen to land on the body-diode forward voltages the datasheets print:
+/// at 1e-12 A the diode drops 0.76 V at 4.5 A, against the Vishay `Si7461DP`'s
+/// VSD of 0.8 V typical (1.2 V max) at IS = -4.5 A, and 0.83 V at 62 A
+/// against the `IRF3205`'s VSD of 1.3 V max at IS = 62 A (before the
+/// package's series resistance); at 1 mA it drops 0.54 V. The model field
+/// itself still defaults to 0 ([`MosfetModel::body_is`]): a SPICE deck states
+/// its own `IS` and stays bit-identical.
+pub const GENERIC_BODY_DIODE_IS: f64 = 1e-12;
+
 impl Default for MosfetModel {
     fn default() -> Self {
         Self {

@@ -39,6 +39,7 @@ pub use bexpr::CompiledExpr;
 pub use docs_url::docs_url;
 pub use models::{
     thermal_voltage as thermal_voltage_c, BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity,
+    GENERIC_BODY_DIODE_IS,
 };
 pub use source::{AcStim, PwlPoint, SourceKind};
 pub use spice::{
