@@ -45,19 +45,74 @@ fn same(a: &Component, b: &Component) -> bool {
     a.reference == b.reference
 }
 
+/// Words that name a cell or its holder wherever they sit in a value,
+/// footprint or symbol name, once split on anything that is not a letter or
+/// digit (`BatteryHolder_Keystone_103`, `Battery_Cell`, `BAT`, `CR2032`).
+/// Whole words only, so a `BAT54` Schottky diode is not a cell.
+const CELL_WORDS: &[&str] = &[
+    "bat",
+    "batt",
+    "battery",
+    "batteries",
+    "batteryholder",
+    "batteryclip",
+    "coincell",
+    "cr2032",
+    "cr2025",
+    "cr2016",
+    "cr1220",
+    "cr1632",
+    "cr927",
+    "18650",
+    "lipo",
+    "liion",
+];
+
+fn names_a_cell(text: &str) -> bool {
+    text.to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|w| CELL_WORDS.contains(&w))
+}
+
 /// A battery or cell by what the part is, not by what its net is called: a
-/// `BT`/`BAT` designator, a `Device:Battery*` symbol or a battery-holder
-/// footprint. A cell on a net KiCad named `Net-(BT1-+)` is as much a source as
-/// one on `+BATT`.
+/// `BT`/`BAT` designator, a `Device:Battery*` symbol, a battery-holder or
+/// clip footprint, or a small non-semiconductor part whose value, symbol or
+/// footprint names a cell (`BAT`, `CR2032`, `18650`). A cell on a net KiCad
+/// named `Net-(BT1-+)` is as much a source as one on `+BATT`.
 fn is_battery_part(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
-    r.starts_with("BT")
+    if r.starts_with("BT")
         || r.starts_with("BAT")
         || lib.starts_with("device:battery")
         || fp.contains("batteryholder")
         || fp.contains("battery_holder")
+    {
+        return true;
+    }
+    // A holder or clip carries two to four pads (the extra two are mounting
+    // tabs). A diode, transistor or IC whose name merely contains the word is
+    // not a cell.
+    let passive_or_active = matches!(
+        RefClass::of(&c.reference),
+        RefClass::Resistor
+            | RefClass::ResistorArray
+            | RefClass::Varistor
+            | RefClass::Thermistor
+            | RefClass::Capacitor
+            | RefClass::Inductor
+            | RefClass::FerriteBead
+            | RefClass::Diode
+            | RefClass::Led
+            | RefClass::Transistor
+            | RefClass::ActiveIc
+    );
+    !passive_or_active
+        && (2..=4).contains(&c.pins.len())
+        && [&c.value, &c.lib_id, &c.footprint]
+            .into_iter()
+            .any(|t| names_a_cell(t))
 }
 
 /// A part the board's supply comes in through: a connector or a battery.
@@ -172,8 +227,12 @@ fn supply_side(idx: &Index<'_>, q: &Component, (first, second): (i64, i64)) -> O
                 second
             })
         }
-        (Some(_), None) if tier_first == 0 => Some(first),
-        (None, Some(_)) if tier_first == 0 => Some(second),
+        // The named-rail fallback: the side on a named rail is the supply.
+        // It is wrong when the other side is an auto-named net that reaches
+        // a two-pin part which is not a passive (an unrecognised battery
+        // holder or clip): that side may well be the input, so abstain.
+        (Some(_), None) if tier_first == 0 && !opaque_source_side(idx, second, q) => Some(first),
+        (None, Some(_)) if tier_first == 0 && !opaque_source_side(idx, first, q) => Some(second),
         _ => None,
     }
 }
@@ -353,6 +412,44 @@ fn gate_is_passive(idx: &Index<'_>, q: &Component, gate: i64, ends: [i64; 2]) ->
     frontier.is_empty()
 }
 
+/// A net KiCad (or another tool) named itself, `Net-(J1-Pin_1)`, rather than
+/// a person: its name says nothing about what the net carries.
+fn is_auto_named(name: &str) -> bool {
+    let leaf = name.rsplit('/').next().unwrap_or(name);
+    leaf.starts_with("Net-(") || leaf.starts_with("unconnected-(")
+}
+
+/// An auto-named net whose cluster reaches a two-pin part that is neither a
+/// passive nor a semiconductor: a supply the binder could not name (a battery
+/// holder, clip or module drawn with a generic symbol). Its side of a FET may
+/// be the input, so a rail-name fallback must not call the other side the
+/// supply.
+fn opaque_source_side(idx: &Index<'_>, net: i64, q: &Component) -> bool {
+    if !is_auto_named(idx.name(net)) {
+        return false;
+    }
+    cluster(idx, net, q).into_iter().any(|n| {
+        idx.members(n).iter().any(|(o, _)| {
+            !same(o, q)
+                && o.pins.len() == 2
+                && matches!(
+                    RefClass::of(&o.reference),
+                    RefClass::Other | RefClass::Switch
+                )
+        })
+    })
+}
+
+/// The gate net has a bias part to a ground net: a pull-down, as a
+/// reverse-polarity P-FET's gate has.
+fn gate_pulled_to_ground(idx: &Index<'_>, q: &Component, gate: i64) -> bool {
+    idx.members(gate)
+        .iter()
+        .filter(|(o, _)| !same(o, q) && is_bias_part(o))
+        .flat_map(|(o, _)| o.pins.iter().filter_map(|p| p.net))
+        .any(|n| n != 0 && is_ground(idx.name(n)))
+}
+
 /// Whether a connector or a battery sits on the cluster of `net`: the board's
 /// supply comes in there, whatever the net is called (`Net-(J1-Pin_1)` from a
 /// battery connector has no name to read a rail from).
@@ -525,17 +622,33 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         // A source on ground is not a supply input the body diode must block:
         // every header on the board sits on that net, and a FET whose source
         // is on ground is a low-side switch.
-        if !is_ground(idx.name(s))
-            && gate_is_passive(&idx, q, g, [s, d])
-            && reaches_connector(&idx, s, q)
-            && !reaches_connector(&idx, d, q)
-            && !bypassed(&idx, q, (s, d))
+        if is_ground(idx.name(s))
+            || !gate_is_passive(&idx, q, g, [s, d])
+            || bypassed(&idx, q, (s, d))
         {
+            continue;
+        }
+        let input_note = if reaches_connector(&idx, s, q) {
+            (!reaches_connector(&idx, d, q)).then_some("reaches the connector net")
+        } else if !reaches_connector(&idx, d, q)
+            && gate_pulled_to_ground(&idx, q, g)
+            && opaque_source_side(&idx, s, q)
+            && idx.level(d).is_some_and(|v| v > 0.0)
+        {
+            // No side shows a recognised source. The gate is pulled to ground,
+            // so this is a protection FET, and its input is the side that is
+            // not the system's named rail: the auto-named side that reaches an
+            // unrecognised two-pin part.
+            Some("reaches the unnamed input net")
+        } else {
+            None
+        };
+        if let Some(input_note) = input_note {
             report.findings.push(LintFinding {
                 check: LintCheck::PinFunction,
                 severity: Severity::Medium,
                 message: format!(
-                    "{} is an always-on FET (its gate is biased only by passives), as used for reverse-polarity protection, but its source reaches the connector net '{}' (directly or through a fuse, bead or low-value resistor) and its drain '{}': the body diode then points from the load back to the input and a reversed supply is not blocked. {}swap source and drain so the drain faces the connector",
+                    "{} is an always-on FET (its gate is biased only by passives), as used for reverse-polarity protection, but its source {input_note} '{}' (directly or through a fuse, bead or low-value resistor) and its drain '{}': the body diode then points from the load back to the input and a reversed supply is not blocked. {}swap source and drain so the drain faces the input",
                     q.reference, name(s), name(d), hauksbee_extract::REMEDY_MARKER
                 ),
                 refs: vec![q.reference.clone()],
@@ -1052,5 +1165,126 @@ mod tests {
         assert!(found.is_empty(), "ground source: {found:#?}");
         let found = lint(low(V5), &nets);
         assert_eq!(found.len(), 1, "source on the connector rail: {found:#?}");
+    }
+
+    const CELL: i64 = 70;
+    const CELL_GATE: i64 = 71;
+    const VCC: i64 = 72;
+    const CELL_NETS: &[(i64, &str)] = &[
+        (CELL, "Net-(X1-Pad1)"),
+        (CELL_GATE, "Net-(Q1-G)"),
+        (VCC, "VCC"),
+    ];
+
+    /// A protection P-FET between `Net-(X1-Pad1)` (the 2-pad part `x1`) and the
+    /// named `VCC` rail, its gate to ground through 10k; no connector anywhere.
+    fn cell_board(x1: Component, (s, d): (i64, i64)) -> Vec<LintFinding> {
+        lint(
+            vec![
+                x1,
+                pfet(s, d, CELL_GATE),
+                part("R1", "10k", "Device:R", &[("1", CELL_GATE), ("2", GND)]),
+                part("R2", "1k", "Device:R", &[("1", VCC), ("2", GND)]),
+            ],
+            CELL_NETS,
+        )
+    }
+
+    fn two_pad(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
+        let mut c = part(reference, value, lib_id, &[("1", CELL), ("2", GND)]);
+        c.footprint = footprint.into();
+        c
+    }
+
+    #[test]
+    fn a_battery_holder_named_by_value_or_footprint_is_a_source_wherever_its_net_goes() {
+        for (what, x1) in [
+            (
+                "value BAT",
+                two_pad("X1", "BAT", "Device:Generic", "Keystone_3034"),
+            ),
+            (
+                "value CR2032",
+                two_pad("X1", "CR2032", "Device:Generic", "Holder_THT"),
+            ),
+            (
+                "footprint",
+                two_pad("X1", "Cell", "Device:Generic", "Battery_Clip_2xAAA"),
+            ),
+            (
+                "coin-cell footprint",
+                two_pad("X1", "Hold", "Device:Generic", "Keystone_CoinCell_1"),
+            ),
+        ] {
+            assert!(is_battery_part(&x1), "{what} should read as a cell");
+            let bad = cell_board(x1.clone(), (CELL, VCC));
+            assert_eq!(bad.len(), 1, "{what}: {bad:#?}");
+            assert!(bad[0].message.contains("always-on FET"), "{what}");
+            let good = cell_board(x1, (VCC, CELL));
+            assert!(good.is_empty(), "{what}: {good:#?}");
+        }
+    }
+
+    #[test]
+    fn a_part_that_merely_has_bat_in_its_name_is_not_a_cell() {
+        let mut schottky = part(
+            "D1",
+            "BAT54",
+            "Device:D_Schottky",
+            &[("1", CELL), ("2", GND)],
+        );
+        schottky.footprint = "SOT-23".into();
+        assert!(!is_battery_part(&schottky));
+        let reg = two_pad("U1", "BAT", "Device:Generic", "SOT-23");
+        assert!(!is_battery_part(&reg), "an IC is not a cell");
+        let named_bat54 = two_pad("X1", "BAT54", "Device:Generic", "SOD-323");
+        assert!(!is_battery_part(&named_bat54), "BAT54 is a diode, not BAT");
+    }
+
+    #[test]
+    fn the_unnamed_input_side_of_a_gate_to_ground_pfet_is_not_read_as_the_load() {
+        // Nothing here is recognisable as a source: a generic 2-pad part on an
+        // auto-named net, a named VCC rail on the other side. The input is
+        // the side that is not the named rail.
+        let module = || two_pad("X1", "Module", "Device:Generic", "Foo");
+        let bad = cell_board(module(), (CELL, VCC));
+        assert_eq!(bad.len(), 1, "{bad:#?}");
+        assert!(
+            bad[0].message.contains("unnamed input net"),
+            "{}",
+            bad[0].message
+        );
+        // Drain on the input side is the right way round.
+        let good = cell_board(module(), (VCC, CELL));
+        assert!(good.is_empty(), "{good:#?}");
+        // The auto-named side reaching only a passive (a pull-down resistor)
+        // says nothing about being an input: silent either way.
+        for (s, d) in [(CELL, VCC), (VCC, CELL)] {
+            let passive = cell_board(
+                part("R9", "1k", "Device:R", &[("1", CELL), ("2", GND)]),
+                (s, d),
+            );
+            assert!(passive.is_empty(), "passive only: {passive:#?}");
+        }
+    }
+
+    #[test]
+    fn the_named_rail_fallback_abstains_when_the_other_side_is_an_unnamed_two_pin_part() {
+        let driven = |x1: Option<Component>, (s, d): (i64, i64)| {
+            let mut parts = vec![pfet(s, d, GATE), mcu(GATE)];
+            parts.push(
+                x1.unwrap_or_else(|| part("R9", "1k", "Device:R", &[("1", CELL), ("2", GND)])),
+            );
+            parts.push(part("R2", "1k", "Device:R", &[("1", VCC), ("2", GND)]));
+            lint(parts, CELL_NETS)
+        };
+        // Control: the auto-named side carries only a resistor, so the named
+        // rail is still the supply and a drain on it cannot switch off.
+        let found = driven(None, (CELL, VCC));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        // The auto-named side reaches an unrecognised 2-pad part: abstain.
+        let module = two_pad("X1", "Module", "Device:Generic", "Foo");
+        let found = driven(Some(module), (CELL, VCC));
+        assert!(found.is_empty(), "{found:#?}");
     }
 }
