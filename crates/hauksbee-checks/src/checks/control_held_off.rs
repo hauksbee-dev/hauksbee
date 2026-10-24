@@ -1457,4 +1457,73 @@ mod tests {
             ],
         );
     }
+
+    /// A load switch whose card says an open enable turns it on, with `/RST`
+    /// driven only by pad `pad` of the shipped MCU card that `value` and
+    /// `footprint` select (no MCU card of the fixture's own).
+    fn shipped_mcu_enable(tag: &str, value: &str, footprint: &str, pad: &str) -> Vec<LintFinding> {
+        let params = load_switch(OPEN_IS_ON);
+        let card = format!(
+            "[[models]]\nid = \"shipped_en_{tag}\"\nkind = \"analog_switch\"\n\
+             description = \"enable fixture\"\n[models.match]\n\
+             value_re = \"^SHIPTEST-{tag}$\"\n[models.params]\n{params}\n\
+             [models.pins]\n\"1\" = \"in_out_a\"\n\"2\" = \"vss\"\n\"4\" = \"in_out_b\"\n\
+             \"3\" = \"ctrl\"\n"
+        );
+        let dir = hauksbee_testkit::fresh_scratch_dir("control_held_off", tag);
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{tag}: {errors:?}");
+        let mut mcu = part("U2", value, &[(pad, RST)]);
+        mcu.footprint = footprint.into();
+        let all = vec![
+            part(
+                "U1",
+                &format!("SHIPTEST-{tag}"),
+                &[("1", V3), ("2", GND), ("3", RST)],
+            ),
+            mcu,
+        ];
+        control_held_off_lint(&board(&NETS, all), &lib)
+            .of_check(LintCheck::ControlHeldOff)
+            .cloned()
+            .collect()
+    }
+
+    const RP2040_QFN56: &str = "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm";
+
+    /// The shipped RP2040 card says every GPIO pad is pulled down in reset
+    /// (Table 615 'Reset State'), so a GPIO alone on an active-high load-switch
+    /// enable whose card says open is on is held off in reset: silent. The same
+    /// layout on an `ATmega328P`, whose card states its port pins are tri-stated
+    /// in reset, is still the finding.
+    #[test]
+    fn an_rp2040_gpio_alone_on_an_enable_is_pulled_down_in_reset_and_an_avr_pin_floats() {
+        // RP2040 QFN-56 pad 2 is GPIO0.
+        let rp = shipped_mcu_enable("RP", "RP2040", RP2040_QFN56, "2");
+        assert!(rp.is_empty(), "{rp:#?}");
+        // ATmega328P DIP-28 pad 2 is PD0.
+        let avr = shipped_mcu_enable("AVR", "ATmega328P", "", "2");
+        assert_eq!(avr.len(), 1, "{avr:#?}");
+        says(
+            &avr[0],
+            &[
+                "U1 (SHIPTEST-AVR) EN pin 3 is driven only by U2 pin 2",
+                "switched on while the MCU is in reset",
+            ],
+        );
+    }
+
+    /// Each pad is judged on its own table row: STM32F411 PA15 (JTDI, pull-up
+    /// in reset per RM0383 8.3.1) is silent, while a plain port pad of the same
+    /// card floats.
+    #[test]
+    fn a_stm32_debug_pad_is_pulled_in_reset_and_a_plain_port_pad_floats() {
+        let lqfp100 = "Package_QFP:LQFP-100_14x14mm_P0.5mm";
+        let pa15 = shipped_mcu_enable("PA15", "STM32F411VET6", lqfp100, "77");
+        assert!(pa15.is_empty(), "{pa15:#?}");
+        let plain = shipped_mcu_enable("PLAIN", "STM32F411VET6", lqfp100, "91");
+        assert_eq!(plain.len(), 1, "{plain:#?}");
+    }
 }

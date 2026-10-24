@@ -689,6 +689,14 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "RM0090 (STM32F405/407/415/417 reference manual), section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.271); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.284)"
+[models.pin_capability.reset_mode.pads]
+"46" = "pull_up"  # pa13_swdio
+"49" = "pull_down"  # pa14_swclk
+"50" = "pull_up"  # pa15
+"56" = "pull_up"  # pb4
+
 
 # -----------------------------------------------------------------------------
 # WLCSP90: STM32F405OG, STM32F405OE (O = 90 pins, WLCSP only).
@@ -2129,6 +2137,14 @@ needs = "idle"
 opposed_only = true
 basis = "AN2606 Rev 70 Table 75 (STM32F40xxx/41xxx configuration in system memory boot mode, bootloader V9.x; the V3.x Table 73 PDF pp.161-162 lists the same pad) PDF p.165, USART3_RX pin (USART3 on PC10/PC11): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0090 Rev 22 PDF p.964 section 30.3.1 USART character description: \"The TX pin is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "RM0090 (STM32F405/407/415/417 reference manual), section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.271); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.284)"
+[models.pin_capability.reset_mode.pads]
+"72" = "pull_up"  # pa13_swdio
+"76" = "pull_down"  # pa14_swclk
+"77" = "pull_up"  # pa15
+"90" = "pull_up"  # pb4
 
 
 # -----------------------------------------------------------------------------

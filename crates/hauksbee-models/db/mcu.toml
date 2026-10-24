@@ -378,6 +378,9 @@ basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V;
 implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
 missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+[models.pin_capability.reset_mode]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P datasheet DS40002061B, section 14.2.1 Configuring the Pin: the port pins are tri-stated when reset condition becomes active, even if no clocks are running (PDF p.85)"
+
 # ATmega328P in the 32-pad packages: 32-lead TQFP and 32-pad VQFN/MLF.
 #
 # Source: Microchip ATmega328P DS40001984, section 4 "Pin Configurations",
@@ -759,6 +762,9 @@ basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V;
 implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
 missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+[models.pin_capability.reset_mode]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P datasheet DS40002061B, section 14.2.1 Configuring the Pin: the port pins are tri-stated when reset condition becomes active, even if no clocks are running (PDF p.85)"
+
 # ATmega328P in the 28-pad QFN/MLF (ordering code -MMH / -MMHR, package 28M1).
 #
 # Source: Microchip ATmega328P DS40002061A, section 1 "Pin Configurations",
@@ -1128,6 +1134,9 @@ basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V;
 [models.coverage]
 implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
 missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+[models.pin_capability.reset_mode]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P datasheet DS40002061B, section 14.2.1 Configuring the Pin: the port pins are tri-stated when reset condition becomes active, even if no clocks are running (PDF p.85)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ATmega168 / ATmega168V in the 32-pin packages (32-pad MLF and 32-lead TQFP).
@@ -1600,6 +1609,11 @@ basis = "DS40001882L Table 37-3 VDD 1.62-3.63 V (BOD33 disabled); Table 37-2 VDD
 [models.coverage]
 implements = ["pad_map", "supply_envelope", "supply_current_rating"]
 missing = ["firmware_cosim_core", "gpio_behaviour", "usb_device_controller", "gpio_cluster_current_limits"]
+
+[models.pin_capability.reset_mode]
+basis = "Microchip SAM D21/DA1 datasheet DS40001882L, section 23.6.2.1 Initialization: after reset all standard function I/O pads are connected to the PORT with outputs tri-stated and input buffers disabled (PDF p.381); except SWCLK (PA30), internally pulled up at startup, section 13.6.2 CPU Reset Extension (PDF p.71)"
+[models.pin_capability.reset_mode.pads]
+"31" = "pull_up"  # pa30_swclk
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284P: the 128 KB / 16 KB-SRAM megaX4-line AVR, 44-lead TQFP and 44-pad
@@ -2695,6 +2709,9 @@ abs_error_lsb = 4.5
 column = "typ"
 condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
 basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
+[models.pin_capability.reset_mode]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P datasheet DS40002061B, section 14.2.1 Configuring the Pin: the port pins are tri-stated when reset condition becomes active, even if no clocks are running (PDF p.85)"
 
 [[models]]
 id = "pro_micro"
@@ -3957,6 +3974,12 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 41 (STM32F071xx/072xx configuration in system memory boot mode) PDF p.110, USART2_RX pin: \"PA15 pin: USART2 in reception mode. Used in input pull-up mode\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0091 Rev 10 PDF p.705 section 27.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "STM32F072x8/xB datasheet Rev 5, Table 13 pin definitions note 4: after reset PA13 (SWDIO) has its internal pull-up and PA14 (SWCLK) its internal pull-down activated (PDF p.40); other pads are inputs, no pull"
+[models.pin_capability.reset_mode.pads]
+"34" = "pull_up"  # pa13_swdio
+"37" = "pull_down"  # pa14_swclk
+
 # UNLISTED ON PURPOSE (F0): (a) "nBOOT1 = 0, BOOT0 = 1 -> Embedded SRAM" is reachable only after the user clears the nBOOT1
 # option bit; that is not the factory state, so no row. (b) The BOOT_SEL = 0 / nBOOT0 rows are marked "available on STM32F04x
 # and STM32F09x devices only" and do not exist on F07x. (c) The empty-check row (footnote 2) is F04x/F09x only.
@@ -4531,6 +4554,9 @@ commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
 port = "USART1 on PA9 (TX) / PA10 (RX), 8E1"
 cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 77 PDF p.170-172 (pins; USART2 PD5/PD6 are not on a 48-pin package), Table 226 (PID 0x423 for F401xB/C). The Get command list and version byte are derived, not printed per device."
 
+[models.pin_capability.reset_mode]
+basis = "RM0368 section 8.3.1 GPIO: during and just after reset the I/O ports are input floating, except the debug pins PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.148); GPIOA_PUPDR reset 0x6400 0000 and GPIOB_PUPDR 0x0000 0100, section 8.4.4 (PDF p.159). No such pad is on this card"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32G474 (UFQFPN48; LQFP48 is the next card). Co-simulates on the COMPOSED Renode platform
 # in hauksbee-mcu db/mcu/stm32g4.soc.toml, which states what is exact and what
@@ -4780,6 +4806,14 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART3_RX pin: \"PC11 pin: USART3 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72)"
+[models.pin_capability.reset_mode.pads]
+"36" = "pull_up"  # pa13_swdio
+"37" = "pull_down"  # pa14_swclk
+"38" = "pull_up"  # pa15
+"42" = "pull_up"  # pb4
+
 # UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
 # (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
 # whatever the pin). (d) Dual-bank / BFB2 and "both banks empty" rows of AN2606 Pattern 14: not a pin function.
@@ -5010,6 +5044,14 @@ needs = "idle"
 opposed_only = true
 basis = "AN2606 Rev 70 Table 117 (STM32G47xxx/48xxx configuration in system memory boot mode) PDF p.279, USART1_RX pin: \"PA10 pin: USART1 in reception mode. Used in alternate push-pull, pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0440 Rev 9 PDF pp.1694-1695 section 40.5.3 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition note 5: after reset the internal pull-up on PA15, PA13 and PB4 and the internal pull-down on PA14 are activated (PDF p.72)"
+[models.pin_capability.reset_mode.pads]
+"37" = "pull_up"  # pa13_swdio
+"38" = "pull_down"  # pa14_swclk
+"39" = "pull_up"  # pa15
+"41" = "pull_up"  # pb4
 
 # UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
 # (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
@@ -5302,6 +5344,14 @@ opposed_only = true
 basis = "AN2606 Rev 70 Table 103 (STM32F76xxx/77xxx configuration in system memory boot mode) PDF p.245, USART3_RX pin (USART3 on PC11/PC10): \"PC11 pin: USART3 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0410 Rev 5 PDF p.1237 section 34.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "RM0410 (STM32F76xxx/F77xxx reference manual), section 6.3.1 GPIO: during and just after reset most I/O are input floating, except PA15 JTDI pull-up, PA14 JTCK/SWCLK pull-down, PA13 JTMS/SWDAT pull-up, PB4 NJTRST pull-up (PDF p.224); GPIOA_PUPDR reset 0x6400 0000, GPIOB_PUPDR 0x0000 0100, section 6.4.4 (PDF p.232)"
+[models.pin_capability.reset_mode.pads]
+"72" = "pull_up"  # pa13_swdio
+"76" = "pull_down"  # pa14_swclk
+"77" = "pull_up"  # pa15
+"90" = "pull_up"  # pb4
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32L011/L021 K (LQFP32). Co-simulates on the stock Renode L071 platform
 # with SysTick unlinked from its RCC model (db/mcu/stm32l0.soc.toml). Pad map:
@@ -5531,6 +5581,12 @@ needs = "idle"
 opposed_only = true
 basis = "AN2606 Rev 70 Table 142 (STM32L01xxx/02xxx configuration in system memory boot mode) PDF p.342, USART2_RX pin (USART2 on PA9/PA10): \"PA10 pin: USART2 in reception mode. Used in input pull-up mode.\"; AN3155 Rev 22 PDF p.5 section 1 (bootloader code sequence): \"the bootloader code begins to scan the USARTx_RX line pin, waiting to receive the 0x7F data frame: a start bit, 0x7F data bits, even parity bit(a), and a stop bit.\"; RM0377 Rev 10 PDF p.662 section 24.5.1 USART character description: \"By default, the signal (TX or RX) is in low state during the start bit. It is in high state during the stop bit.\" and \"An Idle character is interpreted as an entire frame of “1”s\" and \"A Break character is interpreted on receiving “0”s for a frame period\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "RM0377 Rev 10 (STM32L0x1 reference manual), section 8.3.1 GPIO: during and just after reset most I/O are in analog mode; PA14 SWCLK in pull-down, PA13 SWDIO in pull-up (PDF p.218); GPIOA_PUPDR reset value 0x2400 0000, section 8.4.4 (PDF p.226)"
+[models.pin_capability.reset_mode.pads]
+"23" = "pull_up"  # pa13_swdio
+"24" = "pull_down"  # pa14_swclk
 
 # UNLISTED ON PURPOSE (L0): (a) SRAM row (nBOOT1 = 0 with BOOT0 high) needs nBOOT1 = 0, not factory. (b) nBOOT_SEL = 1 rows
 # (BOOT0 from the nBOOT0 option bit): grey = category 1 only and not the factory state. (c) The empty-check override is
@@ -5774,6 +5830,18 @@ opposed_only = true
 basis = "ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\"; ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.12 Table 3 Pin Definitions: \"RXD0 34 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\"; ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "ESP32 Series Datasheet v5.3, Appendix A Table IO_MUX, column 'At Reset' (PDF p.69): wpu on GPIO0, GPIO1, GPIO3, GPIO5, GPIO6-GPIO11, GPIO15 and wpd on GPIO2, GPIO4, GPIO12; every other GPIO is oe=0, ie=0 (during reset all pins are output-disabled, section Pin Description p.62)"
+[models.pin_capability.reset_mode.pads]
+"14" = "pull_down"  # gpio12
+"23" = "pull_up"  # gpio15
+"24" = "pull_down"  # gpio2
+"25" = "pull_up"  # gpio0
+"26" = "pull_down"  # p04
+"29" = "pull_up"  # gpio5
+"34" = "pull_up"  # p03_rxd
+"35" = "pull_up"  # p01_txd
+
 [[models]]
 id = "esp32"
 kind = "mcu"
@@ -5971,6 +6039,18 @@ opposed_only = true
 basis = "ESP32 Series Datasheet v5.3 PDF p.15 Table 2-1 Pin Definitions (QFN48): \"U0RXD 40 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\"; ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\" (an ESP32 module; the card is the bare chip); ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "ESP32 Series Datasheet v5.3, Appendix A Table IO_MUX, column 'At Reset' (PDF p.69): wpu on GPIO0, GPIO1, GPIO3, GPIO5, GPIO6-GPIO11, GPIO15 and wpd on GPIO2, GPIO4, GPIO12; every other GPIO is oe=0, ie=0 (during reset all pins are output-disabled, section Pin Description p.62)"
+[models.pin_capability.reset_mode.pads]
+"18" = "pull_down"  # gpio12
+"21" = "pull_up"  # gpio15
+"22" = "pull_down"  # gpio2
+"23" = "pull_up"  # gpio0
+"24" = "pull_down"  # gpio4
+"34" = "pull_up"  # gpio5
+"40" = "pull_up"  # p03_rxd
+"41" = "pull_up"  # p01_txd
+
 [[models]]
 id = "esp32_pico"
 kind = "mcu"
@@ -6145,6 +6225,16 @@ needs = "idle"
 opposed_only = true
 basis = "ESP32-PICO Series Datasheet v1.4 PDF p.15 Table 2 Pin Description of ESP32-PICO-D4: \"U0RXD 40 I/O GPIO3, U0RXD, CLK_OUT2\"; ESP32 Series Datasheet v5.3 PDF p.23 Table 3-3 Chip Boot Mode Control (GPIO0 = 0, GPIO2 = 0, Joint Download Boot Mode, footnote 2): \"Joint Download Boot mode supports the following download methods: • SDIO Download Boot • UART Download Boot\" (the ESP32 chip inside the SiP); ESP32-WROOM-32E/32UE Datasheet v2.1 PDF p.39 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\" (an ESP32 module); ESP32 TRM v5.8 PDF p.314 (UART chapter, data frame): \"The START is low level, while the STOP is high level.\"; PDF p.315: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "ESP32 Series Datasheet v5.3, Appendix A Table IO_MUX, column 'At Reset' (PDF p.69): wpu on GPIO0, GPIO1, GPIO3, GPIO5, GPIO6-GPIO11, GPIO15 and wpd on GPIO2, GPIO4, GPIO12; every other GPIO is oe=0, ie=0 (during reset all pins are output-disabled, section Pin Description p.62)"
+[models.pin_capability.reset_mode.pads]
+"22" = "pull_down"  # gpio2
+"23" = "pull_up"  # gpio0
+"28" = "pull_up"  # gpio9
+"34" = "pull_up"  # gpio5
+"40" = "pull_up"  # p03_rxd
+"41" = "pull_up"  # p01_txd
 
 [[models]]
 id = "lilygo_t_micro32"
@@ -6385,6 +6475,13 @@ flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; 
 bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   # bits 1:0 are 'Reserved' in TRM v1.8 p.506; positions from ESP-IDF esp32s3 boot_mode.h (SPI download 0b0110) and an Espressif QEMU ROM run
 cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
 
+[models.pin_capability.reset_mode]
+basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
+[models.pin_capability.reset_mode.pads]
+"16" = "pull_down"  # gpio46
+"26" = "pull_down"  # gpio45
+"27" = "pull_up"  # gpio0
+
 [[models]]
 id = "esp32s3_qfn56"
 kind = "mcu"
@@ -6567,6 +6664,13 @@ flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; 
 bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }   # bits 1:0 are 'Reserved' in TRM v1.8 p.506; positions from ESP-IDF esp32s3 boot_mode.h (SPI download 0b0110) and an Espressif QEMU ROM run
 cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
 
+[models.pin_capability.reset_mode]
+basis = "ESP32-S3 Series Datasheet v2.2, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): WPU on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD on GPIO45, GPIO46; the other GPIOs are IE or blank, no pull (pin to GPIO map: IO MUX pin function table, PDF pp.20-21)"
+[models.pin_capability.reset_mode.pads]
+"5" = "pull_up"  # gpio0
+"51" = "pull_down"  # gpio45
+"52" = "pull_down"  # gpio46
+
 [[models]]
 id = "esp32s2"
 kind = "mcu"
@@ -6625,6 +6729,13 @@ note = "GPIO46 must be low or floating at reset"
 role = "gpio45"
 level = "defined"
 note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
+
+[models.pin_capability.reset_mode]
+basis = "ESP32-S2 Series Datasheet v1.9, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.13-14): WPU, IE on GPIO0, GPIO26-GPIO32 (SPICS1, SPIHD, SPIWP, SPICS0, SPICLK, SPIQ, SPID), GPIO43 (U0TXD), GPIO44 (U0RXD); WPD, IE on GPIO45, GPIO46; the other GPIOs have IE or nothing at reset, no pull"
+[models.pin_capability.reset_mode.pads]
+"3" = "pull_up"  # gpio0
+"39" = "pull_down"  # gpio45
+"40" = "pull_down"  # gpio46
 
 [[models]]
 id = "esp32s2_qfn56"
@@ -6880,6 +6991,11 @@ needs = "idle"
 opposed_only = true
 basis = "ESP32-C3-MINI-1 Datasheet v2.2 PDF p.14 (section 3.1 Chip Boot Mode Control): \"In Joint Download Boot mode, users can download binary files into flash using UART0 or USB interface.\"; PDF p.34 (section 9 Peripheral Schematics, note): \"UART0 is used to download firmware and log output.\"; PDF p.11 Table 3 Pin Definitions: \"RXD0 30 I/O/T GPIO20, U0RXD\"; ESP32-C3 TRM v1.4 PDF p.555 (UART chapter, 26.4.4 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "ESP32-C3 Series Datasheet v2.4, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): IE, WPU on GPIO9; WPU on SPIHD, SPIWP, SPICS0, SPICLK, SPID, SPIQ (GPIO12-GPIO17); the other pads have IE or nothing at reset, no pull"
+[models.pin_capability.reset_mode.pads]
+"23" = "pull_up"  # gpio9
 
 [[models]]
 id = "esp32c3_wroom02"
@@ -7221,6 +7337,11 @@ opposed_only = true
 basis = "ESP32-C3 Series Datasheet v2.4 PDF p.31 (section 3.1 Chip Boot Mode Control): \"In Joint Download Boot mode, users can download binary files into flash using UART0 or USB interface.\"; PDF p.17 Table 2-1 Pin Overview (QFN32): pin 27 \"U0RXD\"; PDF p.20 pin-function table: \"27 GPIO20 U0RXD\"; ESP32-C3 TRM v1.4 PDF p.555 (UART chapter, 26.4.4 UART Data Frame): \"The START bit is logical low, whereas STOP bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
 
+[models.pin_capability.reset_mode]
+basis = "ESP32-C3 Series Datasheet v2.4, Table 2-1 Pin Overview, column 'At Reset' (PDF pp.16-17): IE, WPU on GPIO9; WPU on SPIHD, SPIWP, SPICS0, SPICLK, SPID, SPIQ (GPIO12-GPIO17); the other pads have IE or nothing at reset, no pull"
+[models.pin_capability.reset_mode.pads]
+"15" = "pull_up"  # gpio9
+
 [[models]]
 id = "esp32c6_mini1"
 kind = "mcu"
@@ -7395,6 +7516,17 @@ needs = "idle"
 opposed_only = true
 basis = "ESP32-C6 TRM v1.2 PDF p.375 (section 9.2.2 Boot Mode Control): \"In Download Boot mode, users can download code into flash using UART0 or USB interface.\"; ESP32-C6-MINI-1 Datasheet v1.5 PDF p.11 Table 3 Pin Definitions: \"RXD0 30 I/O/T U0RXD, GPIO17, FSPICS1\"; ESP32-C6 TRM v1.2 PDF p.737 (UART chapter, 27.4.4 UART Data Frame): \"The start bit is logical low, whereas stop bits are logical high.\"; same page: \"The receiver can also detect the Break conditions when the RX data line remains logical low for one NULL character transmission\""
 note = "The ROM bootloader detects the host by the UART start bit, so a pull-down or a tie to ground on this pin keeps the line in the break state and the bootloader never starts; the pin is an ordinary port pin when the board does not use the bootloader, so only a bias the wrong way round is reported."
+
+[models.pin_capability.reset_mode]
+basis = "ESP32-C6 Series Datasheet v1.5, Table 2-1 QFN40 Pin Overview, column 'At Reset' (PDF pp.16-17): IE, WPU on GPIO9; WPU on SPICS0, SPIQ, SPIWP, SPIHD, SPICLK, SPID (GPIO24-GPIO26, GPIO28-GPIO30) and SDIO_CMD, SDIO_CLK, SDIO_DATA0-3 (GPIO18-GPIO23); GPIO13 shows USB_PU only and U0TXD/U0RXD (GPIO16/GPIO17) are blank at reset (WPU only after reset), so they are left out; the other pads have IE or nothing, no pull"
+[models.pin_capability.reset_mode.pads]
+"23" = "pull_up"  # gpio9
+"24" = "pull_up"  # gpio18
+"25" = "pull_up"  # gpio19
+"26" = "pull_up"  # gpio20
+"27" = "pull_up"  # gpio21
+"28" = "pull_up"  # gpio22
+"29" = "pull_up"  # gpio23
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -8038,6 +8170,9 @@ supply_pin = "vdd"
 assert_below_v = 1.6
 basis = "nRF52840 PS v1.7 section 5.3.8.4 Power fail comparator, VBOR,ON typ 1.6 V (PDF p.85)"
 
+[models.pin_capability.reset_mode]
+basis = "nRF52840 Product Specification v1.7, GPIO chapter, PIN_CNF[n] reset value 0x00000002: DIR input, input buffer disconnected, no pull (PDF p.158); every GPIO of the card is therefore high impedance"
+
 # nice!nano (v1/v2): an nRF52840 on the Pro Micro footprint. Its pin names are
 # Nordic port pins ("P0.06", "P1.15-LF"), which the binder reads as p0<bit> /
 # p1<bit>; the header numbering differs between footprint libraries, so no pad
@@ -8341,6 +8476,11 @@ cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and
 [models.rom_bootloader]
 protocol = "usb_only"
 cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
+
+[models.pin_capability.reset_mode]
+basis = "RP2040 Datasheet (build 2025-02-20), Table 616 QSPI pins (QSPI_CSn 'Reset State' Pull-Up) (PDF p.614)"
+[models.pin_capability.reset_mode.pads]
+"56" = "pull_up"  # qspi_ss
 
 [[models]]
 id = "rp2040_qfn56"
@@ -8711,6 +8851,44 @@ cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and
 protocol = "usb_only"
 cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
 
+[models.pin_capability.reset_mode]
+basis = "RP2040 Datasheet (build 2025-02-20), section 5.5.2.2 Pin List: Table 615 GPIO pins (GPIO0-GPIO29 'Reset State' Pull-Down), Table 616 QSPI pins (QSPI_SCLK Pull-Down, QSPI_CSn Pull-Up; QSPI_SD0-SD3 state no reset state), Table 618 Serial wire debug pins (SWCLK and SWD Pull-Up) (PDF pp.613-614)"
+[models.pin_capability.reset_mode.pads]
+"2" = "pull_down"  # gpio0
+"3" = "pull_down"  # gpio1
+"4" = "pull_down"  # gpio2
+"5" = "pull_down"  # gpio3
+"6" = "pull_down"  # gpio4
+"7" = "pull_down"  # gpio5
+"8" = "pull_down"  # gpio6
+"9" = "pull_down"  # gpio7
+"11" = "pull_down"  # gpio8
+"12" = "pull_down"  # gpio9
+"13" = "pull_down"  # gpio10
+"14" = "pull_down"  # gpio11
+"15" = "pull_down"  # gpio12
+"16" = "pull_down"  # gpio13
+"17" = "pull_down"  # gpio14
+"18" = "pull_down"  # gpio15
+"24" = "pull_up"  # swclk
+"25" = "pull_up"  # swd
+"27" = "pull_down"  # gpio16
+"28" = "pull_down"  # gpio17
+"29" = "pull_down"  # gpio18
+"30" = "pull_down"  # gpio19
+"31" = "pull_down"  # gpio20
+"32" = "pull_down"  # gpio21
+"34" = "pull_down"  # gpio22
+"35" = "pull_down"  # gpio23
+"36" = "pull_down"  # gpio24
+"37" = "pull_down"  # gpio25
+"38" = "pull_down"  # gpio26_adc0
+"39" = "pull_down"  # gpio27_adc1
+"40" = "pull_down"  # gpio28_adc2
+"41" = "pull_down"  # gpio29_adc3
+"52" = "pull_down"  # qspi_sclk
+"56" = "pull_up"  # qspi_ss
+
 [[models]]
 id = "rpi_pico"
 kind = "mcu"
@@ -8972,6 +9150,36 @@ basis = "RP2040 Datasheet Table 341 PADS_BANK0 GPIO0 register (PDF p.302-303): b
 pin_vil_v = 0.8
 pin_vih_v = 2.0
 basis = "RP2040 Datasheet RUN pin section 2.12.5 PDF p.168, input levels Table 625 PDF p.616-617 applied by pin type"
+
+[models.pin_capability.reset_mode]
+basis = "RP2040 Datasheet (build 2025-02-20), section 5.5.2.2 Pin List: Table 615 GPIO pins (GPIO0-GPIO29 'Reset State' Pull-Down), Table 616 QSPI pins (QSPI_SCLK Pull-Down, QSPI_CSn Pull-Up; QSPI_SD0-SD3 state no reset state), Table 618 Serial wire debug pins (SWCLK and SWD Pull-Up) (PDF pp.613-614)"
+[models.pin_capability.reset_mode.pads]
+"1" = "pull_down"  # gpio0
+"2" = "pull_down"  # gpio1
+"4" = "pull_down"  # gpio2
+"5" = "pull_down"  # gpio3
+"6" = "pull_down"  # gpio4
+"7" = "pull_down"  # gpio5
+"9" = "pull_down"  # gpio6
+"10" = "pull_down"  # gpio7
+"11" = "pull_down"  # gpio8
+"12" = "pull_down"  # gpio9
+"14" = "pull_down"  # gpio10
+"15" = "pull_down"  # gpio11
+"16" = "pull_down"  # gpio12
+"17" = "pull_down"  # gpio13
+"19" = "pull_down"  # gpio14
+"20" = "pull_down"  # gpio15
+"21" = "pull_down"  # gpio16
+"22" = "pull_down"  # gpio17
+"24" = "pull_down"  # gpio18
+"25" = "pull_down"  # gpio19
+"26" = "pull_down"  # gpio20
+"27" = "pull_down"  # gpio21
+"29" = "pull_down"  # gpio22
+"31" = "pull_down"  # gpio26_adc0
+"32" = "pull_down"  # gpio27_adc1
+"34" = "pull_down"  # gpio28_adc2
 
 [[models]]
 id = "daisy_seed"
