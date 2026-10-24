@@ -9293,6 +9293,18 @@ max_v = 76.0
 abs_max_v = 80.0
 basis = "Electrical Characteristics, Input Voltage Range; Absolute Maximum Ratings, VIN to SGND"
 
+# VCC is the internal LDO's output (optional_supplies above); a board that ties it to a rail it
+# does not regulate to stresses a pin rated 6 V, not the 80 V of VIN. Left on its bypass
+# capacitor it has no level and is not judged.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.75
+max_v = 5.25
+abs_max_v = 6.0
+basis = "Analog Devices MAX17760 19-100795 Rev 2, Electrical Characteristics p.5, LINEAR REGULATOR (VCC) output voltage range 4.75 V min / 5 V typ / 5.25 V max for 6 V <= VIN <= 76 V"
+abs_max_basis = "Analog Devices MAX17760 19-100795 Rev 2, Absolute Maximum Ratings p.5, FB, RESET, SS, MODE, VCC, RT/SYNC to SGND -0.3 V to +6 V"
+
 [models.behavioral.converter]
 topology = "buck"
 out_pin = "sw"
