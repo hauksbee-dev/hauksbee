@@ -250,6 +250,62 @@ fn card_i2c_line(
     found
 }
 
+/// Serial display controllers with no I2C mode. Their data and clock pins are
+/// often labelled `SDA` and `SCL` but are the SPI input and clock.
+const SPI_ONLY_DISPLAYS: [&str; 16] = [
+    "ST7735", "ST7789", "ST7796", "ST7701", "ILI9341", "ILI9340", "ILI9488", "ILI9486", "ILI9225",
+    "GC9A01", "GC9307", "HX8357", "SSD1351", "SSD1331", "PCD8544", "ST7565",
+];
+
+/// The names of the nets labelled as an I2C line that are really an SPI link.
+///
+/// A net with a display controller that has no I2C mode (an ST7789, an
+/// ILI9341) is SPI, whatever its pins are called. So is a net on a pad the card lists for
+/// the SPI function the line would be (`SCL` as the clock, `SDA` as data out or
+/// in) and does not list for the I2C one: that pad cannot be the hardware bus.
+/// The missing-pull-up rule stays silent on these nets.
+#[must_use]
+pub fn spi_labelled_nets(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeSet<String> {
+    let idx = Index::new(board, lib);
+    let mut found = BTreeSet::new();
+    for net in &board.nets {
+        let members = idx.members(net.id);
+        let display = members.iter().any(|(c, _)| {
+            let text = format!("{} {}", c.value, c.lib_id).to_ascii_uppercase();
+            SPI_ONLY_DISPLAYS.iter().any(|d| text.contains(d))
+        });
+        let wired_for_spi = members.iter().any(|(c, p)| {
+            let Some(model) = idx.model(c) else {
+                return false;
+            };
+            let line = i2c_role(&net.name).or_else(|| match dedicated_i2c_pin(&p.function) {
+                Some(PeripheralFunction::I2cSda) => Some("SDA"),
+                Some(PeripheralFunction::I2cScl) => Some("SCL"),
+                _ => None,
+            });
+            let (spi, i2c): (&[PeripheralFunction], PeripheralFunction) = match line {
+                Some("SCL") => (&[PeripheralFunction::SpiSck], PeripheralFunction::I2cScl),
+                Some(_) => (
+                    &[PeripheralFunction::SpiMosi, PeripheralFunction::SpiMiso],
+                    PeripheralFunction::I2cSda,
+                ),
+                None => return false,
+            };
+            let listed = |f: PeripheralFunction| {
+                model
+                    .pin_capability
+                    .table(f)
+                    .map(|t| t.pads.contains_key(&p.number))
+            };
+            listed(i2c) == Some(false) && spi.iter().any(|f| listed(*f) == Some(true))
+        });
+        if display || wired_for_spi {
+            found.insert(net.name.clone());
+        }
+    }
+    found
+}
+
 /// I2C buses with no pull-up that only the cards identify.
 ///
 /// A net whose name and symbol pins state no I2C line, but on which a card
@@ -565,6 +621,49 @@ mod i2c_card_tests {
         assert!(run(vec![monitor(("SDI", "SPC")), host(("GPIO1", "GPIO2"))]).is_empty());
         // The symbol states I2C itself: the extract layer judges that net.
         assert!(run(vec![monitor(("SDA", "SCL")), host(("GPIO1", "GPIO2"))]).is_empty());
+    }
+
+    /// An `ATmega328P` (pads 17 and 19 are its SPI data out and clock, 27 and 28
+    /// its I2C data and clock) wired by `pads` to a peer whose pins the symbol
+    /// calls `SDA` and `SCL`, on nets called for the bus. The whole engine lint
+    /// runs, so the name check and the filter are both in play.
+    fn labelled_link(pads: (&str, &str), peer_value: &str) -> Vec<LintFinding> {
+        let nets = [(V33, "+3V3"), (DATA, "LCD_SDA"), (CLOCK, "LCD_SCL")];
+        let mut mcu = part("U1", "ATmega328P", &[]);
+        mcu.pins = vec![pin_fn(pads.0, DATA, "PB3"), pin_fn(pads.1, CLOCK, "PB5")];
+        let mut peer = part("U2", peer_value, &[]);
+        peer.pins = vec![pin_fn("1", DATA, "SDA"), pin_fn("2", CLOCK, "SCL")];
+        crate::checks::engine_lint(&board(&nets, vec![mcu, peer]), &ModelLibrary::builtin())
+            .findings
+            .into_iter()
+            .filter(|f| f.check == LintCheck::MissingI2cPullup)
+            .collect()
+    }
+
+    #[test]
+    fn a_labelled_i2c_link_between_i2c_capable_parts_still_needs_a_pull_up() {
+        // The control for the two cases below: same labels, the MCU pads are
+        // its hardware I2C pads and the peer is not a display.
+        let found = labelled_link(("27", "28"), "XYZ-HOST-9");
+        assert_eq!(found.len(), 2, "{found:#?}");
+    }
+
+    #[test]
+    fn a_net_labelled_sda_scl_on_the_mcus_spi_pads_is_not_an_i2c_bus() {
+        // Pads 17 and 19 carry MOSI and SCK in hardware and no I2C function:
+        // a display module's "SDA" and "SCL" inputs wired to them are SPI.
+        let found = labelled_link(("17", "19"), "XYZ-HOST-9");
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn a_net_labelled_sda_scl_to_an_spi_display_controller_is_not_an_i2c_bus() {
+        // The MCU is on its I2C pads here; the peer is a controller with no
+        // I2C mode, so the labels are the display's SPI input and clock.
+        for value in ["ST7789", "ILI9341", "GC9A01A"] {
+            let found = labelled_link(("27", "28"), value);
+            assert!(found.is_empty(), "{value}: {found:#?}");
+        }
     }
 
     #[test]

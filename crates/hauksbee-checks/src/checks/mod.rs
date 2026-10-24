@@ -501,6 +501,15 @@ fn extend_with_wiring_direction(
             report.findings.push(finding);
         }
     }
+    // A net labelled SDA/SCL can be an SPI link (a display module's data and
+    // clock inputs): the card or the peer controller says so, and no pull-up
+    // is owed there.
+    let spi_links = open_drain_pullup::spi_labelled_nets(board, lib);
+    if !spi_links.is_empty() {
+        report.findings.retain(|f| {
+            f.check != LintCheck::MissingI2cPullup || !f.nets.iter().any(|n| spi_links.contains(n))
+        });
+    }
     for finding in open_drain_pullup::open_drain_pullup_lint(board, lib).findings {
         let covered = report.findings.iter().any(|r| {
             matches!(
