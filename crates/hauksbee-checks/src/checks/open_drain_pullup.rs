@@ -60,6 +60,22 @@ fn is_series_part(idx: &Index<'_>, c: &Component) -> bool {
         || idx.model(c).is_some_and(|m| m.kind == ComponentKind::Diode)
 }
 
+/// A jumper, net tie or link option: a part whose two sides the board may or
+/// may not join, with a net other than ground on another pad.
+fn is_possible_link(idx: &Index<'_>, c: &Component, at: &Pin) -> bool {
+    let named_jumper = hauksbee_extract::dnp::is_jumper_or_net_tie(c)
+        || matches!(
+            hauksbee_models::refdes::prefix(&c.reference).as_str(),
+            "JP" | "SJ"
+        );
+    named_jumper
+        && c.pins.iter().any(|q| {
+            !std::ptr::eq(q, at)
+                && q.net
+                    .is_some_and(|n| n != 0 && Some(n) != at.net && idx.level(n) != Some(0.0))
+        })
+}
+
 /// Whether `net` is held at a positive supply level.
 fn is_positive_rail(idx: &Index<'_>, net: i64) -> bool {
     if idx.level(net).is_some_and(|v| v > 0.0) || idx.feeds_a_supply_pin(net) {
@@ -105,6 +121,12 @@ fn reach(idx: &Index<'_>, start: i64, od: &HashSet<(String, String)>) -> Reach {
                 }
                 if is_connector_like(c) {
                     out.external = true;
+                } else if is_possible_link(idx, c, p) {
+                    // A solder jumper, net tie or pin jumper joins its pads only
+                    // where the board closes it. Whatever sits behind it (an LED
+                    // and its resistor to a rail, a pull-up, a receiver) may or
+                    // may not be on this line, so the board cannot be judged.
+                    out.external = true;
                 } else if idx.model(c).is_some_and(|m| {
                     m.kind == ComponentKind::Mcu && m.has_internal_pull_up(&p.number)
                 }) {
@@ -130,7 +152,12 @@ fn reach(idx: &Index<'_>, start: i64, od: &HashSet<(String, String)>) -> Reach {
                             next.push(far);
                         }
                     }
-                } else if !is_capacitor(c) && (idx.model(c).is_some() || is_input_pin(p)) {
+                } else if !is_capacitor(c)
+                    && (idx
+                        .model(c)
+                        .is_some_and(|m| m.kind != ComponentKind::Ignore)
+                        || is_input_pin(p))
+                {
                     // A part with a card, or a pin the board calls an input.
                     // A part nothing describes (a module, an unmodelled chip
                     // with bidirectional pins) may carry its own pull-up.
@@ -461,6 +488,60 @@ mod tests {
             resistor("R1", ALERT, GND),
         ]);
         assert_eq!(down.len(), 1, "{down:#?}");
+    }
+
+    /// A three-pad solder jumper (pad 1 on `a`, pad 2 on `b`, pad 3 on `c`).
+    fn jumper3(reference: &str, a: i64, b: i64, c: i64) -> Component {
+        let mut j = part(reference, "SolderJumper", &[("1", a), ("2", b), ("3", c)]);
+        j.lib_id = "Jumper:SolderJumper_3_Open".into();
+        j.footprint = "Jumper:SolderJumper-3_P1.3mm_Open_RoundedPad1.0x1.5mm".into();
+        j
+    }
+
+    /// A status output that reaches only one pad of a solder jumper, with an LED
+    /// and its resistor to the rail behind the jumper, is not judged: the jumper
+    /// is a possible connection, not a receiver, and the pull-up may sit behind it.
+    #[test]
+    fn a_pull_up_behind_a_solder_jumper_is_not_reported_missing() {
+        // Rail -> LED anode, LED cathode (MID) -> R1 -> LED_K -> jumper pad 2.
+        let led_k = 12;
+        let mut led = part("LED1", "LED", &[("1", MID), ("2", V33)]);
+        led.lib_id = "Device:LED".into();
+        let behind = vec![
+            sensor(ALERT),
+            receiver(ALERT),
+            jumper3("SJ1", ALERT, led_k, GND),
+            resistor("R1", MID, led_k),
+            led,
+        ];
+        let nets = [
+            (GND, "GND"),
+            (V33, "+3V3"),
+            (ALERT, "STAT"),
+            (MID, "MID"),
+            (led_k, "LED_K"),
+        ];
+        let found =
+            open_drain_pullup_lint(&board(&nets, behind), &ModelLibrary::builtin()).findings;
+        assert!(found.is_empty(), "{found:#?}");
+        // Control: the jumper's other pads reach only ground, so nothing can pull
+        // the line up, and the reader is a real receiver.
+        let bare = vec![
+            sensor(ALERT),
+            receiver(ALERT),
+            jumper3("SJ1", ALERT, GND, GND),
+        ];
+        let found = open_drain_pullup_lint(&board(&nets, bare), &ModelLibrary::builtin()).findings;
+        assert_eq!(found.len(), 1, "{found:#?}");
+    }
+
+    /// A part whose model stands for "ignore" (artwork, a logo) is not a receiver.
+    #[test]
+    fn an_ignored_part_is_not_a_receiver() {
+        let mut logo = part("G1", "Logo", &[("1", ALERT)]);
+        logo.footprint = "Symbol:OSHW-Logo".into();
+        let found = run(vec![sensor(ALERT), logo]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     #[test]

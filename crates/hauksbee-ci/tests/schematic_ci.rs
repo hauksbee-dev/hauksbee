@@ -99,19 +99,36 @@ kind = "no_faults"
     )
 }
 
+/// The board's one real static finding: `C4`, a capacitor position (disc
+/// capacitor footprint) whose value is `0`. It is the board's own flaw, so the
+/// shipped example runs RED on exactly that row, and the examples' own
+/// assertions stay green.
+const PIC_PROGRAMMER_ZERO_VALUE_ROW: &str = "static_check: lint value_package_sanity on C4";
+
 #[test]
-fn schematic_example_spec_passes() {
+fn schematic_example_spec_is_red_only_on_the_boards_zero_value_capacitor() {
     let Some(spec) = schematic_example() else {
         return;
     };
     let result = run(&support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
-    // The example advertises GREEN (examples/ci-specs/README.md), so it must be.
-    // Its assertions are the ones the board can honestly support: the rail ahead
-    // of the 7805 and the input diode. None touches an open part, so none is
-    // undermined, and the four open parts must still be disclosed in the run.
-    support::assert_green(&result, "the shipped schematic example");
-    assert_eq!(result.results.len(), 2);
-    assert!(result.results.iter().all(|r| r.passed && !r.invalid));
+    // Its two assertions are the ones the board can honestly support: the rail
+    // ahead of the 7805 and the input diode. None touches an open part, so none
+    // is undermined, and the four open parts must still be disclosed in the run.
+    // The run as a whole is RED because the board's own static check fails it on
+    // C4 (a capacitor position with value `0`), which `hauksbee check` reports
+    // too; the example has no waiver because the board belongs to the corpus.
+    support::assert_red_only_on_static(
+        &result,
+        &[PIC_PROGRAMMER_ZERO_VALUE_ROW],
+        "the shipped schematic example",
+    );
+    let own: Vec<_> = result
+        .results
+        .iter()
+        .filter(|r| r.kind != hauksbee_ir::vocabulary::STATIC_CHECK_KIND)
+        .collect();
+    assert_eq!(own.len(), 2);
+    assert!(own.iter().all(|r| r.passed && !r.invalid));
     for part in PIC_PROGRAMMER_OPEN {
         let id = format!("open-part:{part}");
         assert!(
@@ -163,10 +180,22 @@ fn schematic_and_pcb_agree() {
     // also satisfy the loop above). VCC and `no_faults` are the assertions the
     // shipped example leaves out because the open parts undermine them, so this
     // body must stay INVALID for exactly that model gap, not turn silently green;
-    // `assert_green` once U4 and the sockets are modelled.
+    // `assert_green` once U4 and the sockets are modelled and C4 is fixed.
+    // The board's own static check also fails it on C4 at both stages, so the
+    // run exits 1 (RED) rather than 3; the INVALID cause is still pinned.
     assert_eq!(sch_res.exit_code(), pcb_res.exit_code());
-    support::assert_invalid_by_open_parts(&sch_res, PIC_PROGRAMMER_OPEN);
-    support::assert_invalid_by_open_parts(&pcb_res, PIC_PROGRAMMER_OPEN);
+    for res in [&sch_res, &pcb_res] {
+        let failing: Vec<&str> = res
+            .results
+            .iter()
+            .filter(|r| {
+                r.kind == hauksbee_ir::vocabulary::STATIC_CHECK_KIND && !r.passed && !r.invalid
+            })
+            .map(|r| r.label.as_str())
+            .collect();
+        assert_eq!(failing, [PIC_PROGRAMMER_ZERO_VALUE_ROW]);
+        support::assert_undermined_only_by_open_parts(res, PIC_PROGRAMMER_OPEN);
+    }
 }
 
 /// Pointing the spec at a sub-sheet (`pic_sockets.kicad_sch`, which is

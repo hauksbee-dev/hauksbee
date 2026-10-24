@@ -171,10 +171,84 @@ pub(crate) fn supply_input_name(function: &str) -> bool {
 /// against and not a supply.
 pub(crate) fn regulator_output_name(function: &str) -> bool {
     let f = function.trim().to_ascii_uppercase();
+    let base = f.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
     f.starts_with("VREF")
-        || ["CORE", "VCAP", "VREG", "DECOUP"]
+        || base == "VDDC"
+        || ["CORE", "VCAP", "VREG", "DECOUP", "LDOOUT", "LDO_OUT"]
             .iter()
             .any(|k| f.contains(k))
+}
+
+/// A pin function that can only be an external supply input, never a node the
+/// chip itself drives: the topology rule of [`own_regulator_node`] leaves these
+/// to be judged as loads.
+fn external_supply_name(function: &str) -> bool {
+    let f = function
+        .trim()
+        .to_ascii_uppercase()
+        .replace(['{', '}', '~', '!', '/'], "");
+    let f = f.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+    [
+        "VIN", "VBUS", "VBAT", "VIO", "IOVDD", "VDDIO", "VCCIO", "VSUP", "VM",
+    ]
+    .iter()
+    .any(|p| f.starts_with(p))
+}
+
+/// Whether the rail `ids` is one IC's own regulator node: no part but `c` sits
+/// on it except capacitors, and `c` takes a supply on a pin of another powered
+/// net that something besides this chip and capacitors is on.
+///
+/// A net named for a voltage whose only connections are one chip's pins and
+/// decoupling capacitors, on a chip that is powered elsewhere, is the output of
+/// the chip's internal regulator (a core LDO) and not a rail that needs a
+/// source. The name is no part of the rule. A chip whose only supply pin is on
+/// the net still draws from it, and so does a pin named as an external input.
+fn own_regulator_node<F: Fn(i64) -> bool>(
+    board: &ExtractedBoard,
+    c: &Component,
+    ids: &BTreeSet<i64>,
+    powered_net: F,
+) -> bool {
+    let on_rail = |q: &Component| {
+        q.pins
+            .iter()
+            .any(|p| p.net.is_some_and(|n| ids.contains(&n)))
+    };
+    if board
+        .components
+        .iter()
+        .any(|q| q.reference != c.reference && on_rail(q) && !is_capacitor(q))
+    {
+        return false;
+    }
+    let supply_pin = |p: &&hauksbee_extract::Pin| {
+        p.kind.starts_with("power_in") || supply_input_name(&p.function)
+    };
+    let own = c
+        .pins
+        .iter()
+        .filter(|p| p.net.is_some_and(|n| ids.contains(&n)));
+    if own.clone().any(|p| external_supply_name(&p.function)) {
+        return false;
+    }
+    c.pins
+        .iter()
+        .filter(supply_pin)
+        .filter(|p| !regulator_output_name(&p.function))
+        .any(|p| {
+            p.net.is_some_and(|n| {
+                n != 0 && !ids.contains(&n) && powered_net(n) && {
+                    // That supply must itself have something behind it besides
+                    // this chip and capacitors, or both nets are bare nodes.
+                    board.components.iter().any(|q| {
+                        q.reference != c.reference
+                            && !is_capacitor(q)
+                            && q.pins.iter().any(|qp| qp.net == Some(n))
+                    })
+                }
+            })
+        })
 }
 
 /// The pin function base (`VOUT_2` -> `VOUT`).
@@ -933,7 +1007,8 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                                     .into_iter()
                                     .flatten()
                                     .any(supply_input_name)
-                        }) && !on.iter().all(|p| regulator_output_name(&p.function));
+                        }) && !on.iter().all(|p| regulator_output_name(&p.function))
+                            && !own_regulator_node(board, c, &ids, power_ish);
                         if draws {
                             basis.supply_loads.push(c.reference.clone());
                             if hauksbee_extract::is_active_ic(c) {

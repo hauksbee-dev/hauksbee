@@ -329,13 +329,29 @@ pub fn assert_row_invalid_citing(result: &hauksbee_ci::CiResult, name: &str, cau
 /// modelled. Every evidence-undermined assertion must cite at least one of
 /// `parts` and no critical cause other than an open part.
 pub fn assert_invalid_by_open_parts(result: &hauksbee_ci::CiResult, parts: &[&str]) {
+    let report = result.render_human();
+    assert_eq!(result.exit_code(), 3, "expected INVALID (exit 3)\n{report}");
+    assert_undermined_only_by_open_parts(result, parts);
+}
+
+/// The evidence half of [`assert_invalid_by_open_parts`], for a run whose exit
+/// code is decided by something else as well (a failing `static_check` row
+/// turns exit 3 into exit 1): the simulation's own numbers hold, and every
+/// undermined assertion cites an open part from `parts` and no other critical
+/// cause.
+pub fn assert_undermined_only_by_open_parts(result: &hauksbee_ci::CiResult, parts: &[&str]) {
     use hauksbee_ir::evidence::AssumptionKind::{
         DefaultParameter, InferredPinRole, OpenPart, ReducedFidelity,
     };
+    use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
     let report = result.render_human();
-    assert_eq!(result.exit_code(), 3, "expected INVALID (exit 3)\n{report}");
     assert!(
-        result.passed() && !result.analog_abort,
+        result
+            .results
+            .iter()
+            .filter(|r| r.kind != STATIC_CHECK_KIND)
+            .all(|r| r.passed || r.waived.is_some())
+            && !result.analog_abort,
         "numeric judgement\n{report}"
     );
     let undermined: Vec<_> = result
