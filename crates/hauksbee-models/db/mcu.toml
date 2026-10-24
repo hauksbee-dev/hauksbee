@@ -1884,16 +1884,14 @@ basis = "Microchip SAM D21/DA1 Family Complete Data Sheet DS40001882L, Table 7-1
 "32" = "SERCOM1 PAD[3] (mux D, PA31)"
 
 [models.pin_capability.pwm]
-basis = "Microchip SAM D21/DA1 Family Complete Data Sheet DS40001882L, Table 7-1 PORT Function Multiplexing (PDF p.28-29), peripheral function E (TC/TCC) and F (TCC) columns, SAMD2xE pin-number column: TCCn/WO[m] and TCn/WO[m] waveform outputs on the 32-pin package. TC6/TC7 do not exist on the SAM D21E (Table 7-1 note 4, PDF p.29). TCC3 exists only in SAMD21x17D (note 8, PDF p.30; Table 2-1, PDF p.13-14: E17D has 6 TCC3 outputs), so TCC3/WO[0..5] are listed marked \"SAMD21E17D only\" because this card also matches the E17D ordering code; TCC3/WO[6] and WO[7] (PA27, PA28) do not exist on E17D and are excluded. Hardware peripheral only"
+basis = "Microchip SAM D21/DA1 Family Complete Data Sheet DS40001882L, Table 7-1 PORT Function Multiplexing (PDF p.28-29), peripheral function E (TC/TCC) and F (TCC) columns, SAMD2xE pin-number column: TCCn/WO[m] and TCn/WO[m] waveform outputs on the 32-pin package. TC6/TC7 do not exist on the SAM D21E (Table 7-1 note 4, PDF p.29). TCC3 exists only in SAMD21x17D (note 8, PDF p.30; Table 2-1, PDF p.13-14: E17D has 6 TCC3 outputs), and this card also matches the E15/E16/E17/E18 A/B ordering codes, which have none, so no TCC3 output is listed (a pad listed for TCC3 alone would silence a PWM net on a variant without it). Hardware peripheral only"
 [models.pin_capability.pwm.pads]
 "1" = "TCC2/WO[0] (mux E, PA00)"
 "2" = "TCC2/WO[1] (mux E, PA01)"
-"3" = "TCC3/WO[0] (SAMD21E17D only) (mux F, PA02)"
-"4" = "TCC3/WO[1] (SAMD21E17D only) (mux F, PA03)"
-"5" = "TCC0/WO[0] (mux E, PA04) / TCC3/WO[2] (SAMD21E17D only) (mux F, PA04)"
-"6" = "TCC0/WO[1] (mux E, PA05) / TCC3/WO[3] (SAMD21E17D only) (mux F, PA05)"
-"7" = "TCC1/WO[0] (mux E, PA06) / TCC3/WO[4] (SAMD21E17D only) (mux F, PA06)"
-"8" = "TCC1/WO[1] (mux E, PA07) / TCC3/WO[5] (SAMD21E17D only) (mux F, PA07)"
+"5" = "TCC0/WO[0] (mux E, PA04)"
+"6" = "TCC0/WO[1] (mux E, PA05)"
+"7" = "TCC1/WO[0] (mux E, PA06)"
+"8" = "TCC1/WO[1] (mux E, PA07)"
 "11" = "TCC0/WO[0] (mux E, PA08) / TCC1/WO[2] (mux F, PA08)"
 "12" = "TCC0/WO[1] (mux E, PA09) / TCC1/WO[3] (mux F, PA09)"
 "13" = "TCC1/WO[0] (mux E, PA10) / TCC0/WO[2] (mux F, PA10)"
@@ -1908,8 +1906,8 @@ basis = "Microchip SAM D21/DA1 Family Complete Data Sheet DS40001882L, Table 7-1
 "22" = "TC4/WO[1] (mux E, PA23) / TCC0/WO[5] (mux F, PA23)"
 "23" = "TC5/WO[0] (mux E, PA24) / TCC1/WO[2] (mux F, PA24)"
 "24" = "TC5/WO[1] (mux E, PA25) / TCC1/WO[3] (mux F, PA25)"
-"31" = "TCC1/WO[0] (mux E, PA30) / TCC3/WO[4] (SAMD21E17D only) (mux F, PA30)"
-"32" = "TCC1/WO[1] (mux E, PA31) / TCC3/WO[5] (SAMD21E17D only) (mux F, PA31)"
+"31" = "TCC1/WO[0] (mux E, PA30)"
+"32" = "TCC1/WO[1] (mux E, PA31)"
 
 [models.pin_capability.timer_capture]
 basis = "Microchip SAM D21/DA1 Family Complete Data Sheet DS40001882L. The TC and TCC have no dedicated capture pin: capture channels latch events from the Event System (30.6.2.7 TC Capture Operations, PDF p.592: \"The compare/capture channels can be used as input capture channels to capture events from the Event System\"; 31.6.2.7 TCC Capture Operations, PDF p.662; the TC note \"Capture of the period and duty cycle on I/Os using PPW/PWP mode is possible using the EIC and Event System\", PDF p.592). The EIC generates an event when the condition on pin EXTINTx matches CONFIGn (EIC Events section \"External event from pin\", EVCTRL.EXTINTEO, PDF p.343). So the route listed here is pad -> EIC EXTINT[n] (Table 7-1 function A column, PDF p.28-29) -> EVSYS -> TC/TCC capture channel; every pad with an EXTINT[n] function is listed (PA08 has NMI only, which has no event output, so it is excluded). The WO pads themselves are outputs and cannot latch an edge. Routed via the event system, not a dedicated timer input pin. Hardware peripheral only"
@@ -4195,14 +4193,12 @@ basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page 
 [models.pin_capability.spi_sck.pads]
 "7" = "USCK (USI three-wire clock, PB2)"
 [models.pin_capability.spi_mosi]
-basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, PB0 DI = USI data input, PB0 labelled MOSI for SPI programming), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data output DO (PB1) is MOSI as an SPI master and the data input DI (PB0) is MOSI as an SPI slave, so both pads can carry MOSI depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, PB0 DI = USI data input, PB0 labelled MOSI for SPI programming), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data output DO (PB1) is MOSI as an SPI master and the data input DI (PB0) is MOSI as an SPI slave, so both pads can carry MOSI depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad. Only the USI master direction is listed (MOSI = DO/PB1, MISO = DI/PB0): the PB0-MOSI / PB1-MISO labels are for ISP programming with the ATtiny as slave, and listing both directions would hide a swapped DI/DO"
 [models.pin_capability.spi_mosi.pads]
 "6" = "DO (USI data output, MOSI as USI SPI master, PB1)"
-"5" = "DI (USI data input, MOSI as USI SPI slave, PB0)"
 [models.pin_capability.spi_miso]
-basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, labelled MISO for SPI programming, PB0 DI = USI data input), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data input DI (PB0) is MISO as an SPI master and the data output DO (PB1) is MISO as an SPI slave, so both pads can carry MISO depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, labelled MISO for SPI programming, PB0 DI = USI data input), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data input DI (PB0) is MISO as an SPI master and the data output DO (PB1) is MISO as an SPI slave, so both pads can carry MISO depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad. Only the USI master direction is listed (MOSI = DO/PB1, MISO = DI/PB0): the PB0-MOSI / PB1-MISO labels are for ISP programming with the ATtiny as slave, and listing both directions would hide a swapped DI/DO"
 [models.pin_capability.spi_miso.pads]
-"6" = "DO (USI data output, MISO as USI SPI slave, PB1)"
 "5" = "DI (USI data input, MISO as USI SPI master, PB0)"
 [models.pin_capability.i2c_sda]
 basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB0 SDA = USI data, two-wire mode), USI section 15.3.4 Two-wire Mode (pp.112-113: TWI-compliant physical layer, without slew-rate limiting and input noise filtering, master clock generation in software), Figure 15-1 (p.108), Figure 1-1 Pinout (p.2); the part has no dedicated TWI peripheral, I2C master or slave is provided by the USI two-wire mode plus software; hardware peripheral only, a software (bit-banged) implementation can use any pad"
@@ -4357,14 +4353,12 @@ basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page 
 [models.pin_capability.spi_sck.pads]
 "14" = "USCK (USI three-wire clock, PB2)"
 [models.pin_capability.spi_mosi]
-basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, PB0 DI = USI data input, PB0 labelled MOSI for SPI programming), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data output DO (PB1) is MOSI as an SPI master and the data input DI (PB0) is MOSI as an SPI slave, so both pads can carry MOSI depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, PB0 DI = USI data input, PB0 labelled MOSI for SPI programming), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data output DO (PB1) is MOSI as an SPI master and the data input DI (PB0) is MOSI as an SPI slave, so both pads can carry MOSI depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad. Only the USI master direction is listed (MOSI = DO/PB1, MISO = DI/PB0): the PB0-MOSI / PB1-MISO labels are for ISP programming with the ATtiny as slave, and listing both directions would hide a swapped DI/DO"
 [models.pin_capability.spi_mosi.pads]
 "12" = "DO (USI data output, MOSI as USI SPI master, PB1)"
-"11" = "DI (USI data input, MOSI as USI SPI slave, PB0)"
 [models.pin_capability.spi_miso]
-basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, labelled MISO for SPI programming, PB0 DI = USI data input), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data input DI (PB0) is MISO as an SPI master and the data output DO (PB1) is MISO as an SPI slave, so both pads can carry MISO depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB1 DO = USI data output, labelled MISO for SPI programming, PB0 DI = USI data input), USI section 15.3.1 (p.109) and 15.3.2 SPI Master (pp.110-111) and Slave (pp.111-112) examples, Figure 1-1 Pinout (p.2); the part has no SPI peripheral; the USI (Universal Serial Interface) provides the SPI-like three-wire mode in hardware, so the pads are stated from the USI pin table; the USI data input DI (PB0) is MISO as an SPI master and the data output DO (PB1) is MISO as an SPI slave, so both pads can carry MISO depending on role; hardware peripheral only, a software (bit-banged) implementation can use any pad. Only the USI master direction is listed (MOSI = DO/PB1, MISO = DI/PB0): the PB0-MOSI / PB1-MISO labels are for ISP programming with the ATtiny as slave, and listing both directions would hide a swapped DI/DO"
 [models.pin_capability.spi_miso.pads]
-"12" = "DO (USI data output, MISO as USI SPI slave, PB1)"
 "11" = "DI (USI data input, MISO as USI SPI master, PB0)"
 [models.pin_capability.i2c_sda]
 basis = "Atmel ATtiny25/ATtiny45/ATtiny85 Datasheet 2586Q-AVR-08/2013 (PDF page = printed page), Table 10-3 Port B alternate functions (p.60: PB0 SDA = USI data, two-wire mode), USI section 15.3.4 Two-wire Mode (pp.112-113: TWI-compliant physical layer, without slew-rate limiting and input noise filtering, master clock generation in software), Figure 15-1 (p.108), Figure 1-1 Pinout (p.2); the part has no dedicated TWI peripheral, I2C master or slave is provided by the USI two-wire mode plus software; hardware peripheral only, a software (bit-banged) implementation can use any pad"
