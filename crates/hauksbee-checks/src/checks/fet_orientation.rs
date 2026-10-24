@@ -537,6 +537,64 @@ fn bypassed(idx: &Index<'_>, q: &Component, (s, d): (i64, i64)) -> bool {
     })
 }
 
+/// A second FET of the same polarity stands cathode to cathode with `q`: its
+/// body diode's cathode sits on `q`'s cathode net and its anode on a net other
+/// than `q`'s anode net. The two diodes then oppose in series (a common-drain
+/// N-FET pair, a common-source P-FET pair), so the pair blocks in both
+/// directions with both gates off: the back-to-back switch of a battery
+/// charge/discharge protection stage or a bidirectional load switch. Neither
+/// FET alone is wired backwards. Two FETs in parallel (the anode nets shared)
+/// are not such a pair. The shared node must be neither ground nor a named
+/// rail.
+fn series_opposed_partner(idx: &Index<'_>, q: &Component, pmos: bool, (s, d): (i64, i64)) -> bool {
+    let (anode_role, cathode_role, anode, cathode) = if pmos {
+        ("drain", "source", d, s)
+    } else {
+        ("source", "drain", s, d)
+    };
+    let Some(kind) = idx.model(q).map(|m| m.kind) else {
+        return false;
+    };
+    // The shared node is the pair's midpoint, not a rail or ground that many
+    // unrelated FETs reach.
+    if is_ground(idx.name(cathode)) || idx.level(cathode).is_some() {
+        return false;
+    }
+    idx.members(cathode).iter().any(|(o, p)| {
+        !same(o, q)
+            && idx.model(o).is_some_and(|m| m.kind == kind)
+            && idx.role(o, p) == Some(cathode_role)
+            && o.pins.iter().any(|x| {
+                idx.role(o, x) == Some(anode_role)
+                    && x.net.is_some_and(|n| n != 0 && n != anode && n != cathode)
+            })
+    })
+}
+
+/// Why a reverse-polarity FET's source is the board's input, if it is: the
+/// source reaches the connector and the drain does not, or (no side shows a
+/// recognised source) the gate is pulled to ground and the source is the
+/// auto-named side that reaches an unrecognised two-pin part while the drain
+/// sits on a named rail.
+fn protection_input_note(
+    idx: &Index<'_>,
+    q: &Component,
+    gate: i64,
+    (s, d): (i64, i64),
+) -> Option<&'static str> {
+    if reaches_connector(idx, s, q) {
+        (!reaches_connector(idx, d, q)).then_some("reaches the connector net")
+    } else if !reaches_connector(idx, d, q)
+        && gate_pulled_to_ground(idx, q, gate)
+        && opaque_source_side(idx, s, q)
+        && idx.level(d).is_some_and(|v| v > 0.0)
+    {
+        Some("reaches the unnamed input net")
+    } else {
+        None
+    }
+}
+
 const fn diode_note(pmos: bool) -> &'static str {
     if pmos {
         "drain to source"
@@ -575,6 +633,9 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
             ("source", "drain")
         };
         let channel = if pmos { "P" } else { "N" };
+        if series_opposed_partner(&idx, q, pmos, (s, d)) {
+            continue;
+        }
         if let Some((driver_part, driver)) = gate_driver(&idx, q, g) {
             if controller_spans_channel(&idx, q, driver_part, g, (s, d)) {
                 continue;
@@ -628,22 +689,7 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         {
             continue;
         }
-        let input_note = if reaches_connector(&idx, s, q) {
-            (!reaches_connector(&idx, d, q)).then_some("reaches the connector net")
-        } else if !reaches_connector(&idx, d, q)
-            && gate_pulled_to_ground(&idx, q, g)
-            && opaque_source_side(&idx, s, q)
-            && idx.level(d).is_some_and(|v| v > 0.0)
-        {
-            // No side shows a recognised source. The gate is pulled to ground,
-            // so this is a protection FET, and its input is the side that is
-            // not the system's named rail: the auto-named side that reaches an
-            // unrecognised two-pin part.
-            Some("reaches the unnamed input net")
-        } else {
-            None
-        };
-        if let Some(input_note) = input_note {
+        if let Some(input_note) = protection_input_note(&idx, q, g, (s, d)) {
             report.findings.push(LintFinding {
                 check: LintCheck::PinFunction,
                 severity: Severity::Medium,
@@ -874,6 +920,66 @@ mod tests {
             &[],
         );
         assert!(low.is_empty(), "{low:#?}");
+    }
+
+    const MIDPT: i64 = 80;
+
+    /// The second FET of a pair, as `Q2`.
+    fn second(mut q: Component) -> Component {
+        q.reference = "Q2".into();
+        q
+    }
+
+    #[test]
+    fn a_back_to_back_pair_is_silent_and_the_lone_reversed_fet_is_still_flagged() {
+        let nets = [(MIDPT, "Net-(Q1-D)")];
+        // N-FETs, drains joined: the source of Q1 faces the supply, the source
+        // of Q2 faces the load, so the body diodes oppose in series.
+        let pair = vec![
+            header(V5),
+            nfet(V5, MIDPT, GATE),
+            second(nfet(SW, MIDPT, GATE)),
+            mcu(GATE),
+            load(SW),
+        ];
+        let found = lint(pair, &nets);
+        assert!(found.is_empty(), "common-drain pair: {found:#?}");
+        // P-FETs, sources joined.
+        let pair = vec![
+            header(V5),
+            pfet(MIDPT, V5, GATE),
+            second(pfet(MIDPT, SW, GATE)),
+            mcu(GATE),
+            load(SW),
+        ];
+        let found = lint(pair, &nets);
+        assert!(found.is_empty(), "common-source pair: {found:#?}");
+        // The same Q1 alone, wired straight to the load, is reversed.
+        let lone = vec![header(V5), nfet(V5, SW, GATE), mcu(GATE), load(SW)];
+        let found = lint(lone, &nets);
+        assert_eq!(found.len(), 1, "lone reversed FET: {found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        // Two FETs in parallel (both sources on the supply) are not a series
+        // pair: each is still reversed.
+        let parallel = vec![
+            header(V5),
+            nfet(V5, SW, GATE),
+            second(nfet(V5, SW, GATE)),
+            mcu(GATE),
+            load(SW),
+        ];
+        let found = lint(parallel, &nets);
+        assert_eq!(found.len(), 2, "parallel FETs: {found:#?}");
+        // A partner whose drain is on ground does not make ground a midpoint.
+        let on_ground = vec![
+            header(V5),
+            nfet(SW, GND, GATE),
+            second(nfet(V5, GND, GATE)),
+            mcu(GATE),
+            load(SW),
+        ];
+        let found = lint(on_ground, &nets);
+        assert!(!found.is_empty(), "drains on ground: {found:#?}");
     }
 
     #[test]
