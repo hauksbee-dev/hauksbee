@@ -1242,26 +1242,111 @@ fn is_zero_ohm_in_capacitor_position(c: &Component) -> bool {
     if !ohmic || v.si > 0.0 || crate::dnp::is_jumper_or_net_tie(c) {
         return false;
     }
-    // A resistor symbol or package in a C-designated slot (`Device:R`,
-    // `resistor:R0603`, `R_0402`) is a deliberate 0 ohm option, not a capacitor.
-    let names_resistor = |name: &str| {
-        let leaf = name
-            .rsplit([':', '/'])
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let mut chars = leaf.chars();
-        leaf.contains("resistor")
-            || leaf.starts_with("res")
-            || leaf == "r"
-            || leaf.starts_with("r_")
-            || leaf.starts_with("r-")
-            || (chars.next() == Some('r') && chars.next().is_some_and(|d| d.is_ascii_digit()))
+    !is_deliberate_zero_ohm_part(c)
+}
+
+/// Whether a C-designated part's own symbol and package say it is a resistor.
+///
+/// A project's library may call its parts anything (`myproj:R_0603`,
+/// `project_lib:Resistor`, `R_Small_US`, `Resistors_SMD:R_0805`, Eagle
+/// `rcl:R0603`, IPC `RESC1608X55N`), so the answer comes from the name's tokens
+/// ([`name_passive_class`]), not from one library's spelling.
+///
+/// A capacitor-class symbol is never a deliberate link, even on a resistor
+/// footprint: that pairing is a mismatch in the record itself. Otherwise a
+/// resistor-class symbol or footprint is the designer saying "0 ohm option".
+fn is_deliberate_zero_ohm_part(c: &Component) -> bool {
+    match (
+        name_passive_class(&c.lib_id),
+        name_passive_class(&c.footprint),
+    ) {
+        (Some('C'), _) => false,
+        (Some('R'), _) | (_, Some('R')) => true,
+        _ => false,
+    }
+}
+
+/// `'R'` or `'C'` when a symbol or footprint name says resistor or capacitor.
+///
+/// Reads the leaf after the last `:` or `/`, split into tokens on anything
+/// that is not a letter or digit. A token is resistor-class when it is `r`,
+/// `res`, `resistor(s)`, an `r`/`res` followed by digits (`R0603`, `RES0402`),
+/// or an IPC-7351 resistor family (`RESC1608X55N`, `RESMELF`, `RESAD`). It is
+/// capacitor-class on the same pattern with `c`, `cap`, `capacitor(s)`, `cp`,
+/// `cpol`, an IPC `CAPC`/`CAPAE`/`CAPM` family, or a body word (`radial`,
+/// `disc`, `elec`, `polarized`, `tantalum`). Whole tokens only, so `Reset` and
+/// `Resonator` are neither. A name carrying both kinds, or neither, answers
+/// `None`; when the leaf is silent the library part (`Resistor_SMD:`,
+/// `Capacitors_SMD:`) is read for the plain words only.
+fn name_passive_class(name: &str) -> Option<char> {
+    let lower = name.to_ascii_lowercase();
+    let (lib, leaf) = lower
+        .rsplit_once([':', '/'])
+        .unwrap_or(("", lower.as_str()));
+    let tokens_class = |text: &str, plain_words_only: bool| {
+        let (mut r, mut c) = (false, false);
+        for t in text.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+            match token_passive_class(t, plain_words_only) {
+                Some('R') => r = true,
+                Some('C') => c = true,
+                _ => {}
+            }
+        }
+        match (r, c) {
+            (true, false) => Some('R'),
+            (false, true) => Some('C'),
+            _ => None,
+        }
     };
-    !(names_resistor(&c.lib_id)
-        || c.lib_id.to_ascii_lowercase().contains("resistor")
-        || names_resistor(&c.footprint)
-        || footprint_family(&c.footprint) == Some('R'))
+    tokens_class(leaf, false).or_else(|| tokens_class(lib, true))
+}
+
+fn token_passive_class(token: &str, plain_words_only: bool) -> Option<char> {
+    let digits_after = |prefix: &str| {
+        token
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
+    };
+    if matches!(token, "res" | "resistor" | "resistors") {
+        return Some('R');
+    }
+    if matches!(token, "cap" | "caps" | "capacitor" | "capacitors") {
+        return Some('C');
+    }
+    if plain_words_only {
+        return None;
+    }
+    if token == "r" || digits_after("r") || digits_after("res") {
+        return Some('R');
+    }
+    if ["resc", "resm", "resad", "resistor"]
+        .iter()
+        .any(|family| token.starts_with(family))
+    {
+        return Some('R');
+    }
+    if matches!(token, "c" | "cp" | "cpol")
+        || digits_after("c")
+        || digits_after("cap")
+        || [
+            "capc",
+            "capae",
+            "capap",
+            "capm",
+            "capad",
+            "capprd",
+            "capacitor",
+        ]
+        .iter()
+        .any(|family| token.starts_with(family))
+        || matches!(
+            token,
+            "radial" | "disc" | "elec" | "electrolytic" | "polarized" | "tantalum"
+        )
+    {
+        return Some('C');
+    }
+    None
 }
 
 fn footprint_family(footprint: &str) -> Option<char> {
@@ -4967,6 +5052,83 @@ mod zero_ohm_capacitor_position_tests {
                 "{found:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_resistor_class_symbol_or_footprint_under_any_library_naming_is_silent() {
+        // (symbol, footprint): the project's own naming, none of it KiCad's stock
+        // `Device:R` / `Resistor_SMD:`. Either side naming a resistor is enough.
+        let forms = [
+            ("myproj:R_0603", "myproj:R0603_HandSolder"),
+            ("project_lib:Resistor", "project_lib:0603"),
+            ("Device:RES", "Footprints:Part"),
+            ("Device:R_Small_US", "Footprints:Part"),
+            ("Device:R_US", "Resistors_SMD:R_0805"),
+            ("proj:Part", "0603_RES"),
+            ("proj:Part", "RES_0603"),
+            ("rcl:R-EU_R0603", "rcl:R0603"),
+            ("proj:Part", "RESC1608X55N"),
+            ("proj:Part", "RESMELF3516X150N"),
+            ("proj:Part", "Resistors_SMD:0805"),
+            ("proj:Part", "proj:R1206W"),
+            (
+                "proj:Part",
+                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm",
+            ),
+            ("Resistors:Part", "proj:Part"),
+        ];
+        for (n, (lib_id, footprint)) in forms.into_iter().enumerate() {
+            let found = zero_ohm_findings(vec![comp(&format!("C{n}"), "0R", lib_id, footprint)]);
+            assert!(found.is_empty(), "{lib_id} / {footprint}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_capacitor_class_symbol_or_footprint_carrying_zero_ohms_is_flagged() {
+        // Real capacitor naming, stock or project-specific, with nothing marking a link.
+        let forms = [
+            ("Device:C", "Capacitor_SMD:C_0603_1608Metric"),
+            ("Device:C_Small", "myproj:C_0603"),
+            ("Device:CP", "Capacitor_THT:CP_Radial_D5.0mm_P2.00mm"),
+            (
+                "Device:C_Polarized",
+                "Capacitor_THT:C_Disc_D3.0mm_W1.6mm_P2.50mm",
+            ),
+            ("myproj:Cap", "CAPC1608X55N"),
+            ("rcl:C-EU", "rcl:C0603"),
+            ("proj:Part", "CAPAE530X610N"),
+            ("proj:Part", "0603_CAP"),
+            // Not resistor-named: `Reset` and `Resonator` merely start with `res`.
+            ("proj:Reset_Link", "proj:Part"),
+            ("proj:Part", "Crystal:Resonator_SMD_0603"),
+            ("proj:Part", "Footprints:Part"),
+        ];
+        for (n, (lib_id, footprint)) in forms.into_iter().enumerate() {
+            let found = zero_ohm_findings(vec![comp(&format!("C{n}"), "0", lib_id, footprint)]);
+            assert_eq!(found.len(), 1, "{lib_id} / {footprint}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_capacitor_symbol_on_a_resistor_footprint_is_flagged() {
+        // The symbol says capacitor, the land says resistor: the record disagrees
+        // with itself, so the 0 ohm value is not a deliberate link.
+        for footprint in [
+            "Resistor_SMD:R_0402_1005Metric",
+            "myproj:R0603_HandSolder",
+            "RESC1608X55N",
+        ] {
+            let found = zero_ohm_findings(vec![comp("C9", "0R", "Device:C", footprint)]);
+            assert_eq!(found.len(), 1, "{footprint}: {found:?}");
+        }
+        // The same land under a resistor symbol is the deliberate option.
+        assert!(zero_ohm_findings(vec![comp(
+            "C9",
+            "0R",
+            "Device:R",
+            "myproj:R0603_HandSolder"
+        )])
+        .is_empty());
     }
 
     #[test]
