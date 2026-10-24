@@ -502,14 +502,14 @@ fn pass_parts(
     grounded: &dyn Fn(i64) -> bool,
 ) -> Vec<PassPart> {
     let held_off = |c: &Component| {
-        c.pins.iter().any(|p| {
-            plain_enable_name(&p.function) && p.net.is_some_and(|n| n != 0 && grounded(n))
-        })
+        c.pins
+            .iter()
+            .any(|p| plain_enable_name(&p.function) && p.net.is_some_and(|n| n != 0 && grounded(n)))
     };
     let unstamped = |c: &Component| {
-        library_resolution(lib, c).model.is_none_or(|m| {
-            matches!(m.kind, ComponentKind::Diode | ComponentKind::Passive)
-        })
+        library_resolution(lib, c)
+            .model
+            .is_none_or(|m| matches!(m.kind, ComponentKind::Diode | ComponentKind::Passive))
     };
     let mut out = Vec::new();
     let mut taken: HashSet<usize> = HashSet::new();
@@ -528,7 +528,10 @@ fn pass_parts(
                 .collect();
             ids.into_iter().collect()
         };
-        let (from, to) = (nets_with(&["IN", "VIN", "VI"]), nets_with(&["OUT", "VOUT", "VO"]));
+        let (from, to) = (
+            nets_with(&["IN", "VIN", "VI"]),
+            nets_with(&["OUT", "VOUT", "VO"]),
+        );
         if !from.is_empty() && !to.is_empty() {
             taken.insert(part);
             out.push(PassPart {

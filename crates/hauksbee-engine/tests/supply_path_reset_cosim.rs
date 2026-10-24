@@ -89,8 +89,7 @@ fn board_text(mcu_rail: &str, extra: &[Part<'_>]) -> String {
         }
     }
     let id = |n: &str| nets.iter().position(|x| *x == n).unwrap() + 1;
-    let mut s =
-        String::from("(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n  (net 0 \"\")\n");
+    let mut s = String::from("(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n  (net 0 \"\")\n");
     for n in &nets {
         writeln!(s, "  (net {} \"{n}\")", id(n)).unwrap();
     }
@@ -296,7 +295,11 @@ fn a_carded_load_switch_with_its_enable_pulled_up_lets_the_core_out_of_reset() {
     };
     assert_runs("carded switch", &r, 3.3);
     // The card's switch is the rail's source: no assumed rail stands in.
-    assert!(!r.report.rows.iter().any(|row| row.reference == "RAIL:VDD_MCU"));
+    assert!(!r
+        .report
+        .rows
+        .iter()
+        .any(|row| row.reference == "RAIL:VDD_MCU"));
 }
 
 #[test]

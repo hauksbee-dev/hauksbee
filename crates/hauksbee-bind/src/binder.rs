@@ -8921,7 +8921,11 @@ fn feed_mcu_rails(
                 .iter()
                 .find(|l| domains.joined(l.net, at))
                 .map(|l| l.supply.nominal_volts())
-                .or_else(|| name_of.get(&n).and_then(|name| power_nets.get(*name).copied()))
+                .or_else(|| {
+                    name_of
+                        .get(&n)
+                        .and_then(|name| power_nets.get(*name).copied())
+                })
         };
         let net = name_of.get(&id).copied().unwrap_or_default().to_string();
         match unmodelled_feed(board, lib, kinds, id, &grounded, &volts_of) {
