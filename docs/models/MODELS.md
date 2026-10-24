@@ -1367,6 +1367,26 @@ shunt leave the value explicitly undetermined. The LTC4020 is the checked-in
 and static ampacity does not charge the threshold to power rails or Kelvin
 stubs.
 
+A driver whose winding current is a reference voltage over a sense resistor
+(A4988, DRV8825) uses the fourth shape, a `protection_limit` with no
+programming resistor:
+
+```toml
+[models.current_program]
+pin = "ref"                      # the first of reference_roles
+semantics = "protection_limit"
+equation = "reference_over_sense"
+reference_roles = ["ref", "ref"] # one reference pin per winding
+sense_roles = ["sense1", "sense2"] # its sense pin, a resistor to ground
+divisor = 8.0                    # I = V(reference) / (divisor * Rsense)
+```
+
+The regulator-budget lint reads the reference level and the one sense resistor
+on the board and holds the resulting full scale to the part's
+`ratings.max_current_a` and to the supply that feeds the motor rail; it also
+reports a reference pin nothing drives or tied to ground. Cite the datasheet
+equation page next to the block.
+
 These equations are datasheet point relationships. They do not silently turn a
 typical-only table row into a guaranteed upper bound: unless a model carries a
 separately sourced limit or interval, the result is a nominal programmed-current

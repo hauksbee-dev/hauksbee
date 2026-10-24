@@ -1644,36 +1644,95 @@ fn check_current_program(
             sense_roles,
             sense_far_roles,
             ..
-        } => {
-            p.require(!sense_roles.is_empty(), || {
-                "current_program.sense_roles must name at least one role".into()
-            });
-            let mut seen = HashSet::new();
-            for role in sense_roles {
-                p.require(role_ok(role), || {
-                    not_a_role("current_program.sense_roles entry", role)
-                });
-                p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
-                    format!("current_program.sense_roles repeats role '{role}'")
-                });
-            }
-            p.require(sense_far_roles.len() == sense_roles.len(), || {
-                format!(
-                    "current_program.sense_far_roles has {} entries but sense_roles has {}",
-                    sense_far_roles.len(),
-                    sense_roles.len()
-                )
-            });
-            for role in sense_far_roles {
-                p.require(
-                    role.eq_ignore_ascii_case("ground") || has_role_ci(entry, role.trim()),
-                    || format!("current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"),
-                );
-            }
-        }
+        } => check_sense_scaled(entry, sense_roles, sense_far_roles, p),
+        CurrentProgramEquation::ReferenceOverSense {
+            reference_roles,
+            sense_roles,
+            ..
+        } => check_reference_over_sense(entry, program, reference_roles, sense_roles, p),
         _ => {}
     }
     check_program_scale(entry, program, p, valid);
+}
+
+/// The role lists of a `sense_scaled_resistance` law: every sense pin a role of
+/// the card, once, each with a far end that is 'ground' or a role.
+fn check_sense_scaled(
+    entry: &ModelEntry,
+    sense_roles: &[String],
+    sense_far_roles: &[String],
+    p: &mut Problems,
+) {
+    let role_ok = |role: &str| !role.trim().is_empty() && has_role_ci(entry, role.trim());
+    p.require(!sense_roles.is_empty(), || {
+        "current_program.sense_roles must name at least one role".into()
+    });
+    let mut seen = HashSet::new();
+    for role in sense_roles {
+        p.require(role_ok(role), || {
+            not_a_role("current_program.sense_roles entry", role)
+        });
+        p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
+            format!("current_program.sense_roles repeats role '{role}'")
+        });
+    }
+    p.require(sense_far_roles.len() == sense_roles.len(), || {
+        format!(
+            "current_program.sense_far_roles has {} entries but sense_roles has {}",
+            sense_far_roles.len(),
+            sense_roles.len()
+        )
+    });
+    for role in sense_far_roles {
+        p.require(
+            role.eq_ignore_ascii_case("ground") || has_role_ci(entry, role.trim()),
+            || format!("current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"),
+        );
+    }
+}
+
+/// The role lists of a `reference_over_sense` law: one reference pin per sense
+/// pin, every one a role of the card, the first of them the block's `pin`.
+fn check_reference_over_sense(
+    entry: &ModelEntry,
+    program: &crate::schema::CurrentProgram,
+    reference_roles: &[String],
+    sense_roles: &[String],
+    p: &mut Problems,
+) {
+    let role_ok = |role: &str| !role.trim().is_empty() && has_role_ci(entry, role.trim());
+    p.require(!sense_roles.is_empty(), || {
+        "current_program.sense_roles must name at least one role".into()
+    });
+    p.require(reference_roles.len() == sense_roles.len(), || {
+        format!(
+            "current_program.reference_roles has {} entries but sense_roles has {}",
+            reference_roles.len(),
+            sense_roles.len()
+        )
+    });
+    for (field, roles) in [
+        ("reference_roles", reference_roles),
+        ("sense_roles", sense_roles),
+    ] {
+        for role in roles {
+            p.require(role_ok(role), || {
+                not_a_role(format!("current_program.{field} entry"), role)
+            });
+        }
+    }
+    let mut seen = HashSet::new();
+    for role in sense_roles {
+        p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
+            format!("current_program.sense_roles repeats role '{role}'")
+        });
+    }
+    p.require(
+        reference_roles
+            .first()
+            .is_some_and(|first| first.trim().eq_ignore_ascii_case(program.pin.trim())),
+        || "current_program.pin must be the first of reference_roles".into(),
+    );
 }
 
 /// The unit slip a current-program constant is checked for.
