@@ -61,13 +61,13 @@ fn is_battery_part(c: &Component) -> bool {
 }
 
 /// A part the board's supply comes in through: a connector or a battery.
-fn is_supply_source(c: &Component) -> bool {
+pub(super) fn is_supply_source(c: &Component) -> bool {
     is_connector_like(c) || is_battery_part(c)
 }
 
 /// A two-pin part that is a wire at DC for this question: a fuse, a ferrite
 /// bead, an inductor or a resistor of a few ohms or less.
-fn is_series_element(c: &Component) -> bool {
+pub(super) fn is_series_element(c: &Component) -> bool {
     if c.pins.len() != 2 {
         return false;
     }
@@ -180,7 +180,7 @@ fn supply_side(idx: &Index<'_>, q: &Component, (first, second): (i64, i64)) -> O
 
 /// A pin that drives its net: an output of any type, a GPIO, a logic output,
 /// or the collector of a driver transistor.
-fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
+pub(super) fn drives(idx: &Index<'_>, o: &Component, p: &Pin) -> bool {
     if is_connector_like(o) {
         return false;
     }
@@ -297,6 +297,27 @@ fn is_bias_part(c: &Component) -> bool {
             RefClass::of(&c.reference),
             RefClass::Resistor | RefClass::Capacitor | RefClass::Diode
         )
+}
+
+/// True when every part on the gate net returns it only to the FET's own
+/// source (both grounds count as one): VGS is held at 0 V, so the FET sits
+/// permanently off. That is a switch with its driver unfitted or a held-off
+/// low-side stage, never an always-on protection FET.
+fn gate_held_at_source(idx: &Index<'_>, q: &Component, gate: i64, source: i64) -> bool {
+    let at_source = |n: i64| {
+        n == gate || n == source || (is_ground(idx.name(n)) && is_ground(idx.name(source)))
+    };
+    let others: Vec<_> = (idx.members(gate).iter())
+        .filter(|(o, _)| !same(o, q))
+        .collect();
+    !others.is_empty()
+        && others.iter().all(|(o, _)| {
+            is_bias_part(o)
+                && (o.pins.iter())
+                    .filter_map(|p| p.net)
+                    .filter(|n| *n != 0)
+                    .all(at_source)
+        })
 }
 
 /// True when the gate net, and every net one bias part further out, holds
@@ -505,6 +526,7 @@ pub fn fet_orientation_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLi
         }
         // Reverse-polarity protection: drain faces the connector.
         if gate_is_passive(&idx, q, g, [s, d])
+            && !gate_held_at_source(&idx, q, g, s)
             && reaches_connector(&idx, s, q)
             && !reaches_connector(&idx, d, q)
             && !bypassed(&idx, q, (s, d))
@@ -746,6 +768,21 @@ mod tests {
         let bad = lint(vec![nfet(SW, GND, GATE), mcu(GATE)], &[]);
         assert_eq!(bad.len(), 1, "{bad:#?}");
         assert_eq!(bad[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn a_low_side_nfet_with_its_gate_pulled_to_its_grounded_source_is_off_not_protection() {
+        // Source on ground (which the header also carries), gate pulled to
+        // the source and nothing else on it: VGS is 0 V, the FET is off. It is
+        // not an always-on reverse-polarity FET whose source faces the input.
+        let parts = vec![
+            header(V5),
+            part("R2", "1k", "Device:R", &[("1", V5), ("2", SW)]),
+            nfet(GND, SW, GATE),
+            part("R1", "100k", "Device:R", &[("1", GATE), ("2", GND)]),
+        ];
+        let found = lint(parts, &[]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     const VIN: i64 = 20;

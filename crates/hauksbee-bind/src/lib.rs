@@ -35,6 +35,7 @@ pub mod digital;
 pub mod dnp_rails;
 pub mod drivers;
 pub mod firmware_input;
+pub mod junctions;
 pub mod logic;
 pub mod mcu_clock;
 pub mod mcu_electrical;

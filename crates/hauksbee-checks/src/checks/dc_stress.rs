@@ -32,6 +32,7 @@ use hauksbee_bind::binder::{
 use hauksbee_bind::control_inputs::{
     hold_off, undetermined_gate_note, undetermined_gates, UndeterminedGate,
 };
+use hauksbee_bind::junctions::dc_with_junction_homotopy;
 use hauksbee_bind::stress::{
     bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, unbounded_note, FaultEvent,
     FaultKind, GateDrive, RegulatorHeat, StandInExceedance, StressMonitor,
@@ -928,7 +929,7 @@ fn settle(bound: &mut BoundBoard) -> Result<(Workspace, Vec<f64>), Unsettled> {
     };
     let mut ws = Workspace::new(&bound.circuit);
     for _ in 0..SETTLE_SWEEPS {
-        solve_dc(&mut ws, bound)?;
+        solve_dc(&mut ws, &mut *bound)?;
         let before = drive_state(bound);
         let x = ws.x.clone();
         let layout = &ws.layout;
@@ -955,7 +956,7 @@ fn settle(bound: &mut BoundBoard) -> Result<(Workspace, Vec<f64>), Unsettled> {
         }
     }
     // Still moving (an oscillator, say): judge the last solved state anyway.
-    solve_dc(&mut ws, bound)?;
+    solve_dc(&mut ws, &mut *bound)?;
     let x = ws.x.clone();
     Ok((ws, x))
 }
@@ -975,13 +976,20 @@ enum Unsettled {
 }
 
 /// One DC operating-point solve of `bound` into `ws`, accepted only when it
-/// is a root of the whole circuit ([`Unsettled`] otherwise).
-fn solve_dc(ws: &mut Workspace, bound: &BoundBoard) -> Result<(), Unsettled> {
-    // `dc_operating_point` refuses every point that is not a root; the
-    // workspace still says whether the refusal was the relaxed stand-in.
-    let solved = dc_operating_point(ws, &bound.circuit, &SolverOptions::default());
+/// is a root of the whole circuit ([`Unsettled`] otherwise). A failed solve
+/// is retried through the junction homotopy
+/// ([`hauksbee_bind::junctions::dc_with_junction_homotopy`]).
+fn solve_dc(ws: &mut Workspace, bound: &mut BoundBoard) -> Result<(), Unsettled> {
+    // The solve refuses every point that is not a root; the workspace still
+    // says whether the first refusal was the relaxed stand-in.
+    let opts = SolverOptions::default();
+    let mut relaxed = false;
+    let solved = dc_operating_point(ws, &bound.circuit, &opts).or_else(|_| {
+        relaxed = ws.relaxed_seed_adopted();
+        dc_with_junction_homotopy(ws, &mut bound.circuit, &opts, None)
+    });
     solved.map_err(|_| {
-        if ws.relaxed_seed_adopted() {
+        if relaxed {
             Unsettled::StandIn
         } else {
             Unsettled::NoSolve

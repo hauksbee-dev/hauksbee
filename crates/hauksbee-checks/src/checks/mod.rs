@@ -186,6 +186,7 @@ pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
 pub mod signal_direction;
+pub mod sim_parity;
 pub mod straps;
 pub mod supply_cap;
 pub mod switch_short;

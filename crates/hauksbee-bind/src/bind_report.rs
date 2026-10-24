@@ -188,6 +188,13 @@ pub struct BindReport {
     /// pins on a net that the DC netlist gives no behaviour (see
     /// [`crate::control_inputs`]).
     pub part_pins: Vec<PartPin>,
+    /// Discrete MOSFETs bound with the generic body diode
+    /// ([`hauksbee_ir::GENERIC_BODY_DIODE_IS`]) because their card states no
+    /// `is`: the diode's curve there is assumed, its presence is not.
+    pub assumed_body_diodes: Vec<String>,
+    /// Logic and MCU parts whose pin clamps and quiescent draw
+    /// [`crate::junctions::stamp_ic_junctions`] can stamp.
+    pub ic_sites: Vec<crate::junctions::IcSite>,
 }
 
 /// One connected pin of a fitted part, as the bind pass saw it.

@@ -701,6 +701,18 @@ pub fn bind_board_driven(
                             mcu_boot.insert(comp.reference.clone(), spec);
                         }
                     }
+                    let mosfet =
+                        matches!(&outcome, BindOutcome::Analog { device } if device == "mosfet");
+                    let stated_is =
+                        (bound_card.params.get_f64("is")).is_some_and(|v| v.is_finite() && v > 0.0);
+                    if mosfet && !stated_is {
+                        report.assumed_body_diodes.push(comp.reference.clone());
+                    }
+                    if outcome.is_resolved() {
+                        report
+                            .ic_sites
+                            .extend(crate::junctions::ic_site(comp, bound_card, &node_of));
+                    }
                     let rail = |n: Option<i64>| {
                         let id = node_of(n)?;
                         let name = circuit.node_name(id);
@@ -5407,8 +5419,13 @@ fn bind_mosfet(
         cgs_ov: p.get_f64("cgs").unwrap_or(def.cgs_ov),
         cgd_ov: p.get_f64("cgd").unwrap_or(def.cgd_ov),
         c_ox: def.c_ox,
-        // Body diode: only when the db entry states it (`is`/`cbd`/`cbs`).
-        body_is: p.get_f64("is").unwrap_or(def.body_is),
+        // Body diode: every discrete MOSFET has one. The card's `is` when it
+        // states one, else the generic value, recorded as assumed by the bind
+        // loop (`BindReport::assumed_body_diodes`).
+        body_is: p
+            .get_f64("is")
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(hauksbee_ir::GENERIC_BODY_DIODE_IS),
         cbd: p.get_f64("cbd").unwrap_or(def.cbd),
         cbs: p.get_f64("cbs").unwrap_or(def.cbs),
         pb: p.get_f64("pb").unwrap_or(def.pb),
