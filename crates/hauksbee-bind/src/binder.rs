@@ -976,6 +976,27 @@ pub fn bind_board_driven(
             BindOutcome::PowerRail { volts },
         ));
     }
+    // ── Pass 3c: a processor's supply rail fed through parts with no card ────
+    // A rail with no voltage in its name (`VDD_MCU`) that reaches the processor
+    // through a part no card models (a load switch, an ideal diode, an LDO)
+    // took no source above, so it sat at 0 V and the processor's reset pull-up
+    // with it: the core never left reset although on the board it runs. The
+    // path the static rail analysis walks (`rail_basis`) says where its power
+    // comes from; the rail takes an ideal source at that voltage, stated on a
+    // row. A path whose part is held off by its enable pin leaves the rail
+    // down, and says so.
+    report.held_off_feeds = feed_mcu_rails(
+        board,
+        lib,
+        &component_kinds,
+        &mcus,
+        &netid_node,
+        &power_nets,
+        &domains,
+        &mut circuit,
+        &mut supplies,
+        &mut report,
+    );
     // Said on a row too, so every surface that lists bind warnings shows it.
     for c in &conflicts {
         let mut row = BindRow::without_model(
@@ -8776,6 +8797,9 @@ pub fn unpowered_supply_nets(
 /// The output net of each simple regulator the board holds off (its enable
 /// pin tied or pulled to its off level with nothing to move it; see
 /// [`crate::vreg_enable`]), with the sentence saying why.
+///
+/// A processor rail whose only feed is a part with no card and its enable pin
+/// on ground (binder pass 3c) is listed too.
 #[must_use]
 pub fn held_off_rails(bound: &BoundBoard) -> Vec<(String, String)> {
     bound
@@ -8792,7 +8816,175 @@ pub fn held_off_rails(bound: &BoundBoard) -> Vec<(String, String)> {
             let because = format!("{} is held off: {why}", reg.reference);
             Some((net, because))
         })
+        .chain(bound.report.held_off_feeds.iter().cloned())
         .collect()
+}
+
+/// The load that holds a processor rail at 0 V while the part feeding it is
+/// held off: the processor and its neighbours draw the rail down.
+const HELD_OFF_RAIL_LOAD_OHMS: f64 = 100e3;
+
+/// The voltage the co-sim holds a processor's rail at when a part with no card
+/// sets it from a `source` volts input: the input itself when the processor's
+/// supply range takes it (a load switch passes it through), else the highest
+/// common rail voltage under it that the range takes (a regulator brings it
+/// down).
+///
+/// Above the card's absolute maximum, or above 3.6 V when the card
+/// gives none, is out of range.
+fn regulated_rail_volts(source: f64, mcus: &[&McuBinding]) -> Option<f64> {
+    let floor = mcus
+        .iter()
+        .filter_map(|m| m.min_supply_v)
+        .fold(0.0_f64, f64::max);
+    let ceiling = mcus
+        .iter()
+        .filter_map(|m| m.max_supply_v)
+        .fold(f64::INFINITY, f64::min);
+    let ceiling = if ceiling.is_finite() { ceiling } else { 3.6 };
+    [source, 5.0, 3.3, 2.5, 1.8, 1.2]
+        .into_iter()
+        .find(|v| *v <= source + 1e-6 && *v >= floor - 1e-6 && *v <= ceiling + 1e-6)
+}
+
+/// Each net a processor draws its supply on (by the static rail analysis's
+/// supply-pin rule), with the processors on it, in net order.
+fn mcu_supply_rails<'a>(
+    mcus: &'a [McuBinding],
+    netid_node: &HashMap<i64, NodeId>,
+) -> Vec<(i64, Vec<&'a McuBinding>)> {
+    use crate::rail_basis::{regulator_output_name, supply_input_name};
+    let id_of: HashMap<NodeId, i64> = netid_node.iter().map(|(id, n)| (*n, *id)).collect();
+    let mut rails: Vec<(i64, Vec<&McuBinding>)> = Vec::new();
+    for m in mcus {
+        for (role, node) in &m.role_nets {
+            if !supply_input_name(role) || regulator_output_name(role) || node.is_ground() {
+                continue;
+            }
+            let Some(&id) = id_of.get(node) else { continue };
+            match rails.iter_mut().find(|(r, _)| *r == id) {
+                Some((_, on)) => on.push(m),
+                None => rails.push((id, vec![m])),
+            }
+        }
+    }
+    rails.sort_by_key(|(id, _)| *id);
+    rails
+}
+
+/// Binder pass 3c: power each processor supply rail that no stamped source
+/// reaches but a fitted part with no card feeds (see
+/// [`crate::rail_basis::UnmodelledFeed`]).
+///
+/// Returns the rails a held-off part leaves down, as (net, why).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the binder's own pass state, handed over in one call"
+)]
+fn feed_mcu_rails(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+    mcus: &[McuBinding],
+    netid_node: &HashMap<i64, NodeId>,
+    power_nets: &HashMap<String, f64>,
+    domains: &crate::rail_owner::RailDomains,
+    circuit: &mut Circuit,
+    supplies: &mut Vec<SupplyLeg>,
+    report: &mut BindReport,
+) -> Vec<(String, String)> {
+    use crate::rail_basis::{unmodelled_feed, UnmodelledFeed};
+    let name_of: HashMap<i64, &str> = board.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
+    let mut held_off = Vec::new();
+    for (id, on) in mcu_supply_rails(mcus, netid_node) {
+        let Some(&node) = netid_node.get(&id) else {
+            continue;
+        };
+        let reached = |legs: &[SupplyLeg]| {
+            !domains.drivers_of(node).is_empty()
+                || domains.fed_by_driver(node)
+                || legs
+                    .iter()
+                    .any(|l| domains.joined(l.net, node) || domains.fed_joined(l.net, node))
+        };
+        if reached(supplies) {
+            continue;
+        }
+        let grounded = |n: i64| {
+            n == 0
+                || name_of.get(&n).is_none_or(|name| is_ground(name))
+                || netid_node.get(&n).is_none_or(|n| n.is_ground())
+        };
+        let volts_of = |n: i64| {
+            let at = *netid_node.get(&n)?;
+            supplies
+                .iter()
+                .find(|l| domains.joined(l.net, at))
+                .map(|l| l.supply.nominal_volts())
+                .or_else(|| name_of.get(&n).and_then(|name| power_nets.get(*name).copied()))
+        };
+        let net = name_of.get(&id).copied().unwrap_or_default().to_string();
+        match unmodelled_feed(board, lib, kinds, id, &grounded, &volts_of) {
+            Some(UnmodelledFeed::Fed {
+                part,
+                source,
+                volts,
+                regulated,
+            }) => {
+                let held = if regulated {
+                    regulated_rail_volts(volts, &on)
+                } else {
+                    Some(volts)
+                };
+                let Some(held) = held else { continue };
+                let leg = SupplyLeg::stamp(circuit, node, &net, PowerSupply::Ideal { volts: held });
+                supplies.push(leg);
+                let how = if regulated && (held - volts).abs() > 1e-6 {
+                    format!(
+                        "{part} has no model, so the co-sim holds '{net}' at an assumed {} \
+                         (a common rail in the processor's supply range, below {source}'s {})",
+                        format_volts(held),
+                        format_volts(volts)
+                    )
+                } else {
+                    format!(
+                        "{part} has no model, so the co-sim holds '{net}' at {source}'s {} \
+                         as if it passes it through",
+                        format_volts(held)
+                    )
+                };
+                let mut row = BindRow::without_model(
+                    format!("RAIL:{net}"),
+                    format_volts(held),
+                    Confidence::Guessed,
+                    BindOutcome::PowerRail { volts: held },
+                );
+                row.warning = Some(format!(
+                    "'{net}' powers the processor and reaches it from {source} through {part}: {how}"
+                ));
+                report.push(row);
+            }
+            Some(UnmodelledFeed::HeldOff { part, source }) => {
+                // The rail's loads pull it down with its source off; without
+                // them it would float, and a floating rail is not judged.
+                circuit.add(Device::resistor(
+                    format!("Rheld_off_{net}"),
+                    node,
+                    NodeId::GROUND,
+                    HELD_OFF_RAIL_LOAD_OHMS,
+                ));
+                held_off.push((
+                    net.clone(),
+                    format!(
+                        "{part} is held off: its enable pin is tied to ground, so '{net}' \
+                         never comes up from {source}"
+                    ),
+                ));
+            }
+            None => {}
+        }
+    }
+    held_off
 }
 
 /// True when a supply net's name carries no magnitude at all (`VCC`, `+VCC`),

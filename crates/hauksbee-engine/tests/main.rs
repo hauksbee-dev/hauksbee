@@ -268,6 +268,8 @@ mod strap_lint_corpus;
 mod strong_drive_overstress;
 #[path = "supply_chain_scope.rs"]
 mod supply_chain_scope;
+#[path = "supply_path_reset_cosim.rs"]
+mod supply_path_reset_cosim;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
 #[path = "tarski_stretcher_transient.rs"]
