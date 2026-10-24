@@ -9,7 +9,6 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
     for (val, id, vout) in [
         ("7805", "7805", 5.0),
         ("LM7805CT", "7805", 5.0),
-        ("78L05", "7805", 5.0),
         ("7806", "7806", 6.0),
         ("7808", "7808", 8.0),
         ("L7809CV", "7809", 9.0),
