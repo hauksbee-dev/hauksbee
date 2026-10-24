@@ -62,6 +62,8 @@ mod gerber_x2_roles;
 mod hostile_input_wording;
 #[path = "ingest_robustness.rs"]
 mod ingest_robustness;
+#[path = "kelvin_sense.rs"]
+mod kelvin_sense;
 #[path = "kicad_dru.rs"]
 mod kicad_dru;
 #[path = "known_faults.rs"]

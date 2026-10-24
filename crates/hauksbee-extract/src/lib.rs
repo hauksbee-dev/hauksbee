@@ -58,6 +58,7 @@ pub mod eagle_sch;
 pub mod gerber;
 pub mod ipc2581;
 mod ipc356;
+mod kelvin_sense;
 pub mod kicad_dru;
 mod layout_lint;
 pub mod mate;

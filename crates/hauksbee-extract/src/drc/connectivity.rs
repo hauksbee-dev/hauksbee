@@ -813,6 +813,23 @@ struct NetGraph {
     /// its layer; unlimited for anything else.
     limit: HashMap<usize, (f64, Option<(String, f64)>)>,
     adjacent: HashMap<usize, HashSet<usize>>,
+    /// Where two touching items meet (keyed by the lower item first).
+    contact: HashMap<(usize, usize), (f64, f64)>,
+    /// Each item's shape as the sense-path estimate reads it.
+    geo: HashMap<usize, ItemGeo>,
+}
+
+/// One item's geometry for the shared-copper estimate.
+#[derive(Debug, Clone)]
+struct ItemGeo {
+    kind: Option<ItemKind>,
+    layer: String,
+    /// A track's width (mm); 0 for anything else.
+    width: f64,
+    /// The size (mm) of the contact the item makes with copper it touches.
+    radius: f64,
+    /// A point on the item (a pad's centre).
+    at: (f64, f64),
 }
 
 impl NetGraph {
@@ -821,6 +838,8 @@ impl NetGraph {
         let mut g = Self {
             limit: HashMap::new(),
             adjacent: HashMap::new(),
+            contact: HashMap::new(),
+            geo: HashMap::new(),
         };
         let reach = 2.0f64.mul_add(items.iter().map(|m| m.slack).fold(0.0, f64::max), TOUCH_MM);
         for (layer, all) in &buckets.by_layer {
@@ -837,6 +856,22 @@ impl NetGraph {
                     _ => (f64::INFINITY, None),
                 };
                 g.limit.entry(p.item).or_insert(own);
+                let b = p.bounds;
+                let (width, radius) = match &p.shape {
+                    Shape::Capsule(c) => (2.0 * c.r, c.r),
+                    _ => (0.0, 0.5 * (b[2] - b[0]).min(b[3] - b[1])),
+                };
+                let geo = g.geo.entry(p.item).or_insert_with(|| ItemGeo {
+                    kind: items[p.item].kind,
+                    layer: layer.clone(),
+                    width,
+                    radius,
+                    at: (f64::midpoint(b[0], b[2]), f64::midpoint(b[1], b[3])),
+                });
+                if items[p.item].kind == Some(ItemKind::Pad) {
+                    geo.at = items[p.item].at;
+                    geo.radius = geo.radius.max(radius);
+                }
             }
             for (i, p) in prims.iter().enumerate() {
                 for q in &prims[i + 1..] {
@@ -847,9 +882,9 @@ impl NetGraph {
                     if p.item == q.item || apart {
                         continue;
                     }
-                    let (gap, _) = shape_gap_at(&p.shape, &q.shape);
+                    let (gap, at) = shape_gap_at(&p.shape, &q.shape);
                     if gap <= TOUCH_MM + items[p.item].slack + items[q.item].slack {
-                        g.join(p.item, q.item);
+                        g.join(p.item, q.item, at);
                     }
                 }
             }
@@ -864,7 +899,7 @@ impl NetGraph {
                         && y <= z.bounds[3]
                         && point_in_polygon(x, y, &z.pts)
                     {
-                        g.join(p.item, z.item);
+                        g.join(p.item, z.item, (x, y));
                     }
                 }
             }
@@ -872,9 +907,22 @@ impl NetGraph {
         g
     }
 
-    fn join(&mut self, a: usize, b: usize) {
+    fn join(&mut self, a: usize, b: usize, at: (f64, f64)) {
         self.adjacent.entry(a).or_default().insert(b);
         self.adjacent.entry(b).or_default().insert(a);
+        self.contact.entry((a.min(b), a.max(b))).or_insert(at);
+    }
+
+    /// Where `a` and `b` meet.
+    fn contact_of(&self, a: usize, b: usize) -> (f64, f64) {
+        self.contact
+            .get(&(a.min(b), a.max(b)))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn neighbours(&self, a: usize) -> impl Iterator<Item = usize> + '_ {
+        self.adjacent.get(&a).into_iter().flatten().copied()
     }
 
     /// Widest-path search from `sources`: for each item reached, the strongest
@@ -912,6 +960,374 @@ impl NetGraph {
             }
         }
         best
+    }
+}
+
+/// How a current-sense tap's copper reaches its shunt's pad.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TapCopper {
+    /// The tap has copper of its own from the shunt pad (a Kelvin connection):
+    /// no load current flows in the copper its reading crosses.
+    Dedicated,
+    /// The tap reaches the shunt pad only through copper that also carries the
+    /// load current, so the reading adds that copper's voltage drop.
+    Shared {
+        /// Estimated resistance of the shared copper (ohms) at the board's
+        /// copper thickness.
+        ohms: f64,
+        /// Straight distance from the shunt pad to where the tap joins it (mm).
+        distance_mm: f64,
+        /// The shared copper includes a pour.
+        through_pour: bool,
+    },
+}
+
+/// Copper thickness (mm) assumed when the stackup does not state one: 1 oz.
+const DEFAULT_COPPER_MM: f64 = 0.035;
+
+/// Sheet resistance of 1 oz copper (ohms per square), the IPC-2152 figure.
+const ONE_OZ_OHMS_PER_SQUARE: f64 = 0.5e-3;
+
+/// Smallest contact (mm) a spreading estimate assumes, so a point contact does
+/// not make the resistance run off to infinity.
+const MIN_CONTACT_MM: f64 = 0.1;
+
+/// Sheet resistance (ohms per square) of each copper layer the stackup gives a
+/// thickness for.
+fn sheet_resistance(root: &List) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let layers = root
+        .find("setup")
+        .and_then(|s| s.find("stackup"))
+        .into_iter()
+        .flat_map(|s| s.find_all("layer"));
+    for layer in layers {
+        let name = layer.arg_value(0).unwrap_or_default();
+        let thick = layer.find_f64("thickness").filter(|t| *t > 0.0);
+        if let (true, Some(t)) = (name.ends_with(".Cu"), thick) {
+            out.insert(name, ONE_OZ_OHMS_PER_SQUARE * DEFAULT_COPPER_MM / t);
+        }
+    }
+    out
+}
+
+/// How each sense tap's copper reaches one pad of a current-sense shunt.
+///
+/// `shunt`, `taps` and `loads` name pads of `net` as `(reference, pad number)`;
+/// a load is a pad the shunt's current flows to or from. One answer per tap, in
+/// order. `None` when the board is not a readable `.kicad_pcb`, the shunt or a
+/// tap pad is not found or names more than one footprint, a pour on the net was
+/// saved unfilled, or copper does not join a tap and the loads to the shunt pad.
+///
+/// The load current takes the lowest-resistance copper from the loads to the
+/// shunt pad. Copper the loads reach without passing through the shunt pad or
+/// the tap is load-carrying; a tap whose own copper reaches the shunt pad
+/// without touching it is a Kelvin connection. Otherwise the error is the
+/// resistance the tap's junction and a load's current share on their way to the
+/// shunt pad: tracks by their squares (length over width), a pour by the
+/// spreading resistance between point contacts in a sheet,
+/// `ln(r_je * r_el / (r_jl * a)) / 2 pi` squares for a junction j, entry e and
+/// load l. Vias and pads count nothing, and the smallest figure over the loads
+/// and junctions is the one reported, so the estimate errs low.
+#[must_use]
+pub fn kelvin_taps_from_text(
+    text: &str,
+    net: &str,
+    shunt: &(String, String),
+    taps: &[(String, String)],
+    loads: &[(String, String)],
+) -> Option<Vec<TapCopper>> {
+    let doc = forge_sexpr::parse(text).ok()?;
+    let root = doc.root().filter(|r| r.name() == Some("kicad_pcb"))?;
+    if renamed_copper(root) {
+        return None;
+    }
+    let mut nets = NetResolver::from_root(root);
+    let mut buckets = collect_primitives(root, &mut nets);
+    push_net_graphics(root, &mut nets, &mut buckets);
+    spread_through_holes(&mut buckets, &super::copper_layers_of(root));
+    let net_id = *nets.by_name.get(&crate::netname::unescape_net_name(net))?;
+    let items = &buckets.items;
+    if items.iter().any(|m| m.unfilled && m.net == net_id) {
+        return None;
+    }
+    let pads_of = |pads: &[(String, String)]| -> HashSet<usize> {
+        (0..items.len())
+            .filter(|&i| {
+                let m = &items[i];
+                m.net == net_id
+                    && m.kind == Some(ItemKind::Pad)
+                    && m.copper != Copper::None
+                    && pads.iter().any(|(r, n)| *r == m.owner && *n == m.pad)
+            })
+            .collect()
+    };
+    // One pad of one footprint: a panel repeating the designator is not judged.
+    let one_pad = |pad: &(String, String)| -> Option<HashSet<usize>> {
+        let found = pads_of(std::slice::from_ref(pad));
+        let footprints: HashSet<usize> = found.iter().map(|&i| items[i].footprint).collect();
+        (footprints.len() == 1).then_some(found)
+    };
+    let shunt_items = one_pad(shunt)?;
+    let load_items = pads_of(loads);
+    if load_items.is_empty() {
+        return None;
+    }
+    let graph = NetGraph::build(&buckets, net_id, &|_, _| f64::INFINITY);
+    let sheet = sheet_resistance(root);
+    let mut out = Vec::new();
+    for tap in taps {
+        let tap_items = one_pad(tap)?;
+        out.push(graph.tap_copper(&shunt_items, &tap_items, &load_items, &sheet)?);
+    }
+    Some(out)
+}
+
+/// Items reachable from `from` without entering `blocked`.
+fn reach_avoiding(
+    graph: &NetGraph,
+    from: &HashSet<usize>,
+    blocked: &dyn Fn(usize) -> bool,
+) -> HashSet<usize> {
+    let mut seen: HashSet<usize> = from.clone();
+    let mut stack: Vec<usize> = from.iter().copied().collect();
+    while let Some(u) = stack.pop() {
+        for v in graph.neighbours(u) {
+            if !blocked(v) && seen.insert(v) {
+                stack.push(v);
+            }
+        }
+    }
+    seen
+}
+
+/// The lowest-resistance tree from the shunt pad over load-carrying copper.
+struct ShuntTree {
+    /// Resistance (ohms) from the shunt pad to where each item is entered.
+    dist: HashMap<usize, f64>,
+    /// Where each item is entered, and the size of the contact feeding it.
+    entry: HashMap<usize, ((f64, f64), f64)>,
+    /// The item each one is entered from.
+    pred: HashMap<usize, usize>,
+}
+
+impl ShuntTree {
+    /// The chain from `item` back to the shunt pad, `item` first.
+    fn chain(&self, mut item: usize) -> Vec<usize> {
+        let mut out = vec![item];
+        while let Some(&p) = self.pred.get(&item) {
+            out.push(p);
+            item = p;
+        }
+        out
+    }
+}
+
+/// A heap entry ordered so the smallest resistance pops first.
+#[derive(PartialEq)]
+struct Cost(f64, usize);
+impl Eq for Cost {}
+impl PartialOrd for Cost {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Cost {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.0.total_cmp(&self.0).then(other.1.cmp(&self.1))
+    }
+}
+
+fn dist_mm(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+impl NetGraph {
+    /// The geometry of `item`; a contact-free point when it has none.
+    fn geo_of(&self, item: usize) -> ItemGeo {
+        self.geo.get(&item).cloned().unwrap_or(ItemGeo {
+            kind: None,
+            layer: String::new(),
+            width: 0.0,
+            radius: 0.0,
+            at: (0.0, 0.0),
+        })
+    }
+
+    /// Sheet resistance (ohms per square) of the layer `geo` is on.
+    fn sheet_of(geo: &ItemGeo, sheet: &HashMap<String, f64>) -> f64 {
+        sheet
+            .get(&geo.layer)
+            .copied()
+            .unwrap_or(ONE_OZ_OHMS_PER_SQUARE)
+    }
+
+    /// Resistance (ohms) of crossing `item` from contact `a` (size `ra`) to
+    /// contact `b` (size `rb`).
+    fn crossing(
+        &self,
+        item: usize,
+        (a, ra): ((f64, f64), f64),
+        (b, rb): ((f64, f64), f64),
+        sheet: &HashMap<String, f64>,
+    ) -> f64 {
+        let geo = self.geo_of(item);
+        let d = dist_mm(a, b);
+        let squares = match geo.kind {
+            Some(ItemKind::Track | ItemKind::Arc) if geo.width > 0.0 => d / geo.width,
+            Some(ItemKind::Zone) => {
+                let (ra, rb) = (ra.max(MIN_CONTACT_MM), rb.max(MIN_CONTACT_MM));
+                ((d.max(ra) / ra).ln() + (d.max(rb) / rb).ln()) / std::f64::consts::TAU
+            }
+            _ => 0.0,
+        };
+        squares * Self::sheet_of(&geo, sheet)
+    }
+
+    fn shunt_tree(
+        &self,
+        shunt: &HashSet<usize>,
+        allowed: &HashSet<usize>,
+        sheet: &HashMap<String, f64>,
+    ) -> ShuntTree {
+        let mut tree = ShuntTree {
+            dist: HashMap::new(),
+            entry: HashMap::new(),
+            pred: HashMap::new(),
+        };
+        let mut heap = std::collections::BinaryHeap::new();
+        for &s in shunt {
+            let geo = self.geo_of(s);
+            tree.dist.insert(s, 0.0);
+            tree.entry.insert(s, (geo.at, geo.radius));
+            heap.push(Cost(0.0, s));
+        }
+        let mut done: HashSet<usize> = HashSet::new();
+        while let Some(Cost(d, u)) = heap.pop() {
+            if !done.insert(u) {
+                continue;
+            }
+            let into_u = tree.entry[&u];
+            let ru = self.geo_of(u).radius;
+            for v in self.neighbours(u) {
+                if done.contains(&v) || !allowed.contains(&v) {
+                    continue;
+                }
+                let at = self.contact_of(u, v);
+                let cand = d + self.crossing(u, into_u, (at, self.geo_of(v).radius), sheet);
+                if tree.dist.get(&v).is_none_or(|&old| cand < old) {
+                    tree.dist.insert(v, cand);
+                    tree.entry.insert(v, (at, ru));
+                    tree.pred.insert(v, u);
+                    heap.push(Cost(cand, v));
+                }
+            }
+        }
+        tree
+    }
+
+    /// The resistance (ohms) a junction, where tap copper `p` meets load copper
+    /// `q`, shares with load `l`'s current on the way to the shunt pad, and
+    /// whether that copper includes a pour.
+    fn shared(
+        &self,
+        tree: &ShuntTree,
+        (p, q): (usize, usize),
+        l: usize,
+        sheet: &HashMap<String, f64>,
+    ) -> Option<(f64, bool)> {
+        let (cj, cl) = (tree.chain(q), tree.chain(l));
+        // The deepest item both chains pass through (both end at the pad).
+        let on_l: HashSet<usize> = cl.iter().copied().collect();
+        let fork_at = cj.iter().position(|i| on_l.contains(i))?;
+        let fork = cj[fork_at];
+        let pour = cj[fork_at..]
+            .iter()
+            .any(|&i| self.geo_of(i).kind == Some(ItemKind::Zone));
+        // Where a chain leaves the fork, and the size of that contact.
+        let leave = |chain: &[usize], end: ((f64, f64), f64)| {
+            let at = chain.iter().position(|&i| i == fork)?;
+            Some(if at == 0 {
+                end
+            } else {
+                let next = chain[at - 1];
+                (self.contact_of(fork, next), self.geo_of(next).radius)
+            })
+        };
+        let (xj, rj) = leave(&cj, (self.contact_of(p, q), self.geo_of(p).radius))?;
+        let (xl, rl) = leave(&cl, (self.geo_of(l).at, self.geo_of(l).radius))?;
+        let (e, re) = tree.entry[&fork];
+        let geo = self.geo_of(fork);
+        let squares = match geo.kind {
+            Some(ItemKind::Track | ItemKind::Arc) if geo.width > 0.0 => {
+                // Along a track the two currents share the stretch up to the
+                // nearer exit, when both leave on the same side of the entry.
+                let (vj, vl) = ((xj.0 - e.0, xj.1 - e.1), (xl.0 - e.0, xl.1 - e.1));
+                if vj.0.mul_add(vl.0, vj.1 * vl.1) > 0.0 {
+                    dist_mm(xj, e).min(dist_mm(xl, e)) / geo.width
+                } else {
+                    0.0
+                }
+            }
+            Some(ItemKind::Zone) => {
+                let re = re.max(MIN_CONTACT_MM);
+                let junction_entry = dist_mm(xj, e).max(rj.max(re));
+                let entry_load = dist_mm(e, xl).max(re.max(rl));
+                let junction_load = dist_mm(xj, xl).max(rj.max(rl).max(MIN_CONTACT_MM));
+                ((junction_entry * entry_load) / (junction_load * re))
+                    .ln()
+                    .max(0.0)
+                    / std::f64::consts::TAU
+            }
+            _ => 0.0,
+        };
+        Some((
+            tree.dist[&fork] + squares * Self::sheet_of(&geo, sheet),
+            pour,
+        ))
+    }
+
+    /// How one tap's copper reaches the shunt pad; `None` when copper does not
+    /// join them.
+    fn tap_copper(
+        &self,
+        shunt: &HashSet<usize>,
+        tap: &HashSet<usize>,
+        loads: &HashSet<usize>,
+        sheet: &HashMap<String, f64>,
+    ) -> Option<TapCopper> {
+        let blocked = |i: usize| shunt.contains(&i) || tap.contains(&i);
+        let load_side = reach_avoiding(self, loads, &blocked);
+        let private = reach_avoiding(self, tap, &|i| shunt.contains(&i) || load_side.contains(&i));
+        if private
+            .iter()
+            .any(|&i| self.neighbours(i).any(|v| shunt.contains(&v)))
+        {
+            return Some(TapCopper::Dedicated);
+        }
+        let mut allowed = load_side;
+        allowed.extend(shunt.iter().copied());
+        let tree = self.shunt_tree(shunt, &allowed, sheet);
+        let pad = shunt.iter().map(|&s| self.geo_of(s).at).next()?;
+        let mut best: Option<(f64, f64, bool)> = None;
+        for &p in &private {
+            for q in self.neighbours(p).filter(|q| tree.dist.contains_key(q)) {
+                for &l in loads.iter().filter(|l| tree.dist.contains_key(l)) {
+                    let Some((ohms, pour)) = self.shared(&tree, (p, q), l, sheet) else {
+                        continue;
+                    };
+                    if best.is_none_or(|b| ohms < b.0) {
+                        best = Some((ohms, dist_mm(pad, self.contact_of(p, q)), pour));
+                    }
+                }
+            }
+        }
+        let (ohms, distance_mm, through_pour) = best?;
+        Some(TapCopper::Shared {
+            ohms,
+            distance_mm,
+            through_pour,
+        })
     }
 }
 
