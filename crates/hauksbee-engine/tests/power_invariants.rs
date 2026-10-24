@@ -180,7 +180,10 @@ fn text<'a>(t: &'a toml::Table, key: &str) -> Option<&'a str> {
 
 /// Every power card in the builtin db, in file then entry order.
 fn power_cards() -> Vec<Card> {
-    cards_of(|k, _| k == "vreg" || k == "analog_switch")
+    // A value-only fallback card with no pad map (a 78L05 in a package no
+    // card names) leaves the binder to place its pads, so the rig cannot wire
+    // it; its packaged siblings carry the same parameters and are run here.
+    cards_of(|k, t| (k == "vreg" && t.contains_key("pins")) || k == "analog_switch")
 }
 
 /// Every builtin card `keep` accepts (by kind and table), in file then entry
