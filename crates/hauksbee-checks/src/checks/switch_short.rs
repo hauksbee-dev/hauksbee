@@ -24,6 +24,12 @@
 //! through a resistor, because net extraction never merges across a resistor
 //! and the resistor is the series resistance this check asks for.
 //!
+//! A 4-pad tactile switch has its pads bonded in pairs inside the part (see
+//! [`bond_pairs`]). Where the pairs are known (from placed pad geometry, or the
+//! standard Omron numbering on a 6x6 or 12x12 footprint), a bonded pair on two
+//! different nets is a switch that is always closed, and a switch with both
+//! terminals on one net or one terminal unconnected never closes.
+//!
 //! A rail source is a pin typed `power_out`, a regulator card's `out` pad, or a
 //! battery or connector pad on the rail: all of them put a level on the net
 //! that the switch would short.
@@ -82,12 +88,206 @@ fn is_sourced(board: &ExtractedBoard, lib: &ModelLibrary, net: i64, except: &Com
     })
 }
 
+/// How a 4-pad tactile switch's internal bonds were learned.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BondSource {
+    /// From the pads' placed positions: the layout's own geometry.
+    Geometry,
+    /// From the footprint's name, for a family numbered like the vendor drawing.
+    Table,
+}
+
+/// The two internally bonded pad pairs of a 4-pad tactile switch, as indices
+/// into `sw.pins`, and where that came from.
+///
+/// A 4-pad tact switch is one contact with two terminals on each side. The two
+/// pads of a side are one conductor inside the part, so they are one net; the
+/// contact closes between the two sides. On the standard packages (Omron B3F
+/// 6x6 and 12x12 through-hole, p.4 and p.6, and B3S 6x6 SMD, p.2, whose
+/// "Terminal Arrangement/Internal Connections" drawings join 4-3 and 2-1 across
+/// the long pad spacing, 6.5 or 12.5 mm, and close between the rows 4.5 or
+/// 5 mm apart) the bonded pads are the two on the same row of the long axis.
+///
+/// 1. **Geometry.** With every pad placed, the four pads form a rectangle with
+///    unequal sides; the bonded pairs are the two pairs separated by the long
+///    side. A square pattern is ambiguous and abstains.
+/// 2. **Table.** With no positions, a footprint whose four pads are numbered
+///    1 to 4 and which names a standard Omron family (`B3F`, `B3S`, `B3FS`) or a
+///    6x6 or 12x12 tact size uses the datasheet numbering: pads 1-2 and 3-4
+///    (the bottom-view drawing numbers each bonded row 2-1 and 4-3). KiCad's own
+///    tact footprints repeat a pad number across the bonded pair (`SW_PUSH_6mm`
+///    has two pads `1` and two `2`), so they are merged by the netlist already
+///    and need no map.
+fn bond_pairs(sw: &Component) -> Option<([[usize; 2]; 2], BondSource)> {
+    let numbered: Vec<&str> = sw.pins.iter().map(|p| p.number.trim()).collect();
+    let mut distinct = numbered.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if sw.pins.len() != 4 || distinct.len() != 4 || distinct.contains(&"") {
+        return None;
+    }
+    let at: Option<Vec<(f64, f64)>> = sw.pins.iter().map(|p| p.position).collect();
+    // A schematic gives its pins schematic coordinates and no board side: only
+    // a placed footprint's pads say how the part is built.
+    if let Some(at) = at.filter(|_| !sw.layer.is_empty()) {
+        return geometry_pairs(&at).map(|p| (p, BondSource::Geometry));
+    }
+    if !is_omron_numbered(sw) {
+        return None;
+    }
+    let index = |n: &str| numbered.iter().position(|x| *x == n);
+    Some((
+        [[index("1")?, index("2")?], [index("3")?, index("4")?]],
+        BondSource::Table,
+    ))
+}
+
+/// Pair four points as the two pairs separated by the long side of their
+/// rectangle; `None` when they are not a rectangle or are a square.
+fn geometry_pairs(at: &[(f64, f64)]) -> Option<[[usize; 2]; 2]> {
+    let d = |i: usize, j: usize| (at[i].0 - at[j].0).hypot(at[i].1 - at[j].1);
+    let pairings = [[[0, 1], [2, 3]], [[0, 2], [1, 3]], [[0, 3], [1, 2]]];
+    // Opposite sides of a rectangle are equal: two pairings have equal pair
+    // lengths (its sides), the third is the pair of diagonals.
+    let lens = pairings.map(|[a, b]| (d(a[0], a[1]), d(b[0], b[1])));
+    let equal = |x: f64, y: f64| (x - y).abs() <= 0.05 * x.max(y).max(1e-9);
+    let sides: Vec<usize> = (0..3).filter(|&k| equal(lens[k].0, lens[k].1)).collect();
+    if sides.len() != 3 {
+        return None;
+    }
+    let mut by_len = sides;
+    by_len.sort_by(|&a, &b| lens[a].0.total_cmp(&lens[b].0));
+    let [short, long, diagonal] = [by_len[0], by_len[1], by_len[2]];
+    // A rectangle: both diagonals equal the longest pairing, and the two
+    // sides differ.
+    if equal(lens[short].0, lens[long].0)
+        || !equal(lens[diagonal].0, lens[short].0.hypot(lens[long].0))
+    {
+        return None;
+    }
+    Some(pairings[long])
+}
+
+/// A tactile push button by its symbol, footprint or value, never a DIP, slide,
+/// toggle, rocker or piano switch (those have four pads too, but each pair of
+/// pads is its own contact, not one terminal of a single contact).
+fn is_tact_switch(sw: &Component) -> bool {
+    let blob = format!("{} {} {}", sw.footprint, sw.lib_id, sw.value).to_ascii_lowercase();
+    let words: Vec<&str> = blob
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let other = |w: &&str| {
+        [
+            "dip", "slide", "toggle", "rocker", "piano", "selector", "rotary",
+        ]
+        .iter()
+        .any(|p| w.starts_with(p))
+    };
+    let tact = |w: &&str| {
+        [
+            "tact", "push", "button", "btn", "evq", "b3f", "b3s", "pts", "skqg", "skrp", "kmr",
+            "tl3",
+        ]
+        .iter()
+        .any(|p| w.starts_with(p))
+    };
+    !words.iter().any(other) && words.iter().any(tact)
+}
+
+/// A footprint, symbol or value naming a standard Omron-numbered tact family
+/// or a 6x6 or 12x12 tact size.
+fn is_omron_numbered(sw: &Component) -> bool {
+    let blob = format!("{} {} {}", sw.footprint, sw.lib_id, sw.value).to_ascii_lowercase();
+    blob.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
+        .any(|w| {
+            w.starts_with("b3f")
+                || w.starts_with("b3s")
+                || ["6x6", "6.0x6.0", "12x12", "12.0x12.0"]
+                    .iter()
+                    .any(|p| w.starts_with(p))
+                || matches!(w, "6mm" | "12mm")
+        })
+}
+
+/// A 4-pad tact switch wired against its internal bonds: a bonded pair across
+/// two nets (always closed) or all four pads on one side of the contact
+/// (never closes). `None` when the part is not a mappable 4-pad switch, or is
+/// wired sensibly.
+fn bond_finding(board: &ExtractedBoard, sw: &Component) -> Option<LintFinding> {
+    if !is_tact_switch(sw) {
+        return None;
+    }
+    let (pairs, source) = bond_pairs(sw)?;
+    let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
+    let net = |i: usize| sw.pins[i].net.filter(|id| *id != 0);
+    let pad = |i: usize| sw.pins[i].number.trim().to_string();
+    let how = match source {
+        BondSource::Geometry => {
+            "the pads' placement (the two on one row of the long axis are one terminal)"
+        }
+        BondSource::Table => {
+            "the standard footprint's numbering (pads 1-2 and 3-4 are each one terminal)"
+        }
+    };
+    for [i, j] in pairs {
+        if let (Some(x), Some(y)) = (net(i), net(j)) {
+            if x != y {
+                let (nx, ny) = (name(x), name(y));
+                return Some(LintFinding {
+                    check: LintCheck::SwitchShort,
+                    severity: if source == BondSource::Geometry {
+                        Severity::High
+                    } else {
+                        Severity::Medium
+                    },
+                    message: format!(
+                        "{} is a 4-pad tactile switch whose pads {} and {} are one terminal inside the part ({how}), but they sit on different nets, '{nx}' and '{ny}': the switch is always closed, so those nets are permanently tied together whether or not it is pressed. Put the two nets on opposite terminals (one on each bonded pair), or re-check which pads the footprint joins",
+                        sw.reference, pad(i), pad(j)
+                    ),
+                    refs: vec![sw.reference.clone()],
+                    nets: vec![nx, ny],
+                });
+            }
+        }
+    }
+    let side =
+        |[i, j]: [usize; 2]| -> BTreeSet<i64> { [net(i), net(j)].into_iter().flatten().collect() };
+    let (p, q) = (side(pairs[0]), side(pairs[1]));
+    let one_side_open = p.is_empty() != q.is_empty();
+    let one_net = p.len() == 1 && p == q;
+    if one_side_open || one_net {
+        let nets: Vec<String> = p.union(&q).map(|id| name(*id)).collect();
+        let why = if one_side_open {
+            "all its connected pads are on one terminal and the other terminal is not connected"
+        } else {
+            "both terminals are on the same net"
+        };
+        return Some(LintFinding {
+            check: LintCheck::SwitchShort,
+            severity: Severity::Medium,
+            message: format!(
+                "{} is a 4-pad tactile switch whose nets do not span its contact ({how}): {why}, so pressing it connects nothing and it never closes. Wire one net to each bonded pair of pads",
+                sw.reference
+            ),
+            refs: vec![sw.reference.clone()],
+            nets,
+        });
+    }
+    None
+}
+
 /// Flag every two-terminal switch closed between two nets that each hold a level.
 #[must_use]
 pub fn switch_short_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for sw in &board.components {
         if AssemblyState::of(sw).fitted().is_none() || !super::regulator_enable::is_switch(sw) {
+            continue;
+        }
+        // A 4-pad tact switch is judged by its internal bonds first.
+        if let Some(finding) = bond_finding(board, sw) {
+            report.findings.push(finding);
             continue;
         }
         let nets: BTreeSet<i64> = sw
@@ -308,5 +508,140 @@ mod tests {
         let mut dnp = switch("SW1", &[("1", V3), ("2", GND)]);
         dnp.dnp = true;
         assert!(run(vec![source_on(V3, "U1"), dnp]).is_empty(), "DNP");
+    }
+
+    /// A 4-pad tact switch with distinct pad numbers on `footprint`, pads 1-4
+    /// on `nets`; `place` gives their positions when the layout is known.
+    fn tact(footprint: &str, nets: [i64; 4], place: Option<[(f64, f64); 4]>) -> Component {
+        let mut sw = switch(
+            "SW1",
+            &[
+                ("1", nets[0]),
+                ("2", nets[1]),
+                ("3", nets[2]),
+                ("4", nets[3]),
+            ],
+        );
+        sw.footprint = footprint.into();
+        if let Some(at) = place {
+            sw.layer = "F.Cu".into();
+            for (pin, xy) in sw.pins.iter_mut().zip(at) {
+                pin.position = Some(xy);
+            }
+        }
+        sw
+    }
+
+    /// 6x6 THT pad pattern (6.5 x 4.5 mm), pads numbered across rows: the
+    /// long-axis rows are 1-2 and 3-4.
+    const ROWS_6X6: [(f64, f64); 4] = [(0.0, 0.0), (6.5, 0.0), (0.0, 4.5), (6.5, 4.5)];
+    /// The same pads numbered down the columns: 1-3 and 2-4 are the rows.
+    const COLUMNS_6X6: [(f64, f64); 4] = [(0.0, 0.0), (0.0, 4.5), (6.5, 0.0), (6.5, 4.5)];
+
+    #[test]
+    fn a_tact_switch_with_a_bonded_pad_pair_across_two_nets_is_always_closed() {
+        // Table (no positions): the standard 6x6 footprint, pads 1-2 bonded.
+        let found = run(vec![
+            source_on(V3, "U1"),
+            tact("SW_Tactile_6x6mm", [V3, SIG, GND, GND], None),
+        ]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("always closed") && found[0].message.contains("pads 1 and 2"),
+            "{}",
+            found[0].message
+        );
+        assert_eq!(found[0].severity, Severity::Medium);
+        // Geometry: the same wiring read from the placed pads (a name that no
+        // table knows) is High.
+        let found = run(vec![
+            source_on(V3, "U1"),
+            tact("Vendor_Button", [V3, SIG, GND, GND], Some(ROWS_6X6)),
+        ]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        // Geometry beats the table: on a layout that numbers down the columns,
+        // pads 1 and 3 are one terminal.
+        let found = run(vec![tact(
+            "SW_Tactile_6x6mm",
+            [V3, GND, V3, GND],
+            Some(COLUMNS_6X6),
+        )]);
+        assert!(found.is_empty(), "1 and 3 share a net: {found:#?}");
+        let found = run(vec![tact(
+            "SW_Tactile_6x6mm",
+            [V3, GND, GND, GND],
+            Some(COLUMNS_6X6),
+        )]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("pads 1 and 3"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn a_tact_switch_wired_across_its_contact_is_silent() {
+        // Rail on pad 1 and signal on pad 3 (bonded 1-2 and 3-4): a normal
+        // button. Both pads of a side may share the net, or only one be used.
+        for nets in [[V3, V3, SIG, SIG], [V3, 0, SIG, 0], [V3, V3, SIG, 0]] {
+            let found = run(vec![
+                source_on(V3, "U1"),
+                tact("SW_Tactile_6x6mm", nets, None),
+            ]);
+            assert!(found.is_empty(), "table {nets:?}: {found:#?}");
+            let found = run(vec![
+                source_on(V3, "U1"),
+                tact("Vendor_Button", nets, Some(ROWS_6X6)),
+            ]);
+            assert!(found.is_empty(), "geometry {nets:?}: {found:#?}");
+        }
+        // A footprint nobody can map (no positions, unknown name) and a
+        // square pad pattern (the bond is ambiguous) abstain.
+        let found = run(vec![tact("Vendor_Button", [V3, SIG, GND, GND], None)]);
+        assert!(found.is_empty(), "unknown footprint: {found:#?}");
+        let square = [(0.0, 0.0), (5.0, 0.0), (0.0, 5.0), (5.0, 5.0)];
+        let found = run(vec![tact(
+            "Vendor_Button",
+            [V3, SIG, GND, GND],
+            Some(square),
+        )]);
+        assert!(found.is_empty(), "square: {found:#?}");
+        // A 2-position DIP switch has four pads too, but each pair is its own
+        // contact: its rows are not one terminal.
+        let mut dip = tact("SMT_DIP_SWITCH", [V3, SIG, GND, GND], Some(ROWS_6X6));
+        dip.lib_id = "Switch:SW_DIP_x02".into();
+        dip.value = "2_SMT_DIP_SWITCH".into();
+        let found = run(vec![dip]);
+        assert!(found.is_empty(), "DIP: {found:#?}");
+        // Pin coordinates from a schematic (no board side) are symbol layout,
+        // not pad geometry: only the table may speak, and this name is not in it.
+        let mut sch = tact("Vendor_Button", [V3, SIG, GND, GND], Some(ROWS_6X6));
+        sch.layer.clear();
+        let found = run(vec![sch]);
+        assert!(found.is_empty(), "schematic coordinates: {found:#?}");
+        // KiCad's own tact footprints repeat a pad number across the bond: two
+        // distinct numbers, already merged by the netlist; not mapped here.
+        let kicad = switch("SW1", &[("1", V3), ("1", V3), ("2", SIG), ("2", SIG)]);
+        assert!(run(vec![kicad]).is_empty());
+    }
+
+    #[test]
+    fn a_tact_switch_that_never_closes_is_flagged() {
+        // Both terminals on one net.
+        let found = run(vec![tact("SW_Tactile_6x6mm", [SIG, SIG, SIG, SIG], None)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("never closes"),
+            "{}",
+            found[0].message
+        );
+        // One terminal left unconnected.
+        let found = run(vec![tact("SW_Tactile_6x6mm", [SIG, SIG, 0, 0], None)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        // Not connected at all: nothing to say.
+        let found = run(vec![tact("SW_Tactile_6x6mm", [0, 0, 0, 0], None)]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 }
