@@ -7,7 +7,7 @@ description = "ATmega328P 8-bit AVR MCU, DIP-28 (28-pin numbering)"
 
 [models.match]
 value_re   = "(?i)^ATmega328P?$"
-mpn_re     = "(?i)^ATmega328P"
+mpn_re     = "(?i)^ATmega328P($|[-_/ ])"
 
 [models.params]
 # Crystal load capacitors: ATmega48A/PA/88A/PA/168A/PA/328/P datasheet, Table 9-3 "Low Power
@@ -412,7 +412,7 @@ description = "ATmega328P 8-bit AVR MCU, TQFP-32 or VQFN/MLF-32"
 
 [models.match]
 value_re     = "(?i)^ATmega328P?$"
-mpn_re       = "(?i)^ATmega328P"
+mpn_re       = "(?i)^ATmega328P($|[-_/ ])"
 # Any QFP/QFN/MLF family name (TQFP, LQFP, VQFN, ...) followed by the lead count
 # 32: the family is a substring, not a word, so `Package_QFP:LQFP-32_7x7mm_P0.8mm`
 # and `TQFP32-08` both match while `QFN-320` and `TQFP-44` do not.
@@ -804,7 +804,7 @@ description = "ATmega328P 8-bit AVR MCU, 28-pad QFN/MLF (28M1)"
 
 [models.match]
 value_re     = "(?i)^ATmega328P?$"
-mpn_re       = "(?i)^ATmega328P"
+mpn_re       = "(?i)^ATmega328P($|[-_/ ])"
 footprint_re = '(?i)(QFN|MLF)[-_]*28([^0-9]|$)'
 
 [models.params]
