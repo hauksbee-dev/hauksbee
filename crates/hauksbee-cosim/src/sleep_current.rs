@@ -99,7 +99,7 @@ pub struct SleepCurrent {
     pub unknown: Option<String>,
     /// Total above the stated budget.
     pub over_budget: bool,
-    /// Total above [`CARD_RATIO_LIMIT`] times the card's power-down current.
+    /// Total above `CARD_RATIO_LIMIT` times the card's power-down current.
     pub over_card: bool,
 }
 

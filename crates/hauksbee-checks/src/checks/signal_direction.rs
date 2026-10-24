@@ -28,7 +28,7 @@
 //! Capacitors, test points and parts not fitted are not pins on the net.
 //!
 //! A single small resistor between two signal nets, or one element of a resistor
-//! network, is a wire for this question (see [`series`]): a crossed pair behind a
+//! network, is a wire for this question (see the `series` module): a crossed pair behind a
 //! 22 ohm or 1 kilohm series resistor is judged as the line it is. A pull, a
 //! divider, a filter or two resistors in series are not wires and stop the line as
 //! any resistor pin does. A microcontroller port pad the card binds to a UART or
