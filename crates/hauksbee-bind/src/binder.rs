@@ -14416,6 +14416,59 @@ style = "i2c_pointer"
         }
     }
 
+    /// A 78L05 in TO-92 is pad 1 = OUT, pad 3 = IN; a 7805 in TO-220 is the
+    /// reverse. A layout carries bare pad numbers, so the part's card decides
+    /// which pad is the input: the 78L05 used to bind the 78xx card and came
+    /// out with its input and output swapped.
+    #[test]
+    fn a_to92_78l05_and_a_to220_7805_regulate_from_opposite_pads() {
+        use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+        use hauksbee_testkit::circuits::vdc;
+        let lib = ModelLibrary::builtin();
+        // (value, footprint, pad on the 9 V supply, pad that must hold 5 V)
+        for (value, footprint, supply_pad, out_pad) in [
+            ("78L05", "Package_TO_SOT_THT:TO-92_Inline", "3", "1"),
+            ("7805", "Package_TO_SOT_THT:TO-220-3_Vertical", "1", "3"),
+        ] {
+            let model = resolve_value(&lib, value, footprint);
+            let mut part = comp("U1", value);
+            part.footprint = footprint.to_string();
+            let net_of = |pad: &str| match pad {
+                p if p == supply_pad => 1,
+                p if p == out_pad => 2,
+                _ => 0,
+            };
+            part.pins = ["1", "2", "3"].map(|p| pin(p, net_of(p))).into();
+            let mut circuit = Circuit::new();
+            let nodes = ["SUPPLY", "RAIL"].map(|name| circuit.node(name));
+            let node_of = |n: Option<i64>| match n {
+                Some(1) => Some(nodes[0]),
+                Some(2) => Some(nodes[1]),
+                Some(_) => Some(NodeId::GROUND),
+                None => None,
+            };
+            let (outcome, _) = bind_one(&part, &model, &mut circuit, &node_of, &HashMap::new());
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{value}: {outcome:?}"
+            );
+            vdc(&mut circuit, "VIN", nodes[0], 9.0);
+            let mut ws = Workspace::new(&circuit);
+            dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
+            let at = |n: NodeId| ws.x[ws.layout.node(n).unwrap()];
+            assert!(
+                (at(nodes[0]) - 9.0).abs() < 1e-3,
+                "{value}: supply {}",
+                at(nodes[0])
+            );
+            assert!(
+                (at(nodes[1]) - 5.0).abs() < 0.05,
+                "{value}: rail {}",
+                at(nodes[1])
+            );
+        }
+    }
+
     /// An op-amp's quiescent draw needs a supply to draw from, as a regulator's
     /// does. Stamped as an ideal current source on a V+ nothing feeds, it put
     /// V+ at `-iq_a / gmin` (billions of volts below ground) and the solve was

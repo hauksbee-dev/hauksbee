@@ -355,8 +355,10 @@ basis = "TI LP2985 SLVS522S (May 2025), 5.4 Thermal Information, RθJA, DBV (SOT
 # 78xx fixed linear regulators. One entry per voltage code: the value regex
 # matches ONLY that part's two-digit code (05/06/08/09/12/15/18/24), optionally
 # behind a manufacturer prefix (LM/L/MC/UA/KA/NJM/AN/SPX) and a current-class
-# letter (78L/78M/78S). A single unanchored "78xx" rule used to bind the whole
+# letter (78M/78S). A single unanchored "78xx" rule used to bind the whole
 # family: 7809/7812/7815 included, as +5V, silently simulating the wrong rail.
+# 78L is NOT in that set: a 78Lxx is a 100 mA part with a different pad order
+# (TO-92: 1 = OUT, 2 = GND, 3 = IN) and has its own cards at the end of this file.
 # Source: ST L78xx datasheet DS0422, Table (typical). Dropout ~2 V, Iq ~6 mA.
 
 # The 7805 is read off the datasheet in full, because it is the one a hobbyist
@@ -412,7 +414,7 @@ kind = "vreg"
 description = "78xx / LM7805 linear regulator +5V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?05"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?05"
 
 [models.params]
 # Source: ST L78 datasheet DS0422 Rev 38, Table 3 (L7805A). See above.
@@ -506,10 +508,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7806"
 kind = "vreg"
-description = "78xx / LM7806 linear regulator +6V, TO-220 / TO-92"
+description = "78xx / LM7806 linear regulator +6V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?06"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?06"
 
 [models.params]
 vout      = 6.0
@@ -603,10 +605,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7808"
 kind = "vreg"
-description = "78xx / LM7808 linear regulator +8V, TO-220 / TO-92"
+description = "78xx / LM7808 linear regulator +8V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?08"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?08"
 
 [models.params]
 vout      = 8.0
@@ -700,10 +702,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7809"
 kind = "vreg"
-description = "78xx / LM7809 linear regulator +9V, TO-220 / TO-92"
+description = "78xx / LM7809 linear regulator +9V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?09"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?09"
 
 [models.params]
 vout      = 9.0
@@ -797,10 +799,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7812"
 kind = "vreg"
-description = "78xx / LM7812 linear regulator +12V, TO-220 / TO-92"
+description = "78xx / LM7812 linear regulator +12V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?12"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?12"
 
 [models.params]
 vout      = 12.0
@@ -894,10 +896,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7815"
 kind = "vreg"
-description = "78xx / LM7815 linear regulator +15V, TO-220 / TO-92"
+description = "78xx / LM7815 linear regulator +15V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?15"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?15"
 
 [models.params]
 vout      = 15.0
@@ -991,10 +993,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7818"
 kind = "vreg"
-description = "78xx / LM7818 linear regulator +18V, TO-220 / TO-92"
+description = "78xx / LM7818 linear regulator +18V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?18"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?18"
 
 [models.params]
 vout      = 18.0
@@ -1088,10 +1090,10 @@ basis = "ST L78 datasheet DS0422 Rev 38 (February 2025), Table 2 Thermal data, R
 [[models]]
 id = "7824"
 kind = "vreg"
-description = "78xx / LM7824 linear regulator +24V, TO-220 / TO-92"
+description = "78xx / LM7824 linear regulator +24V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?24"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[MS]?24"
 
 [models.params]
 vout      = 24.0
@@ -1460,7 +1462,7 @@ kind = "vreg"
 description = "79xx / LM7905 negative linear regulator -5V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?05"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[MS]?05"
 
 [models.params]
 vout      = -5.0     # VO at TJ = 25 C: -4.8 / -5.0 / -5.2 V
@@ -1491,7 +1493,7 @@ kind = "vreg"
 description = "79xx / LM7912 negative linear regulator -12V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?12"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[MS]?12"
 
 [models.params]
 vout      = -12.0    # VO at TJ = 25 C: -11.5 / -12.0 / -12.5 V
@@ -1518,7 +1520,7 @@ kind = "vreg"
 description = "79xx / LM7915 negative linear regulator -15V, TO-220"
 
 [models.match]
-value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?15"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[MS]?15"
 
 [models.params]
 vout      = -15.0    # VO at TJ = 25 C: -14.4 / -15.0 / -15.6 V
@@ -9819,3 +9821,1780 @@ sha256 = "e3fe95f15b01ae26be6926a8871aa0bec73edabeaf746abd6411db28a60a7736"
 status = "unknown"
 parameter = "output_short_circuit_duration"
 reason = "Absolute Maximum Ratings states the output short-circuit duration is continuous but gives no numerical quantity"
+# ─────────────────────────────────────────────────────────────────────────────
+# 78Lxx: 100 mA positive regulators, a different part from the 1 A 78xx above.
+#
+# A 78Lxx is NOT a small 78xx. It is rated 100 mA (not 1.5 A), drops out at
+# about 1.7 V, and its TO-92 / SOT-89 / SOIC-8 pad order is 1 = OUT, 2 = GND,
+# 3 = IN, the REVERSE of the TO-220 78xx (1 = IN, 2 = GND, 3 = OUT). The 78xx
+# cards above used to bind 78L05 too (value_re `78[LMS]?05`), so a 78L05 in a
+# TO-92 footprint came out with input and output swapped. The 78xx value_re now
+# excludes `L`, and each voltage code has three cards here: one gated to the
+# 3-pin packages (TO-92 / SOT-89), one gated to SOIC-8, and an ungated one with
+# NO pad map for a footprint the sheet does not print (a schematic with no
+# footprint, a SOT-23 clone). A footprint-gated card outscores the ungated one
+# when its footprint matches. The ungated card leaves pads unmapped, which a
+# schematic's pin functions still resolve and a bare layout reports as unmapped
+# pads, instead of guessing a pinout for a package nobody checked.
+#
+# Source for all of them: Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023,
+# sha256 a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd.
+# Codes follow the sheet: UA78L05 / 06 (6.2 V) / 08 / 09 / 10 / 12 / 15. The
+# legacy-chip typical figures are used (the new chip's Iq is lower, 3.53 mA at
+# 5 V). Dropout is 1.7 V typ at TJ = 25 C for every code. 78L18, 78L24, 78L02
+# and 78L033 are not on this sheet and have no card here.
+
+[[models]]
+id = "ua78l05_3pin"
+kind = "vreg"
+description = "UA78L05 / 78L05 100 mA linear regulator +5V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L05"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 5   # Electrical Characteristics UA78L05, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+iq_a      = 0.0038  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.7)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L05 Electrical Characteristics pp.6-7"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l05_soic8"
+kind = "vreg"
+description = "UA78L05 / 78L05 100 mA linear regulator +5V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L05"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 5   # Electrical Characteristics UA78L05, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+iq_a      = 0.0038  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.7)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L05 Electrical Characteristics pp.6-7"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l05"
+kind = "vreg"
+description = "UA78L05 / 78L05 100 mA linear regulator +5V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L05"
+
+[models.params]
+vout      = 5   # Electrical Characteristics UA78L05, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.6)
+iq_a      = 0.0038  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.7)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L05 Electrical Characteristics pp.6-7"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l06_3pin"
+kind = "vreg"
+description = "UA78L06 / 78L06 100 mA linear regulator +6.2V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L06"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 6.2   # Electrical Characteristics UA78L06, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0039  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L06 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L06 Electrical Characteristics p.8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l06_soic8"
+kind = "vreg"
+description = "UA78L06 / 78L06 100 mA linear regulator +6.2V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L06"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 6.2   # Electrical Characteristics UA78L06, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0039  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L06 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L06 Electrical Characteristics p.8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l06"
+kind = "vreg"
+description = "UA78L06 / 78L06 100 mA linear regulator +6.2V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L06"
+
+[models.params]
+vout      = 6.2   # Electrical Characteristics UA78L06, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0039  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L06 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L06 Electrical Characteristics p.8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l08_3pin"
+kind = "vreg"
+description = "UA78L08 / 78L08 100 mA linear regulator +8V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L08"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 8   # Electrical Characteristics UA78L08, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+iq_a      = 0.004  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.9)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L08 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L08 Electrical Characteristics p.9"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l08_soic8"
+kind = "vreg"
+description = "UA78L08 / 78L08 100 mA linear regulator +8V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L08"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 8   # Electrical Characteristics UA78L08, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+iq_a      = 0.004  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.9)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L08 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L08 Electrical Characteristics p.9"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l08"
+kind = "vreg"
+description = "UA78L08 / 78L08 100 mA linear regulator +8V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L08"
+
+[models.params]
+vout      = 8   # Electrical Characteristics UA78L08, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+iq_a      = 0.004  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.9)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+# max_voltage_v: UA78L08 is not listed in the Absolute Maximum Ratings VI row (p.4), so no figure is stated here.
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L08 Electrical Characteristics p.9"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l09_3pin"
+kind = "vreg"
+description = "UA78L09 / 78L09 100 mA linear regulator +9V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L09"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 9   # Electrical Characteristics UA78L09, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0041  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L09 Electrical Characteristics pp.9-10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l09_soic8"
+kind = "vreg"
+description = "UA78L09 / 78L09 100 mA linear regulator +9V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L09"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 9   # Electrical Characteristics UA78L09, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0041  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L09 Electrical Characteristics pp.9-10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l09"
+kind = "vreg"
+description = "UA78L09 / 78L09 100 mA linear regulator +9V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L09"
+
+[models.params]
+vout      = 9   # Electrical Characteristics UA78L09, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.9)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0041  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L09 Electrical Characteristics pp.9-10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l10_3pin"
+kind = "vreg"
+description = "UA78L10 / 78L10 100 mA linear regulator +10V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L10"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 10   # Electrical Characteristics UA78L10, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0042  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L10 Electrical Characteristics p.10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l10_soic8"
+kind = "vreg"
+description = "UA78L10 / 78L10 100 mA linear regulator +10V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L10"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 10   # Electrical Characteristics UA78L10, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0042  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L10 Electrical Characteristics p.10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l10"
+kind = "vreg"
+description = "UA78L10 / 78L10 100 mA linear regulator +10V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L10"
+
+[models.params]
+vout      = 10   # Electrical Characteristics UA78L10, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.10)
+iq_a      = 0.0042  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.10)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 30.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L10 Electrical Characteristics p.10"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l12_3pin"
+kind = "vreg"
+description = "UA78L12 / 78L12 100 mA linear regulator +12V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L12"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 12   # Electrical Characteristics UA78L12, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.7)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0043  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L12 Electrical Characteristics pp.7-8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l12_soic8"
+kind = "vreg"
+description = "UA78L12 / 78L12 100 mA linear regulator +12V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L12"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 12   # Electrical Characteristics UA78L12, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.7)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0043  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L12 Electrical Characteristics pp.7-8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l12"
+kind = "vreg"
+description = "UA78L12 / 78L12 100 mA linear regulator +12V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L12"
+
+[models.params]
+vout      = 12   # Electrical Characteristics UA78L12, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.7)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.8)
+iq_a      = 0.0043  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.8)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L12 Electrical Characteristics pp.7-8"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l15_3pin"
+kind = "vreg"
+description = "UA78L15 / 78L15 100 mA linear regulator +15V, TO-92 / SOT-89"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L15"
+footprint_re = "(?i)(TO[-_ ]?92|SOT[-_ ]?89)"
+
+[models.params]
+vout      = 15   # Electrical Characteristics UA78L15, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+iq_a      = 0.0046  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.11)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3): the TO-92 (LP) and SOT-89 (PK) columns agree.
+"1" = "out"
+"2" = "gnd"   # COMMON
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L15 Electrical Characteristics p.11"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "TO-92 / SOT-89"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l15_soic8"
+kind = "vreg"
+description = "UA78L15 / 78L15 100 mA linear regulator +15V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L15"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = 15   # Electrical Characteristics UA78L15, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+iq_a      = 0.0046  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.11)
+
+[models.pins]
+# Section 5 Pin Functions table (p.3), SOIC (D) column: OUTPUT 1, COMMON 2/3/6/7, NC 4/5, INPUT 8.
+"1" = "out"
+"2" = "gnd"
+"3" = "gnd"
+"4" = "nc"
+"5" = "nc"
+"6" = "gnd"
+"7" = "gnd"
+"8" = "in"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 115.0     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L15 Electrical Characteristics p.11"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "OUTPUT", "2" = "COMMON", "3" = "COMMON", "4" = "NC", "5" = "NC", "6" = "COMMON", "7" = "COMMON", "8" = "INPUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua78l15"
+kind = "vreg"
+description = "UA78L15 / 78L15 100 mA linear regulator +15V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78L15"
+
+[models.params]
+vout      = 15   # Electrical Characteristics UA78L15, VO typ at TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+dropout_v = 1.7   # Dropout voltage typ, TJ = 25 C (TI UA78L SLVS010X (June 2023) p.11)
+iq_a      = 0.0046  # Bias current typ at TJ = 25 C, legacy chip (TI UA78L SLVS010X (June 2023) p.11)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1 "Output current: Up to 100 mA"; Recommended Operating Conditions IO max 100 mA p.4
+max_voltage_v = 35.0         # Absolute Maximum Ratings VI, legacy chip, p.4 (the new chip allows 45 V for some codes; the lower figure is kept)
+max_junction_temp_c = 125.0  # Recommended Operating Conditions TJ max, p.4 (Absolute Maximum Ratings TJ is 150 C)
+theta_ja_c_per_w = 143.6     # 6.4 Thermal Information, RθJA p.5; the least favourable package this card covers
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ua78l.pdf"
+title = "Texas Instruments UA78L Series Positive-Voltage Linear Regulators, SLVS010X, January 1976, revised June 2023"
+locator = "Pin Configuration and Functions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Thermal Information p.5; UA78L15 Electrical Characteristics p.11"
+sha256 = "a1ac403ce6d0e41ec892081372fc749915af4e104898c1e02c193c83e15166cd"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 143.6
+unit = "°C/W"
+conditions = "LP (TO-92) 3 pins"
+package = "TO-92"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, LP (TO-92) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 54.7
+unit = "°C/W"
+conditions = "PK (SOT-89) 3 pins"
+package = "SOT-89"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, PK (SOT-89) 3 pins"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 115.0
+unit = "°C/W"
+conditions = "D (SOIC) 8 pins"
+package = "SOIC-8"
+basis = "TI UA78L SLVS010X (June 2023), 6.4 Thermal Information p.5, RθJA, D (SOIC) 8 pins"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 79Lxx: 100 mA negative regulators, not the 1.5 A 79xx. Same split as the 78Lxx
+# above: the 79xx cards' value_re no longer reaches `L`, and each code has a
+# TO-92 card, a SOIC-8 card and an ungated card with no pad map.
+#
+# Source: Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013, sha256 21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308.
+# Only -5 / -12 / -15 V exist on the sheet. Its dropout is not printed as a row:
+# it is derived from "Input Voltage Required to Maintain Line Regulation" (p.3).
+
+[[models]]
+id = "lm79l05_to92"
+kind = "vreg"
+description = "LM79L05 / 79L05 100 mA negative linear regulator -5V, TO-92 (TO-226)"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L05"
+footprint_re = "(?i)TO[-_ ]?(92|226)"
+
+[models.params]
+vout      = -5   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.3   # DERIVED: input voltage required to maintain line regulation 7.3 V minus |VO| 5 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 4, TO-226 (LP) bottom view (p.2): left to right GND, -VIN, -VOUT. The sheet prints no pad
+# numbers on this figure, so the numbering is the usual TO-92 bottom-view 1-2-3 order; the TI MC79L00
+# SLVS011D LP top view (OUTPUT, INPUT, COMMON from the top) agrees. See the doubt row below.
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "TO-92"
+pins = { "1" = "GND", "2" = "-VIN", "3" = "-VOUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_numbering"
+reason = "LM79L Figure 4 (TO-226 bottom view, p.2) shows GND, -VIN, -VOUT left to right without pad numbers; 1-2-3 is the conventional bottom-view numbering, not a printed one"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l05_soic8"
+kind = "vreg"
+description = "LM79L05 / 79L05 100 mA negative linear regulator -5V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L05"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = -5   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.3   # DERIVED: input voltage required to maintain line regulation 7.3 V minus |VO| 5 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 3, 8-lead SOIC narrow (D) top view (p.2): -VOUT 1, -VIN 2/3/6/7, NC 4/8, GND 5.
+"1" = "out"
+"2" = "in"
+"3" = "in"
+"4" = "nc"
+"5" = "gnd"
+"6" = "in"
+"7" = "in"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 180.0     # Absolute Maximum Ratings note (3) p.3: SOIC-8 (D) 180 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "-VOUT", "2" = "-VIN", "3" = "-VIN", "4" = "NC", "5" = "GND", "6" = "-VIN", "7" = "-VIN", "8" = "NC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l05"
+kind = "vreg"
+description = "LM79L05 / 79L05 100 mA negative linear regulator -5V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L05"
+
+[models.params]
+vout      = -5   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.3   # DERIVED: input voltage required to maintain line regulation 7.3 V minus |VO| 5 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l12_to92"
+kind = "vreg"
+description = "LM79L12 / 79L12 100 mA negative linear regulator -12V, TO-92 (TO-226)"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L12"
+footprint_re = "(?i)TO[-_ ]?(92|226)"
+
+[models.params]
+vout      = -12   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.6   # DERIVED: input voltage required to maintain line regulation 14.6 V minus |VO| 12 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 4, TO-226 (LP) bottom view (p.2): left to right GND, -VIN, -VOUT. The sheet prints no pad
+# numbers on this figure, so the numbering is the usual TO-92 bottom-view 1-2-3 order; the TI MC79L00
+# SLVS011D LP top view (OUTPUT, INPUT, COMMON from the top) agrees. See the doubt row below.
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "TO-92"
+pins = { "1" = "GND", "2" = "-VIN", "3" = "-VOUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_numbering"
+reason = "LM79L Figure 4 (TO-226 bottom view, p.2) shows GND, -VIN, -VOUT left to right without pad numbers; 1-2-3 is the conventional bottom-view numbering, not a printed one"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l12_soic8"
+kind = "vreg"
+description = "LM79L12 / 79L12 100 mA negative linear regulator -12V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L12"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = -12   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.6   # DERIVED: input voltage required to maintain line regulation 14.6 V minus |VO| 12 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 3, 8-lead SOIC narrow (D) top view (p.2): -VOUT 1, -VIN 2/3/6/7, NC 4/8, GND 5.
+"1" = "out"
+"2" = "in"
+"3" = "in"
+"4" = "nc"
+"5" = "gnd"
+"6" = "in"
+"7" = "in"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 180.0     # Absolute Maximum Ratings note (3) p.3: SOIC-8 (D) 180 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "-VOUT", "2" = "-VIN", "3" = "-VIN", "4" = "NC", "5" = "GND", "6" = "-VIN", "7" = "-VIN", "8" = "NC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l12"
+kind = "vreg"
+description = "LM79L12 / 79L12 100 mA negative linear regulator -12V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L12"
+
+[models.params]
+vout      = -12   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.6   # DERIVED: input voltage required to maintain line regulation 14.6 V minus |VO| 12 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l15_to92"
+kind = "vreg"
+description = "LM79L15 / 79L15 100 mA negative linear regulator -15V, TO-92 (TO-226)"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L15"
+footprint_re = "(?i)TO[-_ ]?(92|226)"
+
+[models.params]
+vout      = -15   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.7   # DERIVED: input voltage required to maintain line regulation 17.7 V minus |VO| 15 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 4, TO-226 (LP) bottom view (p.2): left to right GND, -VIN, -VOUT. The sheet prints no pad
+# numbers on this figure, so the numbering is the usual TO-92 bottom-view 1-2-3 order; the TI MC79L00
+# SLVS011D LP top view (OUTPUT, INPUT, COMMON from the top) agrees. See the doubt row below.
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "TO-92"
+pins = { "1" = "GND", "2" = "-VIN", "3" = "-VOUT" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "pin_numbering"
+reason = "LM79L Figure 4 (TO-226 bottom view, p.2) shows GND, -VIN, -VOUT left to right without pad numbers; 1-2-3 is the conventional bottom-view numbering, not a printed one"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l15_soic8"
+kind = "vreg"
+description = "LM79L15 / 79L15 100 mA negative linear regulator -15V, SOIC-8"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L15"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP)
+    [-_]? 0?8 ([^0-9]|$)
+'''
+
+[models.params]
+vout      = -15   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.7   # DERIVED: input voltage required to maintain line regulation 17.7 V minus |VO| 15 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.pins]
+# Figure 3, 8-lead SOIC narrow (D) top view (p.2): -VOUT 1, -VIN 2/3/6/7, NC 4/8, GND 5.
+"1" = "out"
+"2" = "in"
+"3" = "in"
+"4" = "nc"
+"5" = "gnd"
+"6" = "in"
+"7" = "in"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 180.0     # Absolute Maximum Ratings note (3) p.3: SOIC-8 (D) 180 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.pinout]]
+package = "SOIC-8"
+pins = { "1" = "-VOUT", "2" = "-VIN", "3" = "-VIN", "4" = "NC", "5" = "GND", "6" = "-VIN", "7" = "-VIN", "8" = "NC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm79l15"
+kind = "vreg"
+description = "LM79L15 / 79L15 100 mA negative linear regulator -15V, any other package: no pad map"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79L15"
+
+[models.params]
+vout      = -15   # Electrical Characteristics VO typ, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+dropout_v = 2.7   # DERIVED: input voltage required to maintain line regulation 17.7 V minus |VO| 15 V, TJ = 25 C, IO = 100 mA (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+iq_a      = 2.0e-3  # Quiescent current IQ at IO = 100 mA, 2 mA typ / 6 mA max (TI LM79LXXAC SNOSBR8K (April 2013) p.3)
+
+[models.ratings]
+max_current_a = 0.1          # Features p.1: specified at an output current of 100 mA ("in excess of 100 mA")
+max_voltage_v = 35.0         # Absolute Maximum Ratings, input voltage magnitude, p.3
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature, p.3
+theta_ja_c_per_w = 232.0     # Absolute Maximum Ratings note (3) p.3: TO-226 (LP) 232 C/W theta-JA, still air
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm79l.pdf"
+title = "Texas Instruments LM79LXXAC Series 3-Terminal Negative Regulators, SNOSBR8K, July 1999, revised April 2013"
+locator = "Connection Diagram p.2; Absolute Maximum Ratings and Electrical Characteristics p.3"
+sha256 = "21d1defd7ef739ac360f22695ff54fbc710cb0cae3937c201ef50cb2d3687308"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 232.0
+unit = "°C/W"
+conditions = "TO-226 (LP) still air"
+package = "TO-92"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, TO-226 (LP) still air"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 180.0
+unit = "°C/W"
+conditions = "SOIC-8 (D) still air"
+package = "SOIC-8"
+basis = "TI LM79LXXAC SNOSBR8K (April 2013), Absolute Maximum Ratings note (3) p.3, RθJA, SOIC-8 (D) still air"

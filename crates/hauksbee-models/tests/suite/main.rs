@@ -71,6 +71,7 @@ mod si5351_cards;
 mod spi_cs_pin_roles;
 mod stm32f0_nrst;
 mod user_dir_layering;
+mod vreg_78l_79l_packages;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;
 mod zener_family;
