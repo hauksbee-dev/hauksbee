@@ -170,7 +170,7 @@ const MOSFET: &[&str] = &[
 /// "not read for this kind, so it is silently ignored", which is the opposite of
 /// true: the engine reads them and the LINT was the thing that did not know. An
 /// entry author who believed the warning would strip a bus level the solver wanted.
-static CONVERTER_AND_DIGITAL: [&str; 25] = [
+static CONVERTER_AND_DIGITAL: [&str; 26] = [
     "gain",
     "rout",
     "vref_int",
@@ -200,6 +200,9 @@ static CONVERTER_AND_DIGITAL: [&str; 25] = [
     "en_pull_up_ohms",
     "en_open",
     "en_open_basis",
+    // Which level of that enable input turns the part on (`"high"` or
+    // `"low"`): a motor driver's nENBL runs on a low level.
+    "en_on_level",
 ];
 
 // Where each kind's slice of `CONVERTER_AND_DIGITAL` starts or ends; pinned by

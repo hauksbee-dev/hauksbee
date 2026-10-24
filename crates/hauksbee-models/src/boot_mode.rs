@@ -105,6 +105,14 @@ pub struct BootInput {
     pub note: String,
     #[serde(default)]
     pub cite: String,
+    /// The vendor's words, with the page, saying the board must set this pin's
+    /// level itself because the silicon pull alone is not enough (a weak pull
+    /// that noise or leakage overcomes, a pad that must be defined). Empty when
+    /// the datasheet is content to leave the pin to its own pull, which is the
+    /// common case: a bare strap is then correct when the pull is the level the
+    /// part needs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub external_level: String,
 }
 
 impl BootInput {
@@ -113,6 +121,62 @@ impl BootInput {
     pub fn display_name(&self) -> String {
         self.pin.clone().unwrap_or_else(|| self.role.to_uppercase())
     }
+
+    /// The vendor's statement that the board must set this pin's level, when
+    /// the card carries one.
+    #[must_use]
+    pub fn requires_external_level(&self) -> Option<&str> {
+        let quote = self.external_level.trim();
+        (!quote.is_empty()).then_some(quote)
+    }
+}
+
+/// How an undriven strap pin reads, in words.
+///
+/// It says why nothing drives the pin (`net not driven`, `not connected`,
+/// `with the jumper open`) and what the silicon does with it. The one phrase the
+/// co-sim boot report and the static strap lint both use for the basis of such a
+/// reading.
+#[must_use]
+pub fn undriven_basis(state: &str, pull: StrapInternalPull) -> String {
+    let pull = match pull {
+        StrapInternalPull::PullUp => "internal pull-up",
+        StrapInternalPull::PullDown => "internal pull-down",
+        StrapInternalPull::None => "no internal pull",
+        StrapInternalPull::Unknown => "no documented internal pull",
+    };
+    format!("{state}, {pull}")
+}
+
+/// What to tell a reader about a strap pin the board leaves to the chip's pull.
+///
+/// Nothing drives the pin, or only a jumper or header that may be open. This is
+/// the one wording of that caveat: the co-sim boot report and the static strap
+/// lint both build it here. `basis` is [`undriven_basis`]; `pull` the silicon
+/// pull; `input` the pin's boot-table row.
+#[must_use]
+pub fn undriven_strap_note(
+    pin: &str,
+    basis: &str,
+    pull: StrapInternalPull,
+    input: Option<&BootInput>,
+) -> String {
+    use std::fmt::Write as _;
+    let mut note = format!("{pin} is not driven by the board ({basis}); ");
+    if pull_level(pull).is_some() {
+        note.push_str("its level here follows the chip's own pull.");
+    } else {
+        note.push_str(
+            "the chip has no pull the card documents for it, so its level at reset is undefined.",
+        );
+    }
+    if let Some(quote) = input.and_then(BootInput::requires_external_level) {
+        let _ = write!(
+            note,
+            " The vendor does not leave this to the pull: {quote}. A board that relies on the pull alone can latch the wrong mode on some power-ups; give the pin an external pull resistor."
+        );
+    }
+    note
 }
 
 /// `[[models.boot_modes]]`: one row of the vendor's table.

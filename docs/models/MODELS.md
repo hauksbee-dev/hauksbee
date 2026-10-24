@@ -787,6 +787,35 @@ measurements):
 | 1N4148 (D)   | Vf 0.688 V @ 10.1 mA          | Vf max 1.0 V @ 10 mA (real ~0.7 V) |
 | AMS1117-3.3  | Vout 3.300 V @ 33 mA load     | 3.300 V (3.201..3.399 V)         |
 
+## Reset-state pad modes and externally required strap levels
+
+An MCU card may state what a pad does while the chip is in reset, as data a board
+check reads (`reset_state.rs`, shared by `control_held_off.rs` and later the
+simulation floating-node detector):
+
+```toml
+[models.pin_capability.reset_mode]
+basis = "Datasheet <part> <version>, Table <n> pin states in reset (PDF p.<n>)"
+[models.pin_capability.reset_mode.pads]
+"5" = "pull_up"     # pull_up, pull_down, drives_high or drives_low
+```
+
+A pad of an `mcu` card that the table does not list is high-impedance in reset,
+which is what every GPIO of the common families does until firmware configures it.
+`hi_z` is never written; listing a pad is how a card says it is not floating. A
+board enable pin that only such a pad drives, with no pull on the net, floats while
+the MCU resets, and `control_held_off.rs` reads what the enable card says an open
+pin does (`en_open`, `en_pull_*`, `en_on_level`; a load switch or a motor driver
+alike) to report whether the part can be on during that window.
+
+A `[[models.boot_inputs]]` row may add `external_level = "<datasheet words>"` when
+the vendor says the pin must be given an external pull and not left to the chip's
+own, as a strap that latches the wrong mode on some power-ups. Leave it unset when
+the datasheet only says a bare pin settles to its internal pull (the ESP32 family
+sheets say that, so no ESP card sets it today). The strap check then reports a pin
+with nothing on the board that defines it, and the co-sim boot report uses the same
+wording (`hauksbee_models::boot_mode::undriven_strap_note`).
+
 ## Pin capability: which pads are ADC inputs
 
 An MCU card may state which pads of its `[models.pins]` are analogue-to-digital

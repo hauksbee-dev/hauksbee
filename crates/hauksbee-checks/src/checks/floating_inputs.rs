@@ -282,8 +282,28 @@ pub(super) enum WeakKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Weak {
     pub kind: WeakKind,
+    /// The part and pad when the holder is an MCU pad (reference, pad number):
+    /// what the card's reset mode is looked up by.
+    pub pad: Option<(String, String)>,
     /// How a finding names it: `SW1 pin 2`, `Q1's collector`.
     pub label: String,
+}
+
+impl Weak {
+    /// A holder that is not an MCU pad.
+    pub(super) const fn new(kind: WeakKind, label: String) -> Self {
+        Self {
+            kind,
+            pad: None,
+            label,
+        }
+    }
+
+    /// The same holder, as pad `number` of part `reference`.
+    pub(super) fn at_pad(mut self, reference: &str, number: &str) -> Self {
+        self.pad = Some((reference.to_string(), number.to_string()));
+        self
+    }
 }
 
 /// What holds a net's level, seen from one pad.
@@ -378,10 +398,7 @@ impl Classifier<'_> {
             let class = RefClass::of(&o.reference);
             if self.open_jumpers && is_openable_jumper(o) {
                 // The user can leave it open, which leaves nothing on the far side.
-                weak.push(Weak {
-                    kind: WeakKind::Jumper,
-                    label: at,
-                });
+                weak.push(Weak::new(WeakKind::Jumper, at));
             } else if is_jumper(o) || is_plain_resistor(o) {
                 // A series element: the far side holds the level, or is a signal net.
                 for far in o
@@ -408,25 +425,16 @@ impl Classifier<'_> {
                 if self.selects_between_rails(o, q) {
                     return (true, Vec::new());
                 }
-                weak.push(Weak {
-                    kind: WeakKind::Switch,
-                    label: at,
-                });
+                weak.push(Weak::new(WeakKind::Switch, at));
             } else if is_connector_like(o) {
                 if o.pins.len() <= 3 && self.selects_between_rails(o, q) {
                     return (true, Vec::new());
                 }
-                weak.push(Weak {
-                    kind: WeakKind::Connector,
-                    label: at,
-                });
+                weak.push(Weak::new(WeakKind::Connector, at));
             } else if class == RefClass::Transistor {
                 let model = self.models.get(o.reference.as_str());
                 if let Some(label) = low_side_sink(o, q, model) {
-                    weak.push(Weak {
-                        kind: WeakKind::Sink,
-                        label,
-                    });
+                    weak.push(Weak::new(WeakKind::Sink, label));
                 } else if !is_control_terminal(q, model) {
                     return (true, Vec::new());
                 }
@@ -460,7 +468,7 @@ impl Classifier<'_> {
                     } else {
                         WeakKind::Gpio
                     };
-                    weak.push(Weak { kind, label });
+                    weak.push(Weak::new(kind, label).at_pad(&o.reference, &q.number));
                     continue;
                 }
                 return (true, Vec::new());

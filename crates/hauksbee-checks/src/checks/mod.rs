@@ -182,6 +182,7 @@ pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod regulator_cout;
 pub mod regulator_enable;
+pub(crate) mod reset_state;
 pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
