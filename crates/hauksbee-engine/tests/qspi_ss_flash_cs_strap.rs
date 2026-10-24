@@ -212,6 +212,9 @@ fn outcome(ss: Ss) -> Option<(BootOutcome, bool, String)> {
 /// reference circuit left open, boots the flash and runs the firmware.
 #[test]
 fn a_flash_chip_on_qspi_ss_boots_the_flash() {
+    // Booting the flash runs the firmware, which needs Renode. The USB-boot
+    // test below never starts the MCU, so it runs (and asserts) without it.
+    hauksbee_testkit::skip_if!(!crate::support::renode_runnable(), "Renode not installed");
     for ss in [Ss::FlashOnly, Ss::PullUp, Ss::ButtonOpen, Ss::DeadEnd] {
         let Some((out, executed, summary)) = outcome(ss) else {
             return;

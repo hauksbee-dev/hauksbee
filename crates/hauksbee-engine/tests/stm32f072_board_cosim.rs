@@ -92,6 +92,7 @@ struct Outcome {
 }
 
 fn run(hse: bool) -> Option<Outcome> {
+    hauksbee_testkit::skip_if!(!crate::support::renode_runnable() => None, "Renode not installed");
     let fw = crate::support::testdata("firmware/stm32f072_blinky/blinky.elf")?;
     let mut engine = HauksbeeEngine::from_board_file(
         &board_text(hse),

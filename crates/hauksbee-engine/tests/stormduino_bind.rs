@@ -5,11 +5,14 @@
 //! resolves and binds with a fully-connected /D13 net, we run the demo
 //! firmware and assert the D13/SCK net toggles.
 
+#[cfg(feature = "avr")]
 use crate::common;
 
 use hauksbee_engine::binder::bind_board;
+#[cfg(feature = "avr")]
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
+#[cfg(feature = "avr")]
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
@@ -56,6 +59,9 @@ fn stormduino_resolves_over_60pct() {
 
 /// Stretch goal: the ATmega328P-PU resolves and binds with a connected /D13
 /// net, so the demo firmware should make D13 (the SCK / Arduino-D13 net) toggle.
+// Runs the AVR demo firmware in process, so it needs the `avr` feature (the
+// GPL-free renode/qemu build refuses AVR firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn stormduino_d13_toggles_under_firmware() {
     let Some(path) = board_path("stormduino_d13_toggles_under_firmware") else {

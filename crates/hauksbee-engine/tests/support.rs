@@ -35,6 +35,23 @@ pub fn testdata(rel: &str) -> Option<PathBuf> {
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
 
+/// Whether a Renode-backed engine can run on this machine.
+///
+/// A board whose MCU runs under Renode spawns the emulator when the engine is
+/// built, so a test that boots one must skip first when Renode is absent:
+/// `skip_if!(!crate::support::renode_runnable() => None, "Renode not installed")`.
+/// Always `false` in a build without the `renode` feature (no backend to spawn).
+#[cfg(feature = "renode")]
+pub fn renode_runnable() -> bool {
+    hauksbee_mcu::renode::is_available()
+}
+
+/// See the `renode` variant: without the feature there is no Renode backend.
+#[cfg(not(feature = "renode"))]
+pub const fn renode_runnable() -> bool {
+    false
+}
+
 /// Step `engine` through `n` frames of `frame_dt` seconds and return the last
 /// voltage it reported on the "FLAG" net (0 V if it reported none).
 ///

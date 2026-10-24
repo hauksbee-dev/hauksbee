@@ -333,6 +333,7 @@ fn pico_board_text(with_module: bool) -> String {
 }
 
 fn run_pico(with_module: bool) -> Option<hauksbee_cosim::execution::ExecutionEvidence> {
+    hauksbee_testkit::skip_if!(!crate::support::renode_runnable() => None, "Renode not installed");
     let fw = crate::support::testdata("firmware/rp2040_blink_uart/blink_uart.elf")?;
     let mut engine = HauksbeeEngine::from_board_file(
         &pico_board_text(with_module),
