@@ -89,6 +89,8 @@ mod cli_strict_plain;
 mod cli_terminal_safe;
 #[path = "cli_watch.rs"]
 mod cli_watch;
+#[path = "cli_zip_project.rs"]
+mod cli_zip_project;
 mod common;
 #[path = "contention_lint_corpus.rs"]
 mod contention_lint_corpus;

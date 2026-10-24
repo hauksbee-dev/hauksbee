@@ -54,6 +54,7 @@ pub mod thermal;
 pub mod variant_sweep;
 pub mod vreg_enable;
 pub mod waiver;
+mod zip_project;
 
 /// Distinct process exit code for "the board is invalid for the analysis you
 /// asked for", a meaningless result, not a clean one.
