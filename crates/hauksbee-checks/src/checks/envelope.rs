@@ -429,7 +429,7 @@ fn feedback_output_range(
 
 /// Nets joined by a fitted net tie or near-zero-ohm link, each net mapped to
 /// every other net of its tied group.
-fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
+pub(crate) fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
     let is_tie = |c: &Component| {
         let text = format!("{} {}", c.lib_id, c.footprint).to_ascii_lowercase();
         let named_tie = text.contains("nettie")
@@ -896,6 +896,22 @@ impl<'a> RailResolver<'a> {
         (magnitude_free && self.assumed_from_name(net_id))
             .then(|| self.rails.unknown_drivers.get(&net_id).map(String::as_str))
             .flatten()
+    }
+
+    /// The range the board's own parts and the net's name declare for a net,
+    /// with whether that range is only the band the net's NAME implies (no
+    /// regulator, battery or solved run states it), or `None` when nothing
+    /// declares one. Reads no solve, so it holds for a board no run covers.
+    pub(crate) fn declared_levels(&self, net_id: i64) -> Option<(RailRange, bool)> {
+        match self.declared(net_id) {
+            RailKnowledge::Known(range) => Some((range, self.assumed_from_name(net_id))),
+            _ => None,
+        }
+    }
+
+    /// Whether a regulator or divider on the board sets this net's level.
+    pub(crate) fn defined_by_a_regulator(&self, net_id: i64) -> bool {
+        self.rails.regulators.contains_key(&net_id)
     }
 
     fn declared(&self, net_id: i64) -> RailKnowledge {
@@ -1711,7 +1727,7 @@ fn static_draw_a(model: &ModelEntry) -> f64 {
 
 /// Resistors joining `net_id` to a higher, declared, non-ground rail, lowest
 /// resistance first: each one's reference, ohms and the far net's id and range.
-fn series_feeds(
+pub(crate) fn series_feeds(
     resolver: &RailResolver<'_>,
     net_id: i64,
     rail: RailRange,
