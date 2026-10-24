@@ -290,7 +290,8 @@ fn parse_farads(v: &str) -> Option<f64> {
 // the stray Cs adds in parallel:
 //     CL_board = ((C1 + Ci) * (C2 + Ci)) / (C1 + C2 + 2 Ci) + Cstray
 // Cstray folds in trace parasitics and the IC pin capacitance, taken as a band
-// (3-5 pF) unless the crystal carries its own figure (an overridable property).
+// (3-5 pF; 0-1 pF where the driver's on-chip figure already includes the pin)
+// unless the crystal carries its own figure (an overridable property).
 //
 // Judgement. The CL the crystal wants comes from its card (`CrystalFacts`), or
 // failing that its value ("12MHz 18pF"), a recognised part number, or the
@@ -316,6 +317,14 @@ const CSTRAY_PF: f64 = 4.0;
 /// judgement uses the edge nearest the crystal's CL, so a mismatch is reported
 /// only when no stray inside the band would make the board right.
 const STRAY_BAND_PF: (f64, f64) = (3.0, 5.0);
+
+/// The stray band (pF) for a driver whose card says its on-chip figure already
+/// contains the chip's pin capacitance: only the board's trace is left. The
+/// Si5351 data sheet (Rev. 1.3, section 4.1.1, p.15) gives the whole load as one
+/// internal CL of 6 to 10 pF and allows "additional external load capacitance
+/// < 2 pF" in all, so the board contributes its caps' series value plus a short
+/// trace, never the 3 to 5 pF a discrete oscillator's pin and trace amount to.
+const TRACE_STRAY_BAND_PF: (f64, f64) = (0.0, 1.0);
 
 /// A crystal component property that replaces the assumed stray band with the
 /// designer's own figure (pF, +-0.5 pF), e.g. from a layout extraction.
@@ -351,6 +360,10 @@ pub enum IntegratedCaps {
     Range {
         lo_pf: f64,
         hi_pf: f64,
+        /// The datasheet's figure already contains the chip's pin capacitance
+        /// (see `XtalIntCap::includes_pin_capacitance`), so only a trace stray
+        /// is assumed on top of it.
+        pin_cap_included: bool,
         basis: String,
     },
     /// The IC has on-chip load capacitance but prints no range for it (a tunable
@@ -370,6 +383,7 @@ impl IntegratedCaps {
             (Some(lo), Some(hi)) => Self::Range {
                 lo_pf: lo * 1e12,
                 hi_pf: hi * 1e12,
+                pin_cap_included: cap.includes_pin_capacitance,
                 basis,
             },
             _ => Self::Unspecified { basis },
@@ -430,11 +444,7 @@ fn library_driver_caps(board: &ExtractedBoard, nets: &[i64; 2]) -> Option<Integr
             .map(|p| p.number.trim().to_string())
             .filter(|n| !n.is_empty())
             .collect();
-        q.mpn = c
-            .properties
-            .iter()
-            .find(|(k, _)| crate::bom::is_mpn_property_key(k))
-            .map(|(_, v)| v.clone());
+        q.mpn = crate::bom::component_mpn(c);
         let res = lib.resolve(&q);
         if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
             return None;
@@ -767,17 +777,15 @@ fn crystal_signal_nets(board: &ExtractedBoard, xtal: &Component) -> Vec<i64> {
 }
 
 /// The stray band for one crystal: its own property when present, else the
-/// assumed band. The bool says whether it was overridden.
-fn stray_band(xtal: &Component) -> ((f64, f64), bool) {
+/// `assumed` band. The bool says whether it was overridden.
+fn stray_band(xtal: &Component, assumed: (f64, f64)) -> ((f64, f64), bool) {
     let own = xtal
         .properties
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(STRAY_PROPERTY))
         .and_then(|(_, v)| v.trim().parse::<f64>().ok())
         .filter(|s| (0.0..=30.0).contains(s));
-    own.map_or((STRAY_BAND_PF, false), |s| {
-        (((s - 0.5).max(0.0), s + 0.5), true)
-    })
+    own.map_or((assumed, false), |s| (((s - 0.5).max(0.0), s + 0.5), true))
 }
 
 /// The crystal figures the pull estimate needs, and where each came from.
@@ -849,11 +857,25 @@ struct LoadSite {
 impl LoadSite {
     /// The site of `xtal` with `ext` external caps and the `driver`'s on-chip bank.
     fn new(xtal: &Component, ext: (f64, f64), driver: &DriverCaps) -> Self {
-        let (stray, stray_own) = stray_band(xtal);
+        let trace_only = driver.range.is_some() && driver.pin_cap_included;
+        let (stray, stray_own) = stray_band(
+            xtal,
+            if trace_only {
+                TRACE_STRAY_BAND_PF
+            } else {
+                STRAY_BAND_PF
+            },
+        );
         let int = driver.range.unwrap_or((0.0, 0.0));
         let stray_note = if stray_own {
             format!(
                 "{} pF stray (from the {STRAY_PROPERTY} property)",
+                band_text(stray)
+            )
+        } else if trace_only {
+            format!(
+                "{} pF trace stray assumed, the pin capacitance being inside the on-chip figure \
+                 (set the crystal's {STRAY_PROPERTY} property to your layout's figure)",
                 band_text(stray)
             )
         } else {
@@ -1073,6 +1095,8 @@ fn judge_without_spec(site: &LoadSite, watch: bool) -> (SiSeverity, String) {
 /// card's basis text.
 struct DriverCaps {
     range: Option<(f64, f64)>,
+    /// The card says the range already contains the chip's pin capacitance.
+    pin_cap_included: bool,
     tunable_unspecified: bool,
     integrates: bool,
     basis: String,
@@ -1086,6 +1110,13 @@ impl DriverCaps {
                 Some(IntegratedCaps::Range { lo_pf, hi_pf, .. }) => Some((*lo_pf, *hi_pf)),
                 _ => None,
             },
+            pin_cap_included: matches!(
+                card,
+                Some(IntegratedCaps::Range {
+                    pin_cap_included: true,
+                    ..
+                })
+            ),
             tunable_unspecified: matches!(card, Some(IntegratedCaps::Unspecified { .. })),
             integrates: card.is_some() || integrated_by_name,
             basis: match card {

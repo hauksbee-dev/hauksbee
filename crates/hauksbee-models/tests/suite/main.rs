@@ -65,6 +65,7 @@ mod power_ic_resolve;
 mod quad_opamp_pinout;
 mod schottky_1n58xx;
 mod schottky_rectifier_cards;
+mod si5351_cards;
 mod spi_cs_pin_roles;
 mod stm32f0_nrst;
 mod user_dir_layering;

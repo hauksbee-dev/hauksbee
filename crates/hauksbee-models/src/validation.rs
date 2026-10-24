@@ -2381,6 +2381,9 @@ fn check_xtal_int_caps(entry: &ModelEntry, p: &mut Problems) {
         p.require(o.min_f.is_some() == o.max_f.is_some(), || {
             format!("[[models.pin_capability.xtal_int_caps]] '{name}' gives both min_f and max_f or neither (integrated and tunable, no range printed)")
         });
+        p.require(!o.includes_pin_capacitance || o.min_f.is_some(), || {
+            format!("[[models.pin_capability.xtal_int_caps]] '{name}' says its figure includes the pin capacitance but prints no min_f/max_f range")
+        });
     }
 }
 

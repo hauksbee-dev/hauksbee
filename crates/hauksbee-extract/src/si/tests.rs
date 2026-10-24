@@ -510,9 +510,51 @@ fn a_clock_generators_programmable_load_is_read_from_its_card() {
     for says in ["on-chip per pin", "card 'si5351c_qfn20'", "p.60"] {
         assert!(r[0].message.contains(says), "{says:?} in {}", r[0].message);
     }
+    // The on-chip figure already contains the pin capacitance, so only a trace
+    // stray is assumed, not the 3 to 5 pF of a discrete oscillator.
+    assert!(
+        r[0].message.contains("trace stray assumed"),
+        "{}",
+        r[0].message
+    );
+    assert!(!r[0].message.contains("3.0-5.0"), "{}", r[0].message);
     // 12 pF is the datasheet's own example (10 pF setting plus 2 pF of external).
     let twelve = xtal_on_si5351("25MHz 12pF", "4p");
     assert!(fired(&crystal_findings(&twelve, &CrystalCards::new())).is_empty());
+    // 6 pF with no external caps at all is the supported setup (Table 8 note 1:
+    // 6, 8 or 10 pF crystals use the internal load capacitance): it is not
+    // judged as a discrete crystal and does not fire.
+    let mut bare = xtal_on_si5351("25MHz 6pF", "2p");
+    bare.components
+        .retain(|c| c.reference != "C1" && c.reference != "C2");
+    let r = crystal_findings(&bare, &CrystalCards::new());
+    assert!(fired(&r).is_empty(), "{r:?}");
+    assert_eq!(r.len(), 1, "judged, not skipped: {r:?}");
+    assert!(
+        r[0].message.contains("board CL ~ 6.0-11.0 pF")
+            && r[0].message.contains("0 ppm of pull at worst - ok"),
+        "{}",
+        r[0].message
+    );
+    // 8 pF with 4 pF caps: the smallest setting (6 pF) plus the two 4 pF caps in
+    // series (2 pF) presents 8 pF, so the load is reachable; the judgement is an
+    // "ok" note that names the pull at worst.
+    let eight = xtal_on_si5351("25MHz 8pF", "4p");
+    let r = crystal_findings(&eight, &CrystalCards::new());
+    assert!(fired(&r).is_empty(), "{r:?}");
+    assert!(
+        r[0].message.contains("ppm of pull at worst - ok"),
+        "{}",
+        r[0].message
+    );
+    // A 12 pF crystal with no external caps cannot be reached: the on-chip bank
+    // alone gives at most 10 pF (Table 8 note 1 adds 2 pF outside), so it fires.
+    let mut twelve_bare = xtal_on_si5351("25MHz 12pF", "2p");
+    twelve_bare
+        .components
+        .retain(|c| c.reference != "C1" && c.reference != "C2");
+    let r = crystal_findings(&twelve_bare, &CrystalCards::new());
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
     // A 6 pF crystal on 22 pF caps is far past anything the setting can undo.
     let heavy = xtal_on_si5351("25MHz 6pF", "22p");
     let r = crystal_findings(&heavy, &CrystalCards::new());
@@ -731,6 +773,7 @@ fn a_drivers_on_chip_load_caps_are_part_of_the_board_cl() {
     let lfxo = IntegratedCaps::Range {
         lo_pf: 4.0,
         hi_pf: 24.5,
+        pin_cap_included: false,
         basis: "card 'efm32pg22' LFXO: Table 4.12".into(),
     };
     let facts = |caps: IntegratedCaps| {

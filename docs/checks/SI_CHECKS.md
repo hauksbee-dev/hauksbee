@@ -58,7 +58,11 @@ pin capacitance.
   band would make the board right. The crystal's `hauksbee_stray_cap_pf`
   property (pF) replaces the band with the designer's own figure (+-0.5 pF), and
   the message says which one it used. The caps suggested in a message are sized
-  at the 4 pF midpoint.
+  at the 4 pF midpoint. Where the driver's card states an on-chip load that
+  already includes the IC pin capacitance (`includes_pin_capacitance`, the Si5351),
+  the band is `0-1 pF` of trace only: the pin's 1-2 pF is inside the on-chip
+  figure and counting it again would double-count it (Si5351 data sheet 4.1.1,
+  p.15, allows under 2 pF of additional external load).
 - **Pull in ppm, not pF**: a load error is judged by the frequency error it
   causes. A crystal's series-resonance offset is `C1 / (2 (C0 + CL))` (`C1` the
   motional, `C0` the shunt capacitance), so running it at load `CL_b` instead of
@@ -122,9 +126,14 @@ the card speaks either way.
 - A software-selected load that the board cannot show is judged against the
   range the chip can add. The Si5351 clock generator selects its crystal load of
   6, 8 or 10 pF in register 183 (AN619 p.60), 12 to 20 pF on each of XA and XB;
-  its card states that range, so a 10 pF crystal on two 2 pF caps is reachable
-  and a note, and only a crystal or cap pair the whole range cannot reach is a
-  finding.
+  its cards state that range, so a 10 pF crystal on two 2 pF caps is reachable
+  and a note, a 6 pF crystal with no external caps is silent (Table 8 note 1,
+  p.11), and only a crystal or cap pair the whole range cannot reach is a
+  finding. The data sheet's 4.1.1 (p.15) also lists a 0 pF option that AN619
+  Register 183 marks reserved; the cards do not take it. The cards are one per
+  package and variant (20-QFN, 16-QFN, 10-MSOP) because the pad numbers differ;
+  each binds only where the footprint names its package, and a bare `SI5351`
+  value on a footprint that does not say the package binds no card.
 - A tunable bank with no printed range cannot be computed: info, no judgement,
   with or without external caps.
 - RTCs and other parts without a card are recognised by name as before
