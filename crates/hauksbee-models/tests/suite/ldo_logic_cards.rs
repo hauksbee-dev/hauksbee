@@ -126,6 +126,53 @@ fn single_gate_logic_pad_roles_follow_the_five_lead_tables() {
     }
 }
 
+/// TI SCLS069G (SN74HCT125, pin figure p.3), SCLS264R (SN74AHCT125, Table 4-1 p.4)
+/// and SCLS378P (SN74AHCT1G125, Table 4-1 p.3): the buffer pad maps and the TTL
+/// thresholds (5.2 / 5.3: VIH 2 V, VIL 0.8 V), whichever package the value names.
+#[test]
+fn hct_and_ahct_bus_buffers_resolve_with_their_pad_maps() {
+    const QUAD: &str = "1=oe_n_1 2=a1 3=y1 4=oe_n_2 5=a2 6=y2 7=gnd 8=y3 9=a3 10=oe_n_3 11=y4 12=a4 13=oe_n_4 14=vcc";
+    const SINGLE: &str = "1=oe_n 2=a 3=gnd 4=y 5=vcc";
+    let rows = [
+        ("SN74HCT125DR", "74hct125", QUAD),
+        ("SN74HCT125N", "74hct125", QUAD),
+        ("74HCT125PW,118", "74hct125", QUAD),
+        ("SN74AHCT125PWR", "74ahct125", QUAD),
+        ("SN74AHCT125RGYR", "74ahct125", QUAD),
+        ("74AHCT125D", "74ahct125", QUAD),
+        ("SN74AHCT1G125DBVR", "74ahct1g125", SINGLE),
+        ("SN74AHCT1G125DCKR", "74ahct1g125", SINGLE),
+        ("74AHCT1G125GW,125", "74ahct1g125", SINGLE),
+    ];
+    for (value, id, map) in rows {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_pin_map(&m, id, &pins(map));
+        assert!((param(&m, "vih") - 2.0).abs() < 1e-9, "{value}: vih");
+        assert!((param(&m, "vil") - 0.8).abs() < 1e-9, "{value}: vil");
+        let supply = m.envelope.iter().find_map(|e| match e {
+            hauksbee_models::OperatingEnvelope::SupplyRange { min_v, max_v, .. } => {
+                Some((*min_v, *max_v))
+            }
+            _ => None,
+        });
+        assert_eq!(supply, Some((4.5, 5.5)), "{value}: supply window");
+    }
+}
+
+/// The HCT input has no rating above its supply; the AHCT input is rated to 5.5 V
+/// at any supply (TI 5.2 / 5.3 VI), which is the difference the 3.3 V case turns on.
+#[test]
+fn only_the_ahct_buffers_rate_their_inputs_above_the_supply() {
+    let ceiling = |value: &str, role: &str| {
+        let m = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
+        hauksbee_models::declared_pin_ceiling_v(&m.envelope, role)
+    };
+    assert_eq!(ceiling("SN74HCT125D", "a1"), None);
+    assert_eq!(ceiling("74HCT1G125GW", "a"), None);
+    assert_eq!(ceiling("SN74AHCT125D", "a1"), Some(7.0));
+    assert_eq!(ceiling("SN74AHCT1G125DBVR", "oe_n"), Some(7.0));
+}
+
 /// Six-pad XSON/SON and four-pad X2SON parts move VCC off pad 5, so they must not
 /// bind the five-lead map; neither may a neighbouring family or function.
 #[test]

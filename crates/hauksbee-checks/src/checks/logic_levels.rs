@@ -22,11 +22,21 @@
 //! Crossing the band on an edge is not a finding. Each is MEASURED (the
 //! datasheet guarantees no logic state), so it undermines an assertion as an
 //! operating-limit violation.
+//!
+//! The same inputs are held to their ceiling too: a CMOS input has a clamp to
+//! its own supply, and a net some other part DRIVES above that supply plus a
+//! clamp drop pushes current through the clamp into the lower rail (a 5 V
+//! output into an input of a part powered from 3.3 V). The level comes from
+//! the oracle like the band's (a solved state, or a rail the net is tied to),
+//! the driver from the cards (a push-pull output pad on the net), and a pin
+//! the card rates for more than its supply ([`declared_pin_ceiling_v`], a
+//! 5 V-tolerant input) is held to that rating instead. A net with no driver
+//! on it is the back-power check's: a pull to a rail is its finding.
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use hauksbee_ir::evidence::Assumption;
-use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
+use hauksbee_models::{declared_pin_ceiling_v, ComponentKind, ModelEntry, ModelLibrary};
 
 use super::analog_inputs::Flag;
 use super::envelope::RailRange;
@@ -37,6 +47,14 @@ const POWERED_V: f64 = 1.0;
 
 /// A level within this of a band edge counts as on the edge (solver tolerance).
 const EDGE_V: f64 = 1e-3;
+
+/// How far above its own supply an input may be taken before its clamp to that
+/// supply conducts: one diode drop, the margin the back-power check uses.
+const CLAMP_MARGIN_V: f64 = 0.6;
+
+/// What every overdrive finding says first, so a caller can tell it from an
+/// undefined-level finding on the same input.
+pub(super) const OVERDRIVE_LEAD: &str = "input driven above its supply";
 
 /// The roles of `m` that are logic inputs: an analog switch's control pins, or
 /// the declared inputs of a `[models.logic]` block that are real pads, and the
@@ -205,29 +223,106 @@ pub(crate) fn unjudged_inputs_on_net(
     out
 }
 
-/// One part's undefined inputs.
+/// The first push-pull output pad of another part on `net`: `(reference, role)`.
+///
+/// An output the card marks open-drain only pulls low, so it can raise nothing
+/// past a supply and is not a driver here.
+fn pushpull_driver(
+    board: &ExtractedBoard,
+    st: &super::BoardStatics<'_>,
+    skip: &str,
+    net: &str,
+) -> Option<(String, String)> {
+    st.parts(board)
+        .filter(|(c, _)| c.reference != skip)
+        .find_map(|(c, m)| {
+            c.pins.iter().find_map(|p| {
+                let on_net = p
+                    .net
+                    .and_then(|id| board.net(id))
+                    .is_some_and(|n| n.name == net);
+                let role = m.pins.get(&p.number)?;
+                (on_net
+                    && m.logic.outputs.iter().any(|o| o == role)
+                    && !m.is_open_drain_pad(&p.number))
+                .then(|| (c.reference.clone(), role.clone()))
+            })
+        })
+}
+
+/// An input held past the ceiling its supply (or its card) gives it, by a
+/// push-pull output of another part: the finding for it.
+fn overdriven(
+    st: &super::BoardStatics<'_>,
+    board: &ExtractedBoard,
+    c: &Component,
+    m: &ModelEntry,
+    input: &Input<'_>,
+    level: RailRange,
+) -> Option<LintFinding> {
+    let Input {
+        role,
+        net,
+        rail,
+        vcc,
+        ..
+    } = input;
+    let declared = declared_pin_ceiling_v(&m.envelope, role);
+    let ceiling = declared.unwrap_or(vcc + CLAMP_MARGIN_V);
+    (level.max_v > ceiling + EDGE_V).then_some(())?;
+    let (driver, out_role) = pushpull_driver(board, st, &c.reference, net)?;
+    let r = &c.reference;
+    let why = declared.map_or_else(
+        || format!(
+            "the input's clamp to its {} supply on '{rail}' conducts past {} (a diode drop above it), \
+             so the driver forces current through the clamp into that rail, and a part powered from a \
+             lower rail than the one that drives it is outside the VCC + 0.5 V input maximum CMOS logic datasheets print",
+            format_volts(*vcc), format_volts(ceiling)),
+        |d| format!("the card rates this pin for only {}, an absolute maximum whatever the supply does", format_volts(d)),
+    );
+    let message = format!(
+        "{OVERDRIVE_LEAD}: {r} {role} (net '{net}') is taken to {} by {driver} {out_role} while {r}'s supply \
+         '{rail}' is {}; {why}. Level-shift the signal (a translator or a part rated for that input level) \
+         or power {r} from the driver's rail.",
+        format_volts(level.max_v), format_volts(*vcc));
+    Some(LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::High,
+        message,
+        refs: vec![r.clone(), driver],
+        nets: vec![net.clone(), rail.clone()],
+    })
+}
+
+/// One part's undefined and overdriven inputs.
 fn part_flags(
     board: &ExtractedBoard,
+    st: &super::BoardStatics<'_>,
     c: &Component,
     m: &ModelEntry,
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> Vec<Flag> {
     let rail_v = |rail: &str| span(rail).map(|r| r.max_v);
     let mut out = Vec::new();
-    for Input {
-        role,
-        net,
-        rail,
-        vcc,
-        band: (vil, vih),
-    } in powered_inputs(board, c, m, &rail_v)
-    {
-        let Some(level) = span(&net) else {
+    for input in powered_inputs(board, c, m, &rail_v) {
+        let Input {
+            role,
+            net,
+            rail,
+            vcc,
+            band: (vil, vih),
+        } = &input;
+        let (role, vcc, vil, vih) = (*role, *vcc, *vil, *vih);
+        let Some(level) = span(net) else {
             continue;
         };
+        if let Some(finding) = overdriven(st, board, c, m, &input, level) {
+            out.push((finding, true));
+        }
         let Some(how) = undefined(level, (vil, vih)) else {
             continue;
         };
+        let (net, rail) = (net.clone(), rail.clone());
         let r = &c.reference;
         // A pad the part also drives: a pull or load can fight that drive.
         let own = (m.logic.outputs.iter().any(|o| o == role))
@@ -254,7 +349,7 @@ fn flags(
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> Vec<Flag> {
     let each = st.parts(board);
-    each.flat_map(|(c, m)| part_flags(board, c, m, span))
+    each.flat_map(|(c, m)| part_flags(board, st, c, m, span))
         .collect()
 }
 
@@ -368,6 +463,84 @@ mod tests {
         // The datasheet's 50 kOhm floor leaves 0.273 V: a valid low.
         assert!(txb_b_port(3.3 * 4.5 / 54.5).is_empty());
         assert!(txb_b_port(3.3).is_empty());
+    }
+
+    /// A single bus buffer `tx` on +5V whose input is tied high, driving net
+    /// `SIG` into a single bus buffer `rx` powered from `rx_rail` (pads: 1 OE,
+    /// 2 A, 3 GND, 4 Y, 5 VCC on all three single-gate cards used here).
+    fn driven_pair(tx: &str, rx: &str, rx_rail: &str) -> ExtractedBoard {
+        let nets = &[(1, "GND"), (2, "+5V"), (3, rx_rail), (4, "SIG"), (5, "OUT")];
+        let u1 = part(
+            "U1",
+            tx,
+            &[("1", 1), ("2", 2), ("3", 1), ("4", 4), ("5", 2)],
+        );
+        let u2 = part(
+            "U2",
+            rx,
+            &[("1", 1), ("2", 4), ("3", 1), ("4", 5), ("5", 3)],
+        );
+        board(nets, vec![u1, u2])
+    }
+
+    fn overdrive(b: &ExtractedBoard) -> Vec<LintFinding> {
+        let lint = crate::checks::engine_lint(b, &ModelLibrary::builtin());
+        let over = |f: &&LintFinding| f.message.starts_with(OVERDRIVE_LEAD);
+        lint.findings.iter().filter(over).cloned().collect()
+    }
+
+    #[test]
+    fn a_5v_output_into_an_hct_buffer_on_3v3_is_driven_past_its_supply() {
+        let b = driven_pair("74HCT1G125GW", "74HCT1G125GW", "+3V3");
+        let found = overdrive(&b);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["U2", "U1"]);
+        for says in ["U2 a", "'SIG'", "5 V", "U1 y", "3.3 V", "'+3V3'"] {
+            assert!(f.message.contains(says), "{says:?} in {}", f.message);
+        }
+        // The supply window of the HCT part is its own finding.
+        let lint = crate::checks::engine_lint(&b, &ModelLibrary::builtin());
+        assert!(lint
+            .findings
+            .iter()
+            .any(|f| f.refs == ["U2"] && f.message.contains("role vcc")));
+    }
+
+    #[test]
+    fn the_same_driver_into_a_part_on_5v_or_a_tolerant_input_is_silent() {
+        // Same rail: nothing is above the receiver's supply.
+        assert!(overdrive(&driven_pair("74HCT1G125GW", "74HCT1G125GW", "+5V")).is_empty());
+        // A 74LVC1G125 on 3.3 V rates its input for 5.5 V whatever its supply.
+        assert!(overdrive(&driven_pair("74HCT1G125GW", "SN74LVC1G125DBVR", "+3V3")).is_empty());
+        // A 3.3 V driver into the 5 V part is never above its supply.
+        let down = driven_pair("SN74LVC1G125DBVR", "74HCT1G125GW", "+5V");
+        assert!(overdrive(&down).is_empty());
+    }
+
+    // The AHCT card rates VI 0 V to 5.5 V at any supply (TI SCLS378P 5.3), so the
+    // 5 V drive is inside the input rating; the part on 3.3 V is still outside its
+    // own 4.5 V to 5.5 V supply window, and that is the finding that remains.
+    #[test]
+    fn an_ahct_buffer_on_3v3_is_out_of_supply_but_not_overdriven_by_5v() {
+        let b = driven_pair("74HCT1G125GW", "SN74AHCT1G125DBVR", "+3V3");
+        assert!(overdrive(&b).is_empty());
+        let lint = crate::checks::engine_lint(&b, &ModelLibrary::builtin());
+        assert!(lint
+            .findings
+            .iter()
+            .any(|f| f.refs == ["U2"] && f.message.contains("role vcc")));
+    }
+
+    #[test]
+    fn a_net_nothing_drives_is_the_back_power_checks_not_this_ones() {
+        // The input tied straight to +5V: no driver, so no overdrive finding
+        // (the back-power check reports the tie).
+        let nets = &[(1, "GND"), (2, "+5V"), (3, "+3V3"), (5, "OUT")];
+        let pads = &[("1", 1), ("2", 2), ("3", 1), ("4", 5), ("5", 3)];
+        let u2 = part("U2", "74HCT1G125GW", pads);
+        assert!(overdrive(&board(nets, vec![u2])).is_empty());
     }
 
     #[test]

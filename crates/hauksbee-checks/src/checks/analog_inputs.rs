@@ -24,6 +24,14 @@
 //! full scale is the card's `vref_v`, the level on a wired reference pad, or the
 //! MCU's own supply (assumed: the card states no reference level).
 //!
+//! A last rule reads the other way: a resistor divider whose top the board
+//! ties to a source of stated level (a rail, a regulator or battery output, a
+//! solved net, or a connector that declares its voltage) puts the ADC pad at
+//! `top x R_bottom / (R_top + R_bottom)`, and a tap that reaches past the
+//! converter's full scale (or past what the pin takes) clips every reading
+//! (`adc_range_flag`). The top's level is never guessed: a source nothing states
+//! leaves the divider unjudged.
+//!
 //! The first two are deliberately under-reporting. The LM339/LM393 datasheets guarantee
 //! the output state while at least ONE input stays inside the range, so only a
 //! whole channel above the ceiling is a violation; and the parallel resistance
@@ -42,6 +50,7 @@ use hauksbee_extract::{
 };
 use hauksbee_ir::evidence::Assumption;
 use hauksbee_ir::units::{format_amps, format_engineering, format_volts};
+use hauksbee_models::declared_pin_ceiling_v;
 use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::OperatingEnvelope::InputCommonMode;
 use hauksbee_models::{ModelEntry, ModelLibrary, OperatingEnvelope};
@@ -182,6 +191,10 @@ fn flags(
     ambient_c: Option<f64>,
 ) -> Vec<Flag> {
     let (cx, mut out) = (Ctx { board, v }, Vec::new());
+    // What the board's regulators, batteries and net names state of a net.
+    let no_solve = std::collections::BTreeMap::new();
+    let resolver = super::envelope::RailResolver::new(board, st, &no_solve);
+    let known = |net_id: i64| resolver.known_range(net_id);
     let models: HashMap<&str, &ModelEntry> = st
         .parts(board)
         .map(|(c, m)| (c.reference.as_str(), m))
@@ -190,7 +203,7 @@ fn flags(
         let channel = |e| channel_flag(&cx, c, m, e);
         out.extend(super::envelope::binding(&m.envelope, ambient_c).filter_map(channel));
         out.extend(adc_flags(&cx, c, m));
-        out.extend(front_end_flags(&cx, &models, (c, m)));
+        out.extend(front_end_flags(&cx, &known, &models, (c, m)));
     }
     out
 }
@@ -580,6 +593,16 @@ const RAIL_TOLERANCE: f64 = 0.10;
 /// A tap this close to either end of the range (as a fraction of it) has no
 /// headroom for the converter's own error.
 const END_MARGIN: f64 = 0.05;
+/// Tolerance taken on each resistor of a divider when the board states none:
+/// the common 1 % grade (a divider that feeds a converter is rarely worse).
+const ADC_DIVIDER_TOLERANCE: f64 = 0.01;
+/// How far above its own supply an ADC pad may be taken before its clamp to
+/// that supply conducts: one diode drop, the margin the back-power check uses.
+const ADC_CLAMP_MARGIN_V: f64 = 0.6;
+
+/// What every ADC-range finding says first, so the engine can tell it from
+/// the other analog-input findings when the back-power check says the same.
+pub(super) const ADC_RANGE_LEAD: &str = "ADC input beyond range:";
 
 /// The ADC full scale of `c`, and where the figure comes from: the card's own
 /// `vref_v`, the level on a wired reference pad, or (the card states none) its
@@ -1123,9 +1146,182 @@ fn negative_rail_flag(
     Some((finding, false))
 }
 
+/// The level a connector states for the net its pin `pin` is on: a rail
+/// spelled in the pin's function name (`+24V`, `VIN_12V`), or a voltage in its
+/// value or description (`DC jack 24V`).
+fn declared_port_voltage(c: &Component, pin: &hauksbee_extract::Pin) -> Option<f64> {
+    let described = |(k, v): &(String, String)| {
+        matches!(
+            k.to_ascii_lowercase().as_str(),
+            "voltage" | "description" | "comment"
+        )
+        .then(|| voltage_token(v))
+        .flatten()
+    };
+    hauksbee_bind::binder::power_rail_voltage(&pin.function)
+        .or_else(|| voltage_token(&pin.function))
+        .or_else(|| voltage_token(&c.value))
+        .or_else(|| c.properties.iter().find_map(described))
+        .filter(|v| *v > 0.0)
+}
+
+/// The highest level the source on `net_id` can put there and its nominal,
+/// with where each comes from: the level a solve gave, what the board's
+/// regulator, battery or net name states (with the tolerance that carries), or
+/// what a connector on the net declares. `None` when nothing states one.
+fn source_level(
+    cx: &Ctx,
+    rails: &dyn Fn(i64) -> Option<super::envelope::RailRange>,
+    net_id: i64,
+) -> Option<(f64, f64, String)> {
+    let net = cx.board.net(net_id)?;
+    let solved = (cx.v)(&net.name).filter(|v| *v > 0.0);
+    let declared = rails(net_id).filter(|r| r.max_v > 0.0);
+    if solved.is_some() || declared.is_some() {
+        let max = [solved, declared.map(|r| r.max_v)]
+            .into_iter()
+            .flatten()
+            .fold(0.0, f64::max);
+        let nominal = solved.or_else(|| declared.map(|r| f64::midpoint(r.min_v, r.max_v)))?;
+        return Some((nominal, max, format!("the level on '{}'", net.name)));
+    }
+    cx.board
+        .net_members(net_id)
+        .iter()
+        .filter(|(c, _)| hauksbee_extract::is_connector_like(c))
+        .find_map(|(c, p)| {
+            let v = declared_port_voltage(c, p)?;
+            Some((
+                v,
+                v,
+                format!(
+                    "the {v} V that connector {} declares for '{}'",
+                    c.reference, net.name
+                ),
+            ))
+        })
+}
+
+/// A resistor divider on an ADC pad, its legs and where its top comes from.
+struct Divider {
+    tops: Vec<String>,
+    bots: Vec<String>,
+    /// The tap's share of the top at nominal resistors, and at the corner that
+    /// raises it most (tops low, bottoms high by their tolerance).
+    ratio: (f64, f64),
+    top_net: i64,
+}
+
+/// The divider that makes `net_id` a tap: resistors to one net of source level
+/// and to ground, nothing else active, and (once) a series resistor in front of
+/// the pad followed through. `None` for anything else, so a clamp, a pot or an
+/// unknown part on the net is never second-guessed. `skip` is the part the
+/// walk came through (the series resistor), not a leg.
+fn divider_on(cx: &Ctx, mcu: &Component, skip: Option<&str>, net_id: i64) -> Option<Divider> {
+    let (mut tops, mut bots) = (Vec::new(), Vec::new());
+    for (member, pin) in cx.board.net_members(net_id) {
+        if member.reference == mcu.reference
+            || Some(member.reference.as_str()) == skip
+            || hauksbee_extract::is_capacitor(member)
+            || hauksbee_extract::is_test_point_or_hole(member)
+        {
+            continue;
+        }
+        let ohms = super::bus_loading::resistor_ohms(member)?;
+        let far = member.pins.iter().find(|q| q.number != pin.number)?.net?;
+        let leg = (member.reference.clone(), ohms, far);
+        if super::is_ground_name(&cx.board.net(far)?.name) {
+            bots.push(leg);
+        } else {
+            tops.push(leg);
+        }
+    }
+    if bots.is_empty() && tops.len() == 1 && skip.is_none() {
+        // One series resistor in front of the pad: its far side is the tap.
+        let (series, _, far) = &tops[0];
+        return divider_on(cx, mcu, Some(series), *far);
+    }
+    let top_net = tops.first()?.2;
+    (!bots.is_empty() && tops.iter().all(|t| t.2 == top_net)).then_some(())?;
+    let par = |legs: &[(String, f64, i64)], tol: f64| {
+        1.0 / legs.iter().map(|l| 1.0 / (l.1 * tol)).sum::<f64>()
+    };
+    let (t0, b0) = (par(&tops, 1.0), par(&bots, 1.0));
+    let (t1, b1) = (
+        par(&tops, 1.0 - ADC_DIVIDER_TOLERANCE),
+        par(&bots, 1.0 + ADC_DIVIDER_TOLERANCE),
+    );
+    Some(Divider {
+        tops: tops.into_iter().map(|t| t.0).collect(),
+        bots: bots.into_iter().map(|b| b.0).collect(),
+        ratio: (b0 / (t0 + b0), b1 / (t1 + b1)),
+        top_net,
+    })
+}
+
+/// A divider whose source puts the ADC pad past the converter's full scale, or
+/// past what the pin takes, at the source's stated level.
+fn adc_range_flag(
+    cx: &Ctx,
+    rails: &dyn Fn(i64) -> Option<super::envelope::RailRange>,
+    (c, m): (&Component, &ModelEntry),
+    (pin, net): (&hauksbee_extract::Pin, &Net),
+    (fs, fs_from): (f64, &str),
+) -> Option<Flag> {
+    let divider = divider_on(cx, c, None, net.id)?;
+    let (rail_v, rail_max, from) = source_level(cx, rails, divider.top_net)?;
+    let (pad_v, pad_max) = (rail_v * divider.ratio.0, rail_max * divider.ratio.1);
+    let role = m.pins.get(&pin.number).map_or("", String::as_str);
+    let ceiling = declared_pin_ceiling_v(&m.envelope, role)
+        .or_else(|| supply_of(cx, c, m).map(|v| v + ADC_CLAMP_MARGIN_V));
+    let past_pin = ceiling.is_some_and(|limit| pad_v > limit);
+    (pad_max > fs || past_pin).then_some(())?;
+    let rail = &cx.board.net(divider.top_net)?.name;
+    let how = if pad_v > fs {
+        format!(
+            "{} at the nominal level and up to {} at the source's top corner",
+            format_volts(pad_v),
+            format_volts(pad_max)
+        )
+    } else {
+        format!("{} at the nominal level but up to {} at the top of the source's tolerance and the resistors'", format_volts(pad_v), format_volts(pad_max))
+    };
+    let pin_note = ceiling.filter(|_| past_pin).map_or_else(String::new, |limit| {
+        format!(" That is also past the {} the pin takes, so the pad's clamp conducts and the pin is overstressed.", format_volts(limit))
+    });
+    let message = format!(
+        "{ADC_RANGE_LEAD} {} pad {} ({}, net '{}') is the tap of a resistor divider ({} from '{rail}', {} to ground) and reads {how}, above the ADC full scale of {} ({fs_from}); the source is {from}. Every reading above full scale clips.{pin_note} {REMEDY_MARKER}Raise the bottom resistor or lower the top so the tap stays under full scale at the source's top corner (the ratio must be at most {:.3} for a {} source).",
+        c.reference,
+        pin.number,
+        role.to_ascii_uppercase(),
+        net.name,
+        divider.tops.join("||"),
+        divider.bots.join("||"),
+        format_volts(fs),
+        fs / rail_max,
+        format_volts(rail_max),
+    );
+    let severity = if past_pin {
+        Severity::High
+    } else {
+        Severity::Medium
+    };
+    let mut refs = vec![c.reference.clone()];
+    refs.extend(divider.tops.iter().chain(&divider.bots).cloned());
+    let finding = LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity,
+        message,
+        refs,
+        nets: vec![net.name.clone(), rail.clone()],
+    };
+    Some((finding, false))
+}
+
 /// The front-end flags of every wired ADC pad of an MCU `c` with an ADC table.
 fn front_end_flags(
     cx: &Ctx,
+    rails: &dyn Fn(i64) -> Option<super::envelope::RailRange>,
     models: &HashMap<&str, &ModelEntry>,
     (c, m): (&Component, &ModelEntry),
 ) -> Vec<Flag> {
@@ -1140,6 +1336,7 @@ fn front_end_flags(
         let basis = (fs, fs_from.as_str());
         out.extend(zener_clamp_flag(cx, models, (c, m), pad, basis));
         out.extend(negative_rail_flag(cx, (c, m), pad, basis));
+        out.extend(adc_range_flag(cx, rails, (c, m), pad, basis));
     }
     out
 }
@@ -1814,5 +2011,93 @@ mod tests {
         let assembled = hauksbee_extract::mate::assemble(&mated_boards("23"), &[]);
         assert_eq!(assembled.mates.len(), 1, "{:?}", assembled.notes);
         assert!(no_adc(&assembled.board).is_empty());
+    }
+    /// An `ATmega328P` on 5 V whose ADC0 pad is the tap of a divider from net
+    /// `top` (`r_top` above, `r_bot` below), with an optional extra part on the
+    /// tap and an optional connector `(reference, value)` on `top`.
+    fn divider_board(
+        top: &str,
+        (r_top, r_bot): (&str, &str),
+        extra: Option<Component>,
+        connector: Option<(&str, &str)>,
+    ) -> ExtractedBoard {
+        let nets = &[(1, "GND"), (2, top), (3, "ADC0"), (4, "+5V")];
+        let mut parts = vec![part(
+            "U1",
+            "ATmega328P",
+            &[("7", 4), ("8", 1), ("20", 4), ("22", 1), ("23", 3)],
+        )];
+        parts.push(part("R1", r_top, &[("1", 2), ("2", 3)]));
+        parts.push(part("R2", r_bot, &[("1", 3), ("2", 1)]));
+        parts.extend(extra);
+        parts.extend(connector.map(|(r, v)| part(r, v, &[("1", 2), ("2", 1)])));
+        board(nets, parts)
+    }
+
+    fn adc_range(b: &ExtractedBoard) -> Vec<LintFinding> {
+        let lint = super::super::engine_lint(b, &ModelLibrary::builtin());
+        let over = |f: &&LintFinding| f.message.starts_with(ADC_RANGE_LEAD);
+        lint.findings.iter().filter(over).cloned().collect()
+    }
+
+    #[test]
+    fn a_divider_from_a_12v_rail_that_tops_the_adc_full_scale_is_flagged() {
+        let b = divider_board("+12V", ("10k", "10k"), None, None);
+        let found = adc_range(&b);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        // It replaces the back-power check's reading of the tap as a pull-up.
+        let lint = super::super::engine_lint(&b, &ModelLibrary::builtin());
+        assert!(
+            lint.findings
+                .iter()
+                .all(|f| f.check != LintCheck::BackPower),
+            "{:#?}",
+            lint.findings
+        );
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High);
+        for says in ["U1 pad 23", "ADC0", "R1", "R2", "'+12V'", "full scale of 5"] {
+            assert!(f.message.contains(says), "{says:?} in {}", f.message);
+        }
+        assert_eq!(f.refs, ["U1", "R1", "R2"]);
+    }
+
+    #[test]
+    fn a_divider_from_a_port_that_declares_its_voltage_is_judged_at_that_voltage() {
+        let b = divider_board("VIN", ("10k", "10k"), None, Some(("J1", "DC jack 24V")));
+        let found = adc_range(&b);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("J1 declares"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn a_series_resistor_in_front_of_the_pad_does_not_hide_the_divider() {
+        let nets = &[(1, "GND"), (2, "+12V"), (3, "TAP"), (4, "+5V"), (5, "ADC0")];
+        let pads = &[("7", 4), ("8", 1), ("20", 4), ("22", 1), ("23", 5)];
+        let parts = vec![
+            part("U1", "ATmega328P", pads),
+            part("R1", "10k", &[("1", 2), ("2", 3)]),
+            part("R2", "10k", &[("1", 3), ("2", 1)]),
+            part("R3", "1k", &[("1", 3), ("2", 5)]),
+        ];
+        assert_eq!(adc_range(&board(nets, parts)).len(), 1);
+    }
+
+    #[test]
+    fn a_divider_that_stays_inside_full_scale_or_has_no_known_source_is_silent() {
+        // 12 V through 47k/10k is 2.1 V: inside a 5 V converter.
+        assert!(adc_range(&divider_board("+12V", ("47k", "10k"), None, None)).is_empty());
+        // The same hot ratio from a net nothing states a level for: abstain.
+        assert!(adc_range(&divider_board("VSENSE", ("10k", "10k"), None, None)).is_empty());
+        // A connector with no voltage on the same unnamed net: abstain.
+        let b = divider_board("VSENSE", ("10k", "10k"), None, Some(("J1", "Header 1x2")));
+        assert!(adc_range(&b).is_empty());
+        // An active part on the tap (a clamp diode): not a plain divider.
+        let clamp = part("D1", "BAT54", &[("1", 3), ("2", 4)]);
+        assert!(adc_range(&divider_board("+12V", ("10k", "10k"), Some(clamp), None)).is_empty());
     }
 }

@@ -5978,6 +5978,286 @@ y = { enable = "oe_n", active = "low" }
 implements = ["buffer", "tristate_enable", "logic_levels"]
 missing = ["enable_disable_timing", "output_drive_curve", "off_state_output_current", "additional_supply_current"]
 
+# ── 74HCT125 / 74AHCT125 / 74AHCT1G125: bus buffers, 3-state, TTL inputs ─────
+# Sources (Texas Instruments, read from the PDFs, page numbers are the printed
+# ones):
+#   SN74HCT125 SCLS069G (Oct 2022), https://www.ti.com/lit/ds/symlink/sn74hct125.pdf:
+#     pins p.3; 5.1 abs max and 5.2 recommended p.4; 5.4 electrical and 5.5
+#     switching p.5; 5.6 Cpd p.6; Table 7-1 function p.8.
+#   SN74AHCT125 SCLS264R (Feb 2024), https://www.ti.com/lit/ds/symlink/sn74ahct125.pdf:
+#     Figure 4-1 pins p.3, Table 4-1 p.4; 5.1 abs max and 5.2 recommended p.5;
+#     5.4 electrical and 5.5 switching p.6; 5.7 Cpd p.7; function table p.9.
+#   SN74AHCT1G125 SCLS378P (Mar 2024), https://www.ti.com/lit/ds/symlink/sn74ahct1g125.pdf:
+#     Table 4-1 pins p.3; 5.1 abs max and 5.3 recommended p.4; 5.5 electrical
+#     p.5; 5.6 switching and 5.7 Cpd p.6; Table 7-1 function p.8.
+# The HCT part's inputs are rated 0 V to VCC (5.2) with no VI abs-max row, so it
+# carries no input_tolerance row: a level above its supply is outside its
+# ratings. The AHCT parts rate VI 0 V to 5.5 V (abs max 7 V) whatever VCC is, so
+# a 5 V signal into one is inside its input rating; only a 3.3 V supply is not
+# (VCC 4.5 V to 5.5 V on all three).
+[[models]]
+id = "74hct125"
+kind = "digital"
+description = "74HCT125 quad bus buffer gate, 3-state, TTL input levels, 14-pin SOIC/PDIP"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hct125.pdf"
+title = "TI SN54HCT125, SN74HCT125 quadruple bus buffer gates with 3-state outputs (SCLS069G), October 2022"
+locator = "4 Pin Configuration and Functions p.3; 5.1 Absolute Maximum Ratings and 5.2 Recommended Operating Conditions p.4; 5.4 Electrical Characteristics and 5.5 Switching Characteristics CL = 50 pF p.5; 5.6 Operating Characteristics p.6; Table 7-1 Function Table p.8"
+sha256 = "7f06363847317c8aa5892435313656e6f592ab0f6d0d7bfd4234e46996c5fe42"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "enable_disable_timing"
+reason = "ten and tdis (OE to Y), transition time, IOZ off-state current and the TTL-level additional supply current are not modelled; only the DC function table, the TTL input thresholds, the output levels and the A-to-Y delay are"
+
+[models.match]
+# D and N share the 14-pin map of the pin figure (p.3); the SN54 J/W/FK
+# packages are not matched. Other vendors' 74HCT125 parts share the standard
+# 14-pin map; their electrical rows are ASSUMED to be TI's.
+value_re = "(?i)^(SN)?74HCT125(D|N|DB|PW|NS)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # SN74HCT125, IOH = -20 uA, VCC 4.5 V (5.4)
+vol = 0.1          # IOL = 20 uA, VCC 5.5 V (5.4; the VOL rows are given at 5.5 V)
+vih = 2.0          # VCC 4.5 V to 5.5 V (5.2)
+vil = 0.8
+# VCC = 4.5 V, -40 to 85 C: VOH 3.84 V min at IOH = -6 mA against the 4.4 V
+# light-load level, 0.56 V / 6 mA = 93 Ohm (VOL side, VCC 5.5 V: 0.33 V max at 6 mA, 55 Ohm).
+ro = 93.0
+# Strong corner, 25 C typ: VOH 4.3 V at IOH = -6 mA against 4.499 V light-load,
+# 0.199 V / 6 mA = 33 Ohm (VOL side, VCC 5.5 V: 0.17 V typ at 6 mA, 28 Ohm) (5.4).
+ro_strong = 33.0
+tpd_s = 11.0e-9    # A to Y typ, VCC 4.5 V, CL = 50 pF, 25 C (5.5)
+supply_static_ua = 80.0  # ICC max, SN74HCT125, VCC 5.5 V (5.4)
+supply_cpd_pf = 35.0     # no load, 25 C (5.6)
+supply_pin = "14"
+gnd_pin = "7"
+
+[models.pins]
+# Pin figure p.3.
+"1" = "oe_n_1"
+"2" = "a1"
+"3" = "y1"
+"4" = "oe_n_2"
+"5" = "a2"
+"6" = "y2"
+"7" = "gnd"
+"8" = "y3"
+"9" = "a3"
+"10" = "oe_n_3"
+"11" = "y4"
+"12" = "a4"
+"13" = "oe_n_4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.035     # IO continuous output current, 5.1
+max_voltage_v = 7.0           # VCC, 5.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74HCT125 SCLS069G, 5.2 VCC 4.5 V to 5.5 V; 5.1 VCC -0.5 V to 7 V"
+
+[models.logic]
+# Table 7-1: OE low passes A to Y; OE high puts that Y in high impedance.
+inputs = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+outputs = ["y1", "y2", "y3", "y4"]
+[models.logic.comb]
+y1 = "a1"
+y2 = "a2"
+y3 = "a3"
+y4 = "a4"
+[models.logic.tristate]
+y1 = { enable = "oe_n_1", active = "low" }
+y2 = { enable = "oe_n_2", active = "low" }
+y3 = { enable = "oe_n_3", active = "low" }
+y4 = { enable = "oe_n_4", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_transition_time", "output_drive_curve", "off_state_output_current", "additional_supply_current"]
+
+[[models]]
+id = "74ahct125"
+kind = "digital"
+description = "74AHCT125 quad bus buffer gate, 3-state, TTL input levels, inputs rated to 5.5 V, 14-pin SOIC/SSOP/TSSOP/PDIP/VQFN"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74ahct125.pdf"
+title = "TI SN54AHCT125, SN74AHCT125 quadruple bus buffer gates with 3-state outputs (SCLS264R), February 2024"
+locator = "Figure 4-1 Pin Configuration p.3 and Table 4-1 Pin Functions p.4; 5.1 Absolute Maximum Ratings and 5.2 Recommended Operating Conditions p.5; 5.4 Electrical Characteristics and 5.5 Switching Characteristics CL = 50 pF p.6; 5.7 Operating Characteristics p.7; 7.4 Function Table p.9"
+sha256 = "66da72e586dbca7a1548164adf28e238484c5c1ad250fcb28ec972e4732c6fc2"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "enable_disable_timing"
+reason = "tPZH/tPZL/tPHZ/tPLZ (OE to Y), IOZ off-state current, the TTL-level additional supply current and the noise characteristics are not modelled; only the DC function table, the TTL input thresholds, the output levels and the A-to-Y delay are"
+
+[models.match]
+# D, DB, DGV, N, NS and PW share the 14-pin map of Figure 4-1 (p.3); the RGY
+# and BQA no-lead packages have the same numbering (Figure 4-2). The SN54 J/W/FK
+# packages (FK numbers differently) are not matched. Other vendors' 74AHCT125
+# parts share the standard 14-pin map; their electrical rows are ASSUMED to be TI's.
+value_re = "(?i)^(SN)?74AHCT125(D|DB|DGV|N|NS|PW|RGY|BQA)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # SN74AHCT125, IOH = -50 uA, VCC 4.5 V (5.4)
+vol = 0.1          # IOL = 50 uA, VCC 4.5 V (5.4)
+vih = 2.0          # 5.2
+vil = 0.8
+# VCC = 4.5 V, -40 to 85 C: VOH 3.8 V min at IOH = -8 mA against the 4.4 V
+# light-load level, 0.6 V / 8 mA = 75 Ohm (VOL side: 0.44 V max at 8 mA, 55 Ohm).
+ro = 75.0
+tpd_s = 5.3e-9     # A to Y typ, VCC 5 V +/- 0.5 V, CL = 50 pF, 25 C (5.5)
+supply_static_ua = 20.0  # ICC max, SN74AHCT125, VCC 5.5 V (5.4)
+supply_cpd_pf = 14.0     # no load, f = 1 MHz, 25 C (5.7)
+supply_pin = "14"
+gnd_pin = "7"
+
+[models.pins]
+# Table 4-1, D/DB/DGV/N/NS/PW/RGY/BQA column.
+"1" = "oe_n_1"
+"2" = "a1"
+"3" = "y1"
+"4" = "oe_n_2"
+"5" = "a2"
+"6" = "y2"
+"7" = "gnd"
+"8" = "y3"
+"9" = "a3"
+"10" = "oe_n_3"
+"11" = "y4"
+"12" = "a4"
+"13" = "oe_n_4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025     # IO continuous output current, 5.1
+max_voltage_v = 7.0           # VCC, 5.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHCT125 SCLS264R, 5.2 VCC 4.5 V to 5.5 V; 5.1 VCC -0.5 V to 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHCT125 SCLS264R, 5.2 VI input voltage 0 V to 5.5 V, whatever VCC is"
+abs_max_basis = "TI SN74AHCT125 SCLS264R, 5.1 VI input voltage range -0.5 V to 7 V"
+
+[models.logic]
+# 7.4 Function Table: OE low passes A to Y; OE high puts that Y in high impedance.
+inputs = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+outputs = ["y1", "y2", "y3", "y4"]
+[models.logic.comb]
+y1 = "a1"
+y2 = "a2"
+y3 = "a3"
+y4 = "a4"
+[models.logic.tristate]
+y1 = { enable = "oe_n_1", active = "low" }
+y2 = { enable = "oe_n_2", active = "low" }
+y3 = { enable = "oe_n_3", active = "low" }
+y4 = { enable = "oe_n_4", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_drive_curve", "off_state_output_current", "additional_supply_current", "noise_characteristics"]
+
+[[models]]
+id = "74ahct1g125"
+kind = "digital"
+description = "74AHCT1G125 single bus buffer gate, 3-state, TTL input levels, inputs rated to 5.5 V, 5-pin SOT-23 / SC-70 / SOT-553"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74ahct1g125.pdf"
+title = "TI SN74AHCT1G125 single bus buffer gate with 3-state output (SCLS378P), March 2024"
+locator = "Table 4-1 Pin Functions p.3; 5.1 Absolute Maximum Ratings and 5.3 Recommended Operating Conditions p.4; 5.5 Electrical Characteristics p.5; 5.6 Switching Characteristics CL = 50 pF and 5.7 Operating Characteristics p.6; Table 7-1 Function Table p.8"
+sha256 = "386389b623620d89a260b11d272af5625e387e0b24d0981cb4f7d66a4e1bc9fa"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "enable_disable_timing"
+reason = "tPZH/tPZL/tPHZ/tPLZ (OE to Y), IOZ off-state current and the TTL-level additional supply current are not modelled; only the DC function table, the TTL input thresholds, the output levels and the A-to-Y delay are"
+
+[models.match]
+# DBV, DCK and DRL share Table 4-1's numbering (p.3). Nexperia's GW (TSSOP5)
+# and GV (SC-74A) packages have the same 5-pin map; their electrical rows are
+# ASSUMED to be TI's.
+value_re = "(?i)^(SN)?74AHCT1G125(DBV|DCK|DRL|GW|GV)?[RT]?([.,-][A-Z0-9]+)?$"
+
+[models.params]
+voh = 4.4          # IOH = -50 uA, VCC 4.5 V (5.5)
+vol = 0.1          # IOL = 50 uA, VCC 4.5 V (5.5)
+vih = 2.0          # 5.3
+vil = 0.8
+# VCC = 4.5 V, -40 to 85 C: VOH 3.8 V min at IOH = -8 mA against the 4.4 V
+# light-load level, 0.6 V / 8 mA = 75 Ohm (VOL side: 0.44 V max at 8 mA, 55 Ohm).
+ro = 75.0
+tpd_s = 5.3e-9     # A to Y typ, VCC 5 V +/- 0.5 V, CL = 50 pF, 25 C (5.6)
+supply_static_ua = 10.0  # ICC max, -40 to 85 C, VCC 5.5 V (5.5)
+supply_cpd_pf = 14.0     # no load, f = 1 MHz, 25 C (5.7)
+supply_pin = "5"
+gnd_pin = "3"
+
+[models.pins]
+# Table 4-1.
+"1" = "oe_n"
+"2" = "a"
+"3" = "gnd"
+"4" = "y"
+"5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025     # IO continuous output current, 5.1
+max_voltage_v = 7.0           # VCC, 5.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHCT1G125 SCLS378P, 5.3 VCC 4.5 V to 5.5 V; 5.1 VCC -0.5 V to 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "oe_n"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHCT1G125 SCLS378P, 5.3 VI input voltage 0 V to 5.5 V, whatever VCC is"
+abs_max_basis = "TI SN74AHCT1G125 SCLS378P, 5.1 VI input voltage range -0.5 V to 7 V"
+
+[models.logic]
+# Table 7-1: OE low passes A to Y; OE high puts Y in high impedance.
+inputs = ["a", "oe_n"]
+outputs = ["y"]
+[models.logic.comb]
+y = "a"
+[models.logic.tristate]
+y = { enable = "oe_n", active = "low" }
+
+[models.coverage]
+implements = ["buffer", "tristate_enable", "logic_levels"]
+missing = ["enable_disable_timing", "output_drive_curve", "off_state_output_current", "additional_supply_current"]
+
 [[models]]
 id = "sn74lvc2g34"
 kind = "digital"
