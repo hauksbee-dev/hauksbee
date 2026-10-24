@@ -312,19 +312,57 @@ fn loop_exprs(
     [i, pi, format!("{g:?}*(__d6-__d5)-__d2"), draw]
 }
 
+/// The most series links one divider leg is followed through.
+const MAX_LEG_LINKS: usize = 8;
+
 /// The fraction of the regulated voltage a resistive divider presents at a
-/// feedback node: its conductance to other nets over its total (1 with no
-/// path to another net), or `None` when no resistor touches the node at all.
+/// feedback node.
+///
+/// Each resistor on the node starts a leg, followed on through any node
+/// whose only other non-capacitor device is the chain's next resistor (a rail
+/// always has a source on it, so no leg runs on through one), so a top leg built as 4.7 kΩ + 1 kΩ through a mid-node reads as
+/// 5.7 kΩ. The ratio is the conductance of the legs to other nets over all
+/// legs' (1 with no leg to another net), or `None` when no resistor touches
+/// the node at all.
 fn divider_ratio(circuit: &Circuit, fb: NodeId) -> Option<f64> {
+    let devices: Vec<&Device> = circuit.iter().map(|(_, d)| d).collect();
     let (mut top, mut all) = (0.0, 0.0);
-    for (_, d) in circuit.iter() {
-        if let Device::Resistor { a, b, ohms, .. } = d {
-            if (*a == fb) != (*b == fb) {
-                let g = 1.0 / ohms;
-                all += g;
-                if !a.is_ground() && !b.is_ground() {
-                    top += g;
-                }
+    for (first, d) in devices.iter().enumerate() {
+        let Device::Resistor { a, b, ohms, .. } = d else {
+            continue;
+        };
+        if (*a == fb) == (*b == fb) {
+            continue;
+        }
+        let (mut far, mut total, mut last) = (if *a == fb { *b } else { *a }, *ohms, first);
+        for _ in 1..MAX_LEG_LINKS {
+            if far.is_ground() {
+                break;
+            }
+            let others: Vec<usize> = (devices.iter().enumerate())
+                .filter(|(j, d)| *j != last && !matches!(d, Device::Capacitor { .. }))
+                .filter(|(_, d)| d.nodes().contains(&far))
+                .map(|(j, _)| j)
+                .collect();
+            let [next] = others[..] else { break };
+            let Device::Resistor {
+                a: x, b: y, ohms, ..
+            } = devices[next]
+            else {
+                break;
+            };
+            let (x, y, ohms) = (*x, *y, *ohms);
+            let to = if x == far { y } else { x };
+            if to == far || to == fb {
+                break;
+            }
+            (far, total, last) = (to, total + ohms, next);
+        }
+        if total > 0.0 {
+            let g = 1.0 / total;
+            all += g;
+            if !far.is_ground() {
+                top += g;
             }
         }
     }
@@ -2271,5 +2309,36 @@ mod tests {
         p.set_f64("sense_ohms", 0.0);
         assert!(compile_law_implicit("v_io / sense_ohms", &roles(), &p).is_none());
         assert!(compile_law_implicit("math::ln(v_io + 0.0)", &roles(), &p).is_none());
+    }
+
+    /// A divider's legs are followed through series links: 4.7k + 1k through
+    /// a mid-node (with a capacitor on it) over 1k is 1/6.7 of the rail, as
+    /// one 5.7k is; a mid-node a third resistor loads ends the leg there.
+    #[test]
+    fn divider_ratio_follows_series_chains() {
+        let build = |split: bool, loaded: bool| {
+            let mut c = Circuit::new();
+            let (out, mid, fb) = (c.node("out"), c.node("mid"), c.node("fb"));
+            if split {
+                c.add(Device::resistor("R1", out, mid, 4700.0));
+                c.add(Device::capacitor("C1", out, mid, 22e-12));
+                c.add(Device::resistor("R2", mid, fb, 1000.0));
+            } else {
+                c.add(Device::resistor("R1", out, fb, 5700.0));
+            }
+            if loaded {
+                c.add(Device::resistor("R4", mid, NodeId::GROUND, 10_000.0));
+            }
+            c.add(Device::resistor("R3", fb, NodeId::GROUND, 1000.0));
+            (c, fb)
+        };
+        let ratio = |split, loaded| {
+            let (c, fb) = build(split, loaded);
+            divider_ratio(&c, fb).expect("a resistor touches fb")
+        };
+        assert!((ratio(true, false) - 1.0 / 6.7).abs() < 1e-12);
+        assert!((ratio(false, false) - 1.0 / 6.7).abs() < 1e-12);
+        // R2 alone ends on the loaded mid-node: half the conductance is "top".
+        assert!((ratio(true, true) - 0.5).abs() < 1e-12);
     }
 }

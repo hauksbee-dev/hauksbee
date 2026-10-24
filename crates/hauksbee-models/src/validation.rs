@@ -701,7 +701,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         let (text, span) = (envelope.conditions(), temp_span(envelope.conditions()));
         let row = format!("{:?} {span:?}", envelope.channel());
         p.require(text.is_empty() || (span.is_some() && rows.insert(row)), || {
-            format!("operating envelope conditions '{text}' must name a temperature (TA = 25 °C), once per channel")
+            format!("operating envelope conditions '{text}' must name a temperature (TA = 25 °C), once per channel; rows of one supply pin for configurations that exclude each other (a 5 V and a 3.3 V supply mode, a revision, a variant) each carry their own `mode` tag")
         });
         match envelope {
             OperatingEnvelope::SupplyRange {
@@ -3787,6 +3787,11 @@ mod tests {
         rejects(&fixture(&row("VCC = 3.3 V")), "must name a temperature");
         let twice = row("TA = 25 °C") + "\n[[envelope]]\nkind = \"supply_range\"\n";
         rejects(&fixture(&(twice + &row("TA=25°C"))), "once per channel");
+        // Two alternative supply modes at one temperature are two channels.
+        let moded = |mode: &str| row("TA = 25 °C") + &format!("\nmode = \"{mode}\"");
+        let both = moded("5 V input") + "\n[[envelope]]\nkind = \"supply_range\"\n";
+        accepts(&fixture(&(both.clone() + &moded("3.3 V input"))));
+        rejects(&fixture(&(both + &moded("5 V input"))), "once per channel");
     }
 
     #[test]

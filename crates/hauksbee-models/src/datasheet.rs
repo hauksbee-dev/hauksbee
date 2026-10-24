@@ -2072,7 +2072,14 @@ VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
 supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
 the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
 supply_range or input_common_mode per printed temperature row, each with its
-`conditions` (TA = 25 °C; TA = −40 °C to 85 °C). Where an input's VI row is a
+`conditions` (TA = 25 °C; TA = −40 °C to 85 °C). Where one supply pin has
+rows for configurations that exclude each other (a supply mode: VREGIN fed
+5 V with the on-chip regulator on, or 3.3 V with it bypassed; a silicon
+revision; an ordering variant), emit one supply_range per alternative and tag
+each with `mode` naming it (mode = '5 V input'): the board's wiring picks
+one, and a rail that fits any one mode is in range. A row that only narrows
+the range for a feature (USB, ADC, flash writes) is no mode: leave it
+untagged, so it binds in every mode. Where an input's VI row is a
 fixed voltage whatever the supply (a 5 V-tolerant input: VI −0.5 V to 6.5 V,
 not VCC + 0.5 V; an MCU's five-volt-tolerant pins), emit one input_tolerance:
 `pins` the roles that row covers that are inputs in every mode (data and

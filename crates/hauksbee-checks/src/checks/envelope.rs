@@ -148,32 +148,123 @@ fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
         .or_else(|| model.params.get_f64("vout").map(RailRange::point))
 }
 
-/// A fitted two-terminal resistor between nets `a` and `b` (either way
-/// round): its ohms and the fractional tolerance it states, `0` when it states
-/// none. `None` when the part is not one.
-fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<(f64, f64)> {
-    if !AssemblyState::of(c).is_present() || !is_resistor(c) {
+/// A fitted two-terminal resistor as a divider link: its ohms and the
+/// fractional tolerance it states (`0` when it states none). `None` for any
+/// other part.
+///
+/// Only resistors chain: an inductor off a mid-node is a buck's output path,
+/// and following it would walk past the rail back to the switch node.
+fn dc_link(c: &Component) -> Option<(f64, f64)> {
+    if !AssemblyState::of(c).is_present() || ends(c).is_none() || !is_resistor(c) {
         return None;
     }
-    let nets: Vec<i64> = c.pins.iter().filter_map(|pin| pin.net).collect();
-    let [first, second] = nets[..] else {
-        return None;
-    };
-    let joins = (first == a && b(second)) || (second == a && b(first));
     let ohms = parse_value(&c.value).map(|value| value.si)?;
-    (joins && ohms.is_finite() && ohms > 0.0)
-        .then(|| (ohms, super::stated_tolerance(c).unwrap_or(0.0)))
+    (ohms.is_finite() && ohms >= 0.0).then(|| (ohms, super::stated_tolerance(c).unwrap_or(0.0)))
 }
 
-/// The parallel combination of resistors given as (ohms, tolerance): the
-/// lowest and highest it can read with each resistor at its stated tolerance
-/// (both its nominal when none states one). `None` when empty.
-fn parallel(parts: impl Iterator<Item = (f64, f64)>) -> Option<Spread> {
+/// The most links one divider leg is followed through.
+const MAX_LEG_LINKS: usize = 8;
+
+/// One leg of a feedback divider: resistors in series from the feedback node
+/// through nets nothing else loads at DC, to the net it ends on.
+#[derive(Debug, Clone)]
+struct Leg {
+    /// Each link's reference and nominal ohms, from the feedback node out.
+    links: Vec<(String, f64)>,
+    /// The net the leg ends on.
+    far: i64,
+    /// Total nominal ohms, and the least and most the stated tolerances allow.
+    ohms: f64,
+    low: f64,
+    high: f64,
+}
+
+impl Leg {
+    /// Its links in series, `"R1 4.7k + R2 1k"`, or with `ohms` false their
+    /// references alone, `"R1 + R2"`.
+    fn text(&self, ohms: bool) -> String {
+        let links: Vec<String> = (self.links.iter())
+            .map(|(r, value)| {
+                if ohms {
+                    format!("{r} {}", ohms_text(*value))
+                } else {
+                    r.clone()
+                }
+            })
+            .collect();
+        links.join(" + ")
+    }
+}
+
+/// Every leg leaving `from`.
+///
+/// Each resistor with one end on `from` is followed on through any net whose
+/// only other DC-loading part is the chain's next resistor (a capacitor or an
+/// unfitted part there carries no DC), so a top leg built as 4.7 kΩ + 1 kΩ
+/// through a mid-node reads as the 5.7 kΩ it is. A rail always has a source
+/// on it (a regulator pin, an inductor, a connector), so no leg runs on
+/// through one.
+fn series_legs(board: &ExtractedBoard, from: i64) -> Vec<Leg> {
+    let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
+    let mut legs = Vec::new();
+    for first in &board.components {
+        let (Some((a, b)), Some((ohms, tol))) = (ends(first), dc_link(first)) else {
+            continue;
+        };
+        if (a == from) == (b == from) {
+            continue;
+        }
+        let mut leg = Leg {
+            links: vec![(first.reference.clone(), ohms)],
+            far: if a == from { b } else { a },
+            ohms,
+            low: ohms * (1.0 - tol).max(0.0),
+            high: ohms * (1.0 + tol),
+        };
+        let mut used: Vec<&Component> = vec![first];
+        while leg.links.len() < MAX_LEG_LINKS && !grounded(leg.far) {
+            let mut others: Vec<&Component> = Vec::new();
+            for (c, _) in board.net_members(leg.far) {
+                let dc = AssemblyState::of(c).is_present() && !is_capacitor(c);
+                let new = !used.iter().chain(&others).any(|u| std::ptr::eq(*u, c));
+                if dc && new {
+                    others.push(c);
+                }
+            }
+            let [next] = others[..] else { break };
+            let (Some((x, y)), Some((ohms, tol))) = (ends(next), dc_link(next)) else {
+                break;
+            };
+            let far = if x == leg.far { y } else { x };
+            if far == leg.far || far == from {
+                break;
+            }
+            leg.links.push((next.reference.clone(), ohms));
+            leg.far = far;
+            leg.ohms += ohms;
+            leg.low += ohms * (1.0 - tol).max(0.0);
+            leg.high += ohms * (1.0 + tol);
+            used.push(next);
+        }
+        legs.push(leg);
+    }
+    legs
+}
+
+/// The parallel combination of `legs`.
+///
+/// Gives the lowest and highest it can read with each link at its stated
+/// tolerance (its nominal when none states one). `None` when empty or when a
+/// leg reads 0 Ω (no divider: a short).
+fn parallel<'a>(legs: impl Iterator<Item = &'a Leg>) -> Option<Spread> {
     let (mut least_g, mut most_g) = (0.0_f64, 0.0_f64);
-    for (ohms, tol) in parts {
-        // A resistor at +tol ohms conducts least; at -tol, most.
-        least_g += (ohms * (1.0 + tol)).recip();
-        most_g += (ohms * (1.0 - tol).max(f64::EPSILON)).recip();
+    for leg in legs {
+        if leg.low <= 0.0 {
+            return None;
+        }
+        // A leg at its highest ohms conducts least; at its lowest, most.
+        least_g += leg.high.recip();
+        most_g += leg.low.recip();
     }
     (least_g > 0.0).then(|| Spread {
         low: most_g.recip(),
@@ -209,27 +300,23 @@ fn ends(c: &Component) -> Option<(i64, i64)> {
     Some((a, b))
 }
 
-/// The net a divider from `fb_net` senses: `out_net` itself (or a net tied to
-/// it) when a feedback resistor lands there, else the one non-ground net the
-/// feedback resistors reach that a fitted inductor joins to `out_net` (a
-/// buck's card names its switch node as the output; the rail is past the
-/// inductor). `None` when neither is on the board.
+/// The net a divider from `fb_net` senses.
+///
+/// That is `out_net` itself (or a net tied to it) when a feedback leg
+/// ([`series_legs`]) ends there, else the one non-ground net the feedback legs
+/// reach that a fitted inductor joins to `out_net` (a buck's card names its
+/// switch node as the output; the rail is past the inductor). `None` when
+/// neither is on the board.
 fn sensed_net(
     board: &ExtractedBoard,
     tied: &BTreeMap<i64, BTreeSet<i64>>,
-    fb_net: i64,
+    (fb_net, legs): (i64, &[Leg]),
     out_net: i64,
 ) -> Option<i64> {
     let on_output = |n: i64| n == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&n));
     let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
     let fitted = |c: &&Component| AssemblyState::of(c).is_present();
-    let reached: BTreeSet<i64> = (board.components.iter().filter(fitted))
-        .filter(|c| is_resistor(c))
-        .filter_map(|c| match ends(c)? {
-            (a, b) if a == fb_net => Some(b),
-            (a, b) if b == fb_net => Some(a),
-            _ => None,
-        })
+    let reached: BTreeSet<i64> = (legs.iter().map(|leg| leg.far))
         .filter(|&n| n != fb_net && !grounded(n))
         .collect();
     if reached.iter().any(|&n| on_output(n)) {
@@ -292,22 +379,19 @@ pub(crate) struct Divider {
     /// The reference the regulator holds its feedback pin at, in volts.
     vref_v: f64,
     law: DividerLaw,
-    /// The fitted resistors of the top leg (feedback pin to the sensed output)
-    /// and the bottom leg (feedback pin to ground), each with its ohms.
-    top: Vec<(String, f64)>,
-    bottom: Vec<(String, f64)>,
+    /// The legs of the top (feedback pin to the sensed output) and the bottom
+    /// (feedback pin to ground), each a series chain of links.
+    top: Vec<Leg>,
+    bottom: Vec<Leg>,
     /// True when only the two legs (and capacitors) load the feedback node, so
     /// the divider alone sets the level. A trim resistor, a DAC or any other
     /// part injecting there makes the closed-form level a guess.
     sole: bool,
 }
 
-/// The parallel combination of a leg's nominal resistances.
-fn leg_ohms(leg: &[(String, f64)]) -> f64 {
-    leg.iter()
-        .map(|(_, ohms)| ohms.recip())
-        .sum::<f64>()
-        .recip()
+/// The parallel combination of legs' nominal resistances.
+fn leg_ohms(legs: &[Leg]) -> f64 {
+    legs.iter().map(|leg| leg.ohms.recip()).sum::<f64>().recip()
 }
 
 impl Divider {
@@ -354,31 +438,17 @@ fn feedback_output_range(
 ) -> Option<Divider> {
     let (pin, vref, law) = adjustable(model)?;
     let fb_net = role_net_id(comp, model, pin)?;
-    let sensed = sensed_net(board, tied, fb_net, out_net)?;
+    let legs = series_legs(board, fb_net);
+    let sensed = sensed_net(board, tied, (fb_net, &legs), out_net)?;
     let on_output = |n: i64| n == sensed || tied.get(&sensed).is_some_and(|set| set.contains(&n));
     let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
-    let legs = |far: &dyn Fn(i64) -> bool| -> Vec<(String, (f64, f64))> {
-        (board.components.iter())
-            .filter_map(|c| Some((c.reference.clone(), resistor_between(c, fb_net, far)?)))
-            .collect()
-    };
-    let (top_legs, bottom_legs) = (legs(&on_output), legs(&grounded));
-    let top = parallel(top_legs.iter().map(|(_, leg)| *leg))?;
-    let bottom = parallel(bottom_legs.iter().map(|(_, leg)| *leg))?;
-    let (lo, hi) = uncertainty
-        .iter()
-        .find_map(|u| match u {
-            ModelUncertainty::Interval {
-                parameter,
-                low,
-                high,
-                ..
-            } if (parameter == "feedback_reference" || parameter == "vref") && low <= high => {
-                Some((*low, *high))
-            }
-            _ => None,
-        })
-        .unwrap_or((vref, vref));
+    let (top_legs, bottom_legs): (Vec<Leg>, Vec<Leg>) = (
+        legs.iter().filter(|l| on_output(l.far)).cloned().collect(),
+        legs.iter().filter(|l| grounded(l.far)).cloned().collect(),
+    );
+    let top = parallel(top_legs.iter())?;
+    let bottom = parallel(bottom_legs.iter())?;
+    let (lo, hi) = reference_interval(uncertainty, vref);
     // The lowest and highest gain and offset the stated resistor tolerances
     // allow; with none stated they collapse to the nominal divider.
     let ((gain_lo, offset_lo), (gain_hi, offset_hi)) = match law {
@@ -402,7 +472,7 @@ fn feedback_output_range(
         max_v: hi.mul_add(gain_hi, offset_hi),
     };
     let in_divider: BTreeSet<&str> = (top_legs.iter().chain(&bottom_legs))
-        .map(|(r, _)| r.as_str())
+        .flat_map(|leg| leg.links.iter().map(|(r, _)| r.as_str()))
         .collect();
     // Only the regulator, the two legs and capacitors load the feedback node.
     let sole = (board.net_members(fb_net).into_iter()).all(|(c, _)| {
@@ -411,9 +481,6 @@ fn feedback_output_range(
             || is_capacitor(c)
             || !AssemblyState::of(c).is_present()
     });
-    let ohms = |legs: Vec<(String, (f64, f64))>| -> Vec<(String, f64)> {
-        legs.into_iter().map(|(r, (ohms, _))| (r, ohms)).collect()
-    };
     Some(Divider {
         regulator: comp.reference.clone(),
         value: comp.value.trim().to_string(),
@@ -421,9 +488,54 @@ fn feedback_output_range(
         range,
         vref_v: vref,
         law,
-        top: ohms(top_legs),
-        bottom: ohms(bottom_legs),
+        top: top_legs,
+        bottom: bottom_legs,
         sole,
+    })
+}
+
+/// The interval a card states its feedback reference over.
+///
+/// `(vref, vref)` when it states none.
+fn reference_interval(uncertainty: &[ModelUncertainty], vref: f64) -> (f64, f64) {
+    uncertainty
+        .iter()
+        .find_map(|u| match u {
+            ModelUncertainty::Interval {
+                parameter,
+                low,
+                high,
+                ..
+            } if (parameter == "feedback_reference" || parameter == "vref") && low <= high => {
+                Some((*low, *high))
+            }
+            _ => None,
+        })
+        .unwrap_or((vref, vref))
+}
+
+/// The rail an adjustable part sets with its feedback pin on the output.
+///
+/// With the feedback pin on the output itself and no leg to ground (unity
+/// feedback) the rail is the reference interval. Only a grounded law has one;
+/// `None` otherwise.
+fn unity_feedback_range(
+    board: &ExtractedBoard,
+    tied: &BTreeMap<i64, BTreeSet<i64>>,
+    (comp, model): (&Component, &ModelEntry),
+    uncertainty: &[ModelUncertainty],
+    out_net: i64,
+) -> Option<RailRange> {
+    let (pin, vref, law) = adjustable(model)?;
+    let fb_net = role_net_id(comp, model, pin)?;
+    let on_output =
+        fb_net == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&fb_net));
+    let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
+    let to_ground = series_legs(board, fb_net).iter().any(|l| grounded(l.far));
+    let (lo, hi) = reference_interval(uncertainty, vref);
+    (on_output && !to_ground && matches!(law, DividerLaw::Grounded { .. })).then_some(RailRange {
+        min_v: lo,
+        max_v: hi,
     })
 }
 
@@ -482,13 +594,20 @@ pub(crate) struct Rails {
     /// (an unmodelled buck, or a regulator card with no output range), each
     /// with the part, `"U21 (TPS62410)"`.
     unknown_drivers: BTreeMap<i64, String>,
+    /// Nets an adjustable part sets through a feedback divider the board
+    /// could not be read for, each with the part, `"U1 (TPSM82913)"`: the
+    /// card's example set point is no level of them.
+    unresolved: BTreeMap<i64, String>,
 }
 
 impl Rails {
     pub(crate) fn of(board: &ExtractedBoard, st: &BoardStatics<'_>) -> Self {
-        let (regulators, dividers) = regulator_ranges(board, st);
-        let unknown_drivers = converter_driven_nets(board)
-            .into_iter()
+        let (regulators, dividers, unresolved) = regulator_ranges(board, st);
+        let unresolved: BTreeMap<i64, String> = (unresolved.into_iter())
+            .filter(|(net, _)| !regulators.contains_key(net))
+            .collect();
+        let unknown_drivers = (converter_driven_nets(board).into_iter())
+            .chain(unresolved.clone())
             .filter(|(net, _)| !regulators.contains_key(net))
             .collect();
         Self {
@@ -496,6 +615,7 @@ impl Rails {
             dividers,
             batteries: battery_ranges(board, st),
             unknown_drivers,
+            unresolved,
         }
     }
 }
@@ -579,16 +699,37 @@ fn converter_driven_nets(board: &ExtractedBoard) -> BTreeMap<i64, String> {
     out
 }
 
-/// Every regulator's output range by net, and the board dividers that set a
-/// rail no other regulator also drives.
+/// Each entry of `map` copied onto every net tied to its own ([`tied_nets`])
+/// that has none yet.
+fn spread_through_ties<V: Clone>(map: &mut BTreeMap<i64, V>, tied: &BTreeMap<i64, BTreeSet<i64>>) {
+    let spread: Vec<(i64, V)> = (map.iter())
+        .flat_map(|(net, v)| {
+            let group = tied.get(net).into_iter().flatten();
+            group.map(move |&other| (other, v.clone()))
+        })
+        .collect();
+    for (net, v) in spread {
+        map.entry(net).or_insert(v);
+    }
+}
+
+/// Every regulator's output range by net, the board dividers that set a rail
+/// no other regulator also drives, and the nets an adjustable part sets
+/// through a divider that could not be read (see [`Rails`]).
 fn regulator_ranges(
     board: &ExtractedBoard,
     st: &BoardStatics<'_>,
-) -> (BTreeMap<i64, RailRange>, Vec<Divider>) {
+) -> (
+    BTreeMap<i64, RailRange>,
+    Vec<Divider>,
+    BTreeMap<i64, String>,
+) {
     let mut ranges = BTreeMap::new();
     let mut dividers: Vec<Divider> = Vec::new();
     let mut sources: BTreeMap<i64, usize> = BTreeMap::new();
+    let mut unresolved: BTreeMap<i64, String> = BTreeMap::new();
     let tied = tied_nets(board);
+    let grounded = |n: i64| board.net(n).is_some_and(|x| is_ground(&x.name));
     for (comp, model) in st.parts(board) {
         let range = model_output_range(model);
         let output_role = model
@@ -630,18 +771,46 @@ fn regulator_ranges(
             // The divider's rail lands on the net it senses; a card's own set
             // point stays on its output pin's net (a buck's switch node).
             let feedback = feedback_output_range(board, &tied, (comp, model), &uncertainty, net_id);
-            let sensed = feedback.as_ref().map(|d| d.sensed);
+            let sensed = feedback.as_ref().map(|d| (d.sensed, d.range));
             if let Some(divider) = feedback {
                 ranges.insert(divider.sensed, divider.range);
                 *sources.entry(divider.sensed).or_default() += 1;
                 dividers.push(divider);
+            }
+            // A part whose feedback pin is not grounded (a fixed variant ties it
+            // there) sets its rail with the board's divider: the card's set point
+            // is the datasheet's example, the level of no rail on this board. With
+            // the divider read, it is the level on the output pin's net too (a
+            // buck's switch node averages to it); unread, the rail is unknown.
+            let programmed = adjustable(model)
+                .map(|(pin, ..)| role_net_id(comp, model, pin))
+                .is_some_and(|fb| fb.is_none_or(|n| !grounded(n)));
+            if programmed {
+                let level = sensed.map(|(_, range)| range).or_else(|| {
+                    unity_feedback_range(board, &tied, (comp, model), &uncertainty, net_id)
+                });
+                match level {
+                    Some(level) if sensed.is_none_or(|(n, _)| n != net_id) => {
+                        ranges.insert(net_id, level);
+                        *sources.entry(net_id).or_default() += 1;
+                    }
+                    Some(_) => {}
+                    // Still a source on its rail: a divider elsewhere on
+                    // it no longer speaks for that rail alone.
+                    None => {
+                        let who = format!("{} ({})", comp.reference, comp.value.trim());
+                        unresolved.insert(net_id, who);
+                        *sources.entry(net_id).or_default() += 1;
+                    }
+                }
+                continue;
             }
             // An adjustable part's card states the span its output CAN be set across
             // (a buck's 0.9 to 6 V); that is no level of any rail it drives, and with
             // no divider read it must not pose as one.
             let capability = range.is_some_and(|r| adjustable(model).is_some() && is_span(r));
             if let Some(range) = range
-                .filter(|_| sensed.is_none_or(|n| n != net_id))
+                .filter(|_| sensed.is_none_or(|(n, _)| n != net_id))
                 .filter(|_| !capability)
             {
                 ranges.insert(net_id, range);
@@ -652,18 +821,8 @@ fn regulator_ranges(
     // A regulated net reaches the loads through net ties and zero-ohm links
     // as the same rail: the level is the regulator's, not one the far net's
     // name suggests.
-    let spread: Vec<(i64, RailRange)> = ranges
-        .iter()
-        .flat_map(|(&net, &range)| {
-            tied.get(&net)
-                .into_iter()
-                .flatten()
-                .map(move |&other| (other, range))
-        })
-        .collect();
-    for (net, range) in spread {
-        ranges.entry(net).or_insert(range);
-    }
+    spread_through_ties(&mut ranges, &tied);
+    spread_through_ties(&mut unresolved, &tied);
     // A fitted module's own supply pins (a dev board's 5V/3V3 header), unless
     // a regulator on the board already defines the net.
     for (comp, model) in st.parts(board) {
@@ -686,7 +845,7 @@ fn regulator_ranges(
         count(&d.sensed) + group.map(count).sum::<usize>() == 1
     };
     dividers.retain(sole_source);
-    (ranges, dividers)
+    (ranges, dividers, unresolved)
 }
 
 fn looks_like_battery_connector(comp: &Component) -> bool {
@@ -909,6 +1068,14 @@ impl<'a> RailResolver<'a> {
         }
     }
 
+    /// The adjustable part whose unread divider sets this net, when one does
+    /// and no solve gives its level.
+    fn unresolved(&self, net_id: i64) -> Option<&str> {
+        (self.solved(net_id).is_none())
+            .then(|| self.rails.unresolved.get(&net_id).map(String::as_str))
+            .flatten()
+    }
+
     /// Whether a regulator or divider on the board sets this net's level.
     pub(crate) fn defined_by_a_regulator(&self, net_id: i64) -> bool {
         self.rails.regulators.contains_key(&net_id)
@@ -961,23 +1128,33 @@ fn compatible_supply_rail(
     candidates.into_iter().next()
 }
 
-/// The low-severity abstention for a rail whose range is not known, cited on
-/// the part (`reference`) whose envelope needed it.
-fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str) -> LintFinding {
-    let message = if matches!(knowledge, RailKnowledge::BatteryWithoutChemistry) {
-        format!(
+/// The low-severity abstention for a rail whose range is not known.
+///
+/// It is cited on the part (`reference`) whose envelope needed it.
+/// `unresolved` names the adjustable part whose divider could not be read,
+/// when one sets the rail.
+fn unknown_abstention(
+    net_name: &str,
+    knowledge: &RailKnowledge,
+    reference: &str,
+    unresolved: Option<&str>,
+) -> LintFinding {
+    let battery = matches!(knowledge, RailKnowledge::BatteryWithoutChemistry);
+    let message = match (unresolved, unreadable_rail_name(net_name)) {
+        (Some(part), _) => format!(
+            "operating envelope on net '{net_name}' abstained: rail level unresolved: adjustable regulator {part} sets it with a feedback divider that could not be read from the board, and its card's example set point is not a level of this rail; check the divider resistors were extracted, or declare the level with a net_drive"
+        ),
+        (None, _) if battery => format!(
             "operating envelope on net '{net_name}' abstained: the topology identifies a battery net but no charger card declares its chemistry; add battery_chemistry and the sourced charge-voltage range to the charger model"
-        )
-    } else if let Some(why) = unreadable_rail_name(net_name) {
+        ),
         // The name looks like it states a voltage; say why no level is taken
         // from it, so a typo'd rail is not mistaken for an unlabelled one.
-        format!(
+        (None, Some(why)) => format!(
             "operating envelope on net '{net_name}' abstained: its name {why}, so no level is assumed from it; declare the level with a net_drive, or bind the regulator that defines this net, or rename the net to a plain form such as +5V or +3V3"
-        )
-    } else {
-        format!(
+        ),
+        (None, None) => format!(
             "operating envelope on net '{net_name}' abstained: declare the level with a net_drive, or bind the regulator that defines this net"
-        )
+        ),
     };
     LintFinding {
         check: LintCheck::OperatingEnvelope,
@@ -1033,6 +1210,237 @@ pub(crate) fn binding(
     let held =
         move |e: &&_| covers(e, ambient_c) || !rows_of(envelope, e).any(|o| covers(o, ambient_c));
     envelope.iter().filter(held)
+}
+
+/// The pin a supply row rates; `None` for any other row.
+fn supply_pin(e: &OperatingEnvelope) -> Option<&str> {
+    match e {
+        OperatingEnvelope::SupplyRange { pin, .. } => Some(pin),
+        _ => None,
+    }
+}
+
+/// A supply row's recommended window, `(min_v, max_v)`.
+const fn window(e: &OperatingEnvelope) -> Option<(f64, f64)> {
+    match e {
+        OperatingEnvelope::SupplyRange { min_v, max_v, .. } => Some((*min_v, *max_v)),
+        _ => None,
+    }
+}
+
+/// The widest window a rail held to ±2 % spans (4 % of its level): two rows
+/// whose common window is narrower admit no real rail together.
+const COMMON_WINDOW_FRACTION: f64 = 0.04;
+
+/// Whether supply rows `a` and `b` exclude each other, so the board meets one
+/// or the other but is never held to both.
+///
+/// Rows tagged with different `mode`s do (a "5 V input" row and a "3.3 V
+/// input" row). Two untagged rows do only when they are printed for the same
+/// temperature and their windows share no span a real rail fits in: a card
+/// that held a pin to both would fail every board, so the datasheet printed
+/// them as alternatives (the FT232H VREGIN 3.6 to 5.5 V and 3.0 to 3.6 V
+/// rows). Untagged rows that overlap stay joint limits, and a tagged row
+/// never excludes an untagged one, which binds in every mode.
+fn exclusive(a: &OperatingEnvelope, b: &OperatingEnvelope) -> bool {
+    let same_pin = supply_pin(a)
+        .zip(supply_pin(b))
+        .is_some_and(|(x, y)| x.eq_ignore_ascii_case(y));
+    if !same_pin || std::ptr::eq(a, b) {
+        return false;
+    }
+    match (a.mode(), b.mode()) {
+        ("", "") => {
+            let (Some((a_lo, a_hi)), Some((b_lo, b_hi))) = (window(a), window(b)) else {
+                return false;
+            };
+            let (lo, hi) = (a_lo.max(b_lo), a_hi.min(b_hi));
+            let scale = lo.abs().max(hi.abs());
+            span(a) == span(b) && hi - lo < COMMON_WINDOW_FRACTION * scale
+        }
+        ("", _) | (_, "") => false,
+        (x, y) => !x.eq_ignore_ascii_case(y),
+    }
+}
+
+/// The rows of `rows` that make up `e`'s alternative: every row of its mode
+/// when it is tagged, else `e` alone.
+fn mode_rows<'a>(
+    rows: &'a [&'a OperatingEnvelope],
+    e: &'a OperatingEnvelope,
+) -> impl Iterator<Item = &'a OperatingEnvelope> + 'a {
+    let pin = supply_pin(e);
+    rows.iter().copied().filter(move |o| {
+        std::ptr::eq(*o, e)
+            || (!e.mode().is_empty()
+                && o.mode().eq_ignore_ascii_case(e.mode())
+                && supply_pin(o)
+                    .zip(pin)
+                    .is_some_and(|(x, y)| x.eq_ignore_ascii_case(y)))
+    })
+}
+
+/// How the binding supply rows of one part judge one rail: a row the rail
+/// misses is excused when the rail fits every row of an alternative it
+/// excludes ([`exclusive`]), and of a pin's rows that fail together only the
+/// first reports, naming every alternative.
+struct Alternatives<'a> {
+    rows: Vec<&'a OperatingEnvelope>,
+}
+
+impl<'a> Alternatives<'a> {
+    fn of(envelope: &'a [OperatingEnvelope], ambient_c: Option<f64>) -> Self {
+        Self {
+            rows: binding(envelope, ambient_c).collect(),
+        }
+    }
+
+    /// The rows `e` excludes.
+    fn excluded(&self, e: &OperatingEnvelope) -> Vec<&'a OperatingEnvelope> {
+        (self.rows.iter().copied())
+            .filter(|o| exclusive(e, o))
+            .collect()
+    }
+
+    /// Whether the rail, which misses `e`, fits all of some alternative.
+    fn excused(&self, e: &OperatingEnvelope, fits: &dyn Fn(&OperatingEnvelope) -> bool) -> bool {
+        self.excluded(e)
+            .into_iter()
+            .any(|o| mode_rows(&self.rows, o).all(fits))
+    }
+
+    /// `e` and its alternatives, in card order: the rows a finding on `e`
+    /// names. Just `[e]` for a row with no alternative.
+    fn group(&self, e: &'a OperatingEnvelope) -> Vec<&'a OperatingEnvelope> {
+        let excluded = self.excluded(e);
+        (self.rows.iter().copied())
+            .filter(|o| std::ptr::eq(*o, e) || excluded.iter().any(|x| std::ptr::eq(*x, *o)))
+            .collect()
+    }
+
+    /// `e`'s group with every row of its own mode, in card order: the rows
+    /// that fail or pass together with it.
+    fn peers(&self, e: &'a OperatingEnvelope) -> Vec<&'a OperatingEnvelope> {
+        let mut peers = self.group(e);
+        peers.extend(mode_rows(&self.rows, e));
+        (self.rows.iter().copied())
+            .filter(|o| peers.iter().any(|p| std::ptr::eq(*p, *o)))
+            .collect()
+    }
+
+    /// Whether `e`, a row the rail misses and no alternative excuses, is the
+    /// one that reports its group: no earlier peer also fails unexcused.
+    fn reports(&self, e: &'a OperatingEnvelope, fits: &dyn Fn(&OperatingEnvelope) -> bool) -> bool {
+        let first = (self.peers(e).into_iter()).find(|o| !fits(o) && !self.excused(o, fits));
+        first.is_none_or(|o| std::ptr::eq(o, e))
+    }
+}
+
+/// The more serious of two severities.
+fn more_serious(a: Severity, b: Severity) -> Severity {
+    if at_most(a, b) == a {
+        b
+    } else {
+        a
+    }
+}
+
+/// The row of `rows` whose window `range` comes nearest (the least volts
+/// outside it); the first on a tie.
+fn nearest<'a>(rows: &[&'a OperatingEnvelope], range: RailRange) -> &'a OperatingEnvelope {
+    let outside = |row: &OperatingEnvelope| {
+        window(row).map_or(f64::INFINITY, |(lo, hi)| {
+            (lo - range.min_v).max(0.0) + (range.max_v - hi).max(0.0)
+        })
+    };
+    (rows.iter().copied())
+        .reduce(|best, row| {
+            if outside(row) < outside(best) {
+                row
+            } else {
+                best
+            }
+        })
+        .expect("a row's peers include the row")
+}
+
+/// The highest absolute maximum any of `rows` states, with the row stating it.
+fn loosest_abs_max<'a>(rows: &[&'a OperatingEnvelope]) -> Option<(f64, &'a OperatingEnvelope)> {
+    (rows.iter().copied())
+        .filter_map(|row| match row {
+            OperatingEnvelope::SupplyRange {
+                abs_max_v: Some(limit),
+                ..
+            } => Some((*limit, row)),
+            _ => None,
+        })
+        .reduce(|best, next| if next.0 > best.0 { next } else { best })
+}
+
+/// The absolute-maximum basis a supply row records; empty for any other row.
+fn abs_max_basis(row: &OperatingEnvelope) -> &str {
+    match row {
+        OperatingEnvelope::SupplyRange { abs_max_basis, .. } => abs_max_basis,
+        _ => "",
+    }
+}
+
+/// A row's window, `"3.6..5.5 V"`, and what it is an alternative for: its
+/// `mode`, else its note, else its temperature, `"3.6..5.5 V (5 V input)"`.
+fn labelled_window(row: &OperatingEnvelope) -> String {
+    const LABEL_CHARS: usize = 60;
+    let Some((lo, hi)) = window(row) else {
+        return String::new();
+    };
+    let text = format_series(&<[f64; 2]>::from((lo, hi)), "..", "V");
+    let note = match row {
+        OperatingEnvelope::SupplyRange { note, .. } => note.trim(),
+        _ => "",
+    };
+    let label = [row.mode(), note, row.conditions().trim()]
+        .into_iter()
+        .find(|l| !l.is_empty())
+        .map(|l| l.chars().take(LABEL_CHARS).collect::<String>());
+    label.map_or_else(|| text.clone(), |l| format!("{text} ({l})"))
+}
+
+/// Where a rail lies against `rows`, one row or several alternatives: `"outside
+/// the 3..3.6 V operating envelope"`, `"fitting neither the 3.6..5.5 V (5 V
+/// input) nor the 3..3.6 V (3.3 V input) operating envelope"`.
+fn outside_text(rows: &[&OperatingEnvelope]) -> String {
+    match rows {
+        [one] => {
+            let bounds = window(one).unwrap_or_default();
+            format!(
+                "outside the {} operating envelope",
+                format_series(&<[f64; 2]>::from(bounds), "..", "V")
+            )
+        }
+        [a, b] => format!(
+            "fitting neither the {} nor the {} operating envelope, its alternatives",
+            labelled_window(a),
+            labelled_window(b)
+        ),
+        _ => {
+            let all: Vec<String> = rows.iter().map(|r| labelled_window(r)).collect();
+            format!(
+                "fitting none of its alternative operating envelopes: {}",
+                all.join(", ")
+            )
+        }
+    }
+}
+
+/// The `basis` clause of a finding on `rows`: each distinct row basis.
+fn bases_citation(rows: &[&OperatingEnvelope]) -> String {
+    let mut bases: Vec<&str> = Vec::new();
+    for basis in rows.iter().map(|r| r.basis()) {
+        if !bases.contains(&basis) {
+            bases.push(basis);
+        }
+    }
+    let quoted: Vec<String> = bases.iter().map(|b| format!("\"{b}\"")).collect();
+    format!("basis: {}", quoted.join("; "))
 }
 
 /// A caveat per channel none of whose rows covers `ambient_c`, as run evidence
@@ -1156,17 +1564,12 @@ fn divider_name_findings(
         let set = divider.nominal_v();
         let pct = (set / want_v - 1.0).abs() * 100.0;
         let side = if set > want_v { "above" } else { "below" };
-        let leg = |leg: &[(String, f64)]| {
-            let parts: Vec<String> = leg
-                .iter()
-                .map(|(r, ohms)| format!("{r} {}", ohms_text(*ohms)))
-                .collect();
+        let leg = |legs: &[Leg]| {
+            let parts: Vec<String> = legs.iter().map(|l| l.text(true)).collect();
             parts.join(" || ")
         };
-        let (top_refs, bottom_refs): (Vec<&str>, Vec<&str>) = (
-            divider.top.iter().map(|(r, _)| r.as_str()).collect(),
-            divider.bottom.iter().map(|(r, _)| r.as_str()).collect(),
-        );
+        let names = |legs: &[Leg]| -> Vec<String> { legs.iter().map(|l| l.text(false)).collect() };
+        let (top_refs, bottom_refs) = (names(&divider.top), names(&divider.bottom));
         let (vref, top, bottom) = (
             divider.vref_v,
             ohms_text(leg_ohms(&divider.top)),
@@ -1210,11 +1613,8 @@ fn divider_name_findings(
             leg(&divider.bottom), format_volts(vref), format_volts(set), format_volts(set), format_volts(want_v), format_volts(set));
         let mut refs = vec![divider.regulator.clone()];
         refs.extend(
-            divider
-                .top
-                .iter()
-                .chain(&divider.bottom)
-                .map(|(r, _)| r.clone()),
+            (divider.top.iter().chain(&divider.bottom))
+                .flat_map(|leg| leg.links.iter().map(|(r, _)| r.clone())),
         );
         out.push(LintFinding {
             check: LintCheck::OperatingEnvelope,
@@ -1279,17 +1679,10 @@ fn envelope_lint_in(
         let net_of = |role| role_net_id(comp, model, role).and_then(|id| board.net(id));
         // A stand-in card's window is no measure of the part's own supply.
         let own = model.ratings.basis.judges(Limit::Envelope);
-        for envelope in binding(&model.envelope, ambient_c) {
+        let alternatives = Alternatives::of(&model.envelope, ambient_c);
+        for &envelope in &alternatives.rows {
             match envelope {
-                OperatingEnvelope::SupplyRange {
-                    pin,
-                    min_v,
-                    max_v,
-                    abs_max_v,
-                    basis,
-                    abs_max_basis,
-                    ..
-                } => {
+                OperatingEnvelope::SupplyRange { pin, max_v, .. } => {
                     let Some(net) = net_of(pin) else { continue };
                     let net_id = net.id;
                     // An op-amp or comparator card prints its limits as the V+ to V-
@@ -1314,30 +1707,63 @@ fn envelope_lint_in(
                         RailKnowledge::Unknown if is_optional_supply(model, pin) => continue,
                         knowledge => {
                             if abstained_nets.insert(net_id) {
-                                let finding =
-                                    unknown_abstention(&net.name, &knowledge, &comp.reference);
+                                let finding = unknown_abstention(
+                                    &net.name,
+                                    &knowledge,
+                                    &comp.reference,
+                                    resolver.unresolved(net_id),
+                                );
                                 report.findings.push(finding);
                             }
                             // No level known: a candidate for the static
-                            // starved-rail estimate, from the card's draw.
-                            if own && matches!(knowledge, RailKnowledge::Unknown) {
+                            // starved-rail estimate, from the card's draw, at
+                            // the lowest minimum any alternative row allows.
+                            let peers = alternatives.peers(envelope);
+                            let first = peers.first().is_none_or(|p| std::ptr::eq(*p, envelope));
+                            if own && first && matches!(knowledge, RailKnowledge::Unknown) {
+                                let lowest = (peers.iter().filter_map(|p| window(p)))
+                                    .map(|(lo, _)| lo)
+                                    .fold(f64::INFINITY, f64::min);
                                 unleveled.entry(net_id).or_default().push(Starved {
                                     finding: usize::MAX,
                                     reference: comp.reference.clone(),
-                                    min_v: *min_v,
+                                    min_v: lowest,
                                     draw_a: static_draw_a(model),
                                 });
                             }
                             continue;
                         }
                     };
-                    let min_tol = reltol.mul_add(min_v.abs(), vntol);
-                    let max_tol = reltol.mul_add(max_v.abs(), vntol);
-                    if range.min_v >= *min_v - min_tol && range.max_v <= *max_v + max_tol {
+                    let fits = |row: &OperatingEnvelope| {
+                        window(row).is_some_and(|(lo, hi)| {
+                            range.min_v >= lo - reltol.mul_add(lo.abs(), vntol)
+                                && range.max_v <= hi + reltol.mul_add(hi.abs(), vntol)
+                        })
+                    };
+                    // A row the rail misses is no finding when the rail fits a
+                    // whole alternative to it, and of the rows that fail
+                    // together only the first reports, naming every one.
+                    if fits(envelope)
+                        || alternatives.excused(envelope, &fits)
+                        || !alternatives.reports(envelope, &fits)
+                    {
                         continue;
                     }
-                    let above_abs_max = abs_max_v.is_some_and(|limit| range.max_v > limit);
-                    let mut severity = finding_severity(envelope.severity());
+                    // Judged against the alternative the rail comes nearest,
+                    // at the most serious grade any of them asks for; the
+                    // absolute maximum is the loosest one any of them states.
+                    let peers = alternatives.peers(envelope);
+                    let Some((min_v, max_v)) = window(nearest(&peers, range)) else {
+                        continue;
+                    };
+                    let (min_v, max_v) = (&min_v, &max_v);
+                    let min_tol = reltol.mul_add(min_v.abs(), vntol);
+                    let max_tol = reltol.mul_add(max_v.abs(), vntol);
+                    let abs_max = loosest_abs_max(&peers);
+                    let above_abs_max = abs_max.is_some_and(|(limit, _)| range.max_v > limit);
+                    let mut severity = (peers.iter())
+                        .map(|p| finding_severity(p.severity()))
+                        .fold(Severity::Low, more_serious);
                     if above_abs_max {
                         severity = raised_one_band(severity);
                     }
@@ -1396,7 +1822,8 @@ fn envelope_lint_in(
                             format_volts(nominal)
                         )
                     } else {
-                        compatible_supply_rail(&resolver, net_id, *min_v, *max_v)
+                        (peers.iter().filter_map(|p| window(p)))
+                            .find_map(|(lo, hi)| compatible_supply_rail(&resolver, net_id, lo, hi))
                             .map(|candidate| {
                                 format!(" Tie {pin} to compatible rail '{candidate}'.")
                             })
@@ -1412,9 +1839,9 @@ fn envelope_lint_in(
                             draw_a: static_draw_a(model),
                         });
                     }
-                    let over_abs = abs_max_v
+                    let over_abs = abs_max
                         .filter(|_| above_abs_max)
-                        .map(|limit| {
+                        .map(|(limit, _)| {
                             format!(
                                 ", {} above its {} absolute maximum",
                                 format_volts(range.max_v - limit),
@@ -1422,13 +1849,18 @@ fn envelope_lint_in(
                             )
                         })
                         .unwrap_or_default();
-                    let seen = format!( "{} role {pin} on '{}' presents {}, outside the {} operating envelope{over_abs}",
-                        comp.reference, net.name, format_series(&[range.min_v, range.max_v], "..", "V"), format_series(&[*min_v, *max_v], "..", "V"));
+                    let seen = format!(
+                        "{} role {pin} on '{}' presents {}, {}{over_abs}",
+                        comp.reference,
+                        net.name,
+                        format_series(&[range.min_v, range.max_v], "..", "V"),
+                        outside_text(&peers)
+                    );
                     // The window and the absolute maximum come from different
                     // tables: a finding that states the latter cites both.
-                    let citation = abs_max_v.filter(|_| above_abs_max).map_or_else(
-                        || format!("basis: \"{basis}\""),
-                        |limit| abs_max_citation(basis, abs_max_basis, limit),
+                    let citation = abs_max.filter(|_| above_abs_max).map_or_else(
+                        || bases_citation(&peers),
+                        |(limit, row)| abs_max_citation(row.basis(), abs_max_basis(row), limit),
                     );
                     let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
@@ -1474,8 +1906,12 @@ fn envelope_lint_in(
                             RailKnowledge::Known(range) => known.push(range),
                             knowledge => {
                                 if abstained_nets.insert(net.id) {
-                                    let finding =
-                                        unknown_abstention(&net.name, &knowledge, &comp.reference);
+                                    let finding = unknown_abstention(
+                                        &net.name,
+                                        &knowledge,
+                                        &comp.reference,
+                                        resolver.unresolved(net.id),
+                                    );
                                     report.findings.push(finding);
                                 }
                             }
@@ -1567,6 +2003,7 @@ fn unreadable_name_abstentions(
                 &net.name,
                 &RailKnowledge::Unknown,
                 reference,
+                resolver.unresolved(net.id),
             ))
         })
         .collect()
@@ -3080,16 +3517,27 @@ vout_setpoint = 3.3
                 vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
             )],
         );
-        let regulated = |low, high| {
-            let lib = library("span", &card(low, high, true));
+        let regulated = |low, high, fb| {
+            let lib = library("span", &card(low, high, fb));
             BoardStatics::of(&b, &lib)
                 .rails(&b)
                 .regulators
                 .get(&4)
                 .copied()
         };
-        assert_eq!(regulated(0.9, 6.0), None, "a setting span is no rail level");
-        let tight = regulated(3.2, 3.4).expect("a regulation band is");
+        assert_eq!(
+            regulated(0.9, 6.0, true),
+            None,
+            "a setting span is no rail level"
+        );
+        // With its feedback pin wired to no divider, an adjustable part's
+        // tight band is the datasheet's example too: no level of this rail.
+        assert_eq!(
+            regulated(3.2, 3.4, true),
+            None,
+            "an unread divider sets no level"
+        );
+        let tight = regulated(3.2, 3.4, false).expect("a fixed regulation band is");
         assert!((tight.min_v - 3.2).abs() < 1e-9 && (tight.max_v - 3.4).abs() < 1e-9);
     }
 
@@ -3771,5 +4219,445 @@ unlocked_by = "validated behavior"
         for rail in ["+5V", "+3V3_3V3", "VDD", "+12V_FB", "+1KV_EN"] {
             assert!(lint(rail).is_empty(), "{rail}: {:?}", lint(rail));
         }
+    }
+
+    /// A feedback-set buck whose card's set point is the datasheet's 1.2 V
+    /// example, and a downstream converter with two overlapping input rows
+    /// (1.9 to 5.5 V; 2.5 to 5.5 V): joint limits, both binding.
+    const SERIES_FEEDBACK: &str = r#"
+[[models]]
+id = "series_buck"
+kind = "vreg"
+description = "feedback-set buck fixture with a 1.2 V example set point"
+[models.match]
+value_re = "^SERIES_BUCK$"
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "fb"
+"4" = "out"
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 1.2
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.8
+
+[[models]]
+id = "downstream"
+kind = "digital"
+description = "identity-only downstream converter with two input rows"
+[models.match]
+value_re = "^DOWNSTREAM$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vin"
+"2" = "gnd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vin"
+min_v = 1.9
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Recommended Operating Conditions, VIN row"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vin"
+min_v = 2.5
+max_v = 5.5
+note = "with the power-good output in use"
+basis = "Recommended Operating Conditions, VIN row, PG"
+"#;
+
+    /// The buck U1 (net 4 its output `RAIL_A`, net 3 its feedback pin) with
+    /// `divider` and the downstream U2 on `RAIL_A`: the board and its library.
+    fn series_feedback_board(divider: Vec<Component>) -> (ExtractedBoard, ModelLibrary) {
+        let mut parts = vec![
+            part(
+                "U1",
+                "SERIES_BUCK",
+                vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+            ),
+            part("U2", "DOWNSTREAM", vec![pin("1", 4), pin("2", 1)]),
+        ];
+        parts.extend(divider);
+        let nets = [
+            (1, "GND"),
+            (2, "VIN"),
+            (3, "FB1"),
+            (4, "RAIL_A"),
+            (5, "FB_MID"),
+            (6, "FB_LOW"),
+        ];
+        (board(&nets, parts), library("seriesfb", SERIES_FEEDBACK))
+    }
+
+    /// U2's envelope findings and `RAIL_A`'s regulated range on that board.
+    fn series_feedback(divider: Vec<Component>) -> (Vec<LintFinding>, Option<RailRange>) {
+        let (b, lib) = series_feedback_board(divider);
+        let rail = BoardStatics::of(&b, &lib)
+            .rails(&b)
+            .regulators
+            .get(&4)
+            .copied();
+        let report = envelope_lint(&b, &lib);
+        let found = (report.of_check(LintCheck::OperatingEnvelope))
+            .filter(|f| f.refs.contains(&"U2".to_string()))
+            .cloned()
+            .collect();
+        (found, rail)
+    }
+
+    /// A top leg built as 4.7k + 1k through a mid-node (with a feed-forward
+    /// capacitor on it, which carries no DC) over 1k to ground holds a 0.8 V
+    /// reference at 0.8 * 6.7 = 5.36 V: the downstream part's 1.9..5.5 V and
+    /// 2.5..5.5 V rows both hold, so nothing is said, and the card's 1.2 V
+    /// example is the level of no net. Faulty: 6.2k + 1k over 1k sets 6.56 V,
+    /// past both rows and the 6 V absolute maximum.
+    #[test]
+    fn a_series_feedback_chain_sets_the_rail_not_the_cards_example_set_point() {
+        let chain = |top: &str| {
+            let mut cff = part("C1", "22p", vec![pin("1", 4), pin("2", 5)]);
+            cff.lib_id = "Device:C".into();
+            vec![
+                resistor("R1", top, 4, 5),
+                resistor("R2", "1k", 5, 3),
+                resistor("R3", "1k", 3, 1),
+                cff,
+            ]
+        };
+        let (found, rail) = series_feedback(chain("4.7k"));
+        let rail = rail.expect("the chain is read");
+        assert!(
+            (rail.min_v - 5.36).abs() < 1e-9 && (rail.max_v - 5.36).abs() < 1e-9,
+            "{rail:?}"
+        );
+        assert!(found.is_empty(), "{found:#?}");
+        let (found, rail) = series_feedback(chain("6.2k"));
+        assert!((rail.expect("read").max_v - 6.56).abs() < 1e-9);
+        // One finding per row: the two rows are joint limits, not alternatives.
+        assert_eq!(found.len(), 2, "{found:#?}");
+        for f in &found {
+            assert!(
+                f.message.contains("6.56") && !f.message.contains("1.2 V"),
+                "{}",
+                f.message
+            );
+        }
+        assert!(
+            found.iter().any(|f| f.severity == Severity::High),
+            "{found:#?}"
+        );
+    }
+
+    /// Controls for the chain: one 5.7k top resistor reads the same 5.36 V,
+    /// and so do a top leg through a 0 Ω link and a bottom leg split into two
+    /// 500R parts; a mid-node a third part also loads is no series link, so
+    /// the divider is unread.
+    #[test]
+    fn a_single_top_resistor_or_a_split_leg_reads_the_same_rail() {
+        let (found, rail) = series_feedback(vec![
+            resistor("R1", "5.7k", 4, 3),
+            resistor("R3", "1k", 3, 1),
+        ]);
+        assert!((rail.expect("read").max_v - 5.36).abs() < 1e-9);
+        assert!(found.is_empty(), "{found:#?}");
+        let (found, rail) = series_feedback(vec![
+            resistor("R0", "0", 4, 5),
+            resistor("R1", "5.7k", 5, 3),
+            resistor("R3", "500R", 3, 6),
+            resistor("R4", "500R", 6, 1),
+        ]);
+        assert!((rail.expect("read").max_v - 5.36).abs() < 1e-9);
+        assert!(found.is_empty(), "{found:#?}");
+        let (_, rail) = series_feedback(vec![
+            resistor("R1", "4.7k", 4, 5),
+            resistor("R2", "1k", 5, 3),
+            resistor("R3", "1k", 3, 1),
+            resistor("R4", "10k", 5, 1),
+        ]);
+        assert_eq!(rail, None, "a loaded mid-node is no series chain");
+    }
+
+    /// With the divider's bottom leg missing from the board, the rail's
+    /// level is unknown: the downstream part abstains once, naming the
+    /// regulator whose divider could not be read, and the card's 1.2 V
+    /// example never stands in for it (it would fail both input rows).
+    #[test]
+    fn an_unread_divider_abstains_instead_of_taking_the_example_set_point() {
+        let (found, rail) = series_feedback(vec![
+            resistor("R1", "4.7k", 4, 5),
+            resistor("R2", "1k", 5, 3),
+        ]);
+        assert_eq!(rail, None);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let msg = &found[0].message;
+        assert!(found[0].is_abstention(), "{msg}");
+        assert!(
+            msg.contains("rail level unresolved") && msg.contains("U1 (SERIES_BUCK)"),
+            "{msg}"
+        );
+        assert!(!msg.contains("1.2"), "{msg}");
+    }
+
+    /// An adjustable part with its feedback pin on its output and no leg to
+    /// ground holds the output at its reference (unity feedback): 0.8 V.
+    #[test]
+    fn unity_feedback_sets_the_rail_at_the_reference() {
+        let lib = library("unityfb", SERIES_FEEDBACK);
+        let b = board(
+            &[(1, "GND"), (2, "VIN"), (4, "RAIL_A")],
+            vec![part(
+                "U1",
+                "SERIES_BUCK",
+                vec![pin("1", 2), pin("2", 1), pin("3", 4), pin("4", 4)],
+            )],
+        );
+        let rail = BoardStatics::of(&b, &lib)
+            .rails(&b)
+            .regulators
+            .get(&4)
+            .copied();
+        let rail = rail.expect("unity feedback is read");
+        assert!(
+            (rail.min_v - 0.8).abs() < 1e-9 && (rail.max_v - 0.8).abs() < 1e-9,
+            "{rail:?}"
+        );
+    }
+
+    /// One supply pin printed for two supply modes that exclude each other:
+    /// VREGIN 3.6 to 5.5 V (5 V input) and 3.0 to 3.6 V (3.3 V input). The
+    /// 5 V row also states a 6 V absolute maximum, the 3.3 V row 4 V.
+    fn alt_card(tagged: bool) -> String {
+        let mode = |m: &str| {
+            if tagged {
+                format!("mode = \"{m}\"\n")
+            } else {
+                String::new()
+            }
+        };
+        format!(
+            r#"
+[[models]]
+id = "alt_rows"
+kind = "digital"
+description = "alternative supply-mode rows fixture"
+[models.match]
+value_re = "^ALT_ROWS$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vregin"
+"2" = "gnd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 3.6
+max_v = 5.5
+abs_max_v = 6.0
+{}basis = "Recommended Operating Conditions, VREGIN, 5 V input"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.0
+{}basis = "Recommended Operating Conditions, VREGIN, 3.3 V input"
+"#,
+            mode("5 V input"),
+            mode("3.3 V input")
+        )
+    }
+
+    /// U1's envelope findings with `card` on a rail named `rail`, at `volts`
+    /// when given (else the name's band).
+    fn alt_findings(card: &str, rail: &str, volts: Option<f64>) -> Vec<LintFinding> {
+        let lib = library("altrows", card);
+        let b = board(
+            &[(1, "GND"), (2, rail)],
+            vec![part("U1", "ALT_ROWS", vec![pin("1", 2), pin("2", 1)])],
+        );
+        let drives: BTreeMap<String, f64> =
+            volts.map(|v| (rail.to_string(), v)).into_iter().collect();
+        let report = envelope_lint_with_drives(&b, &lib, &drives);
+        report
+            .of_check(LintCheck::OperatingEnvelope)
+            .cloned()
+            .collect()
+    }
+
+    /// Alternative rows are OR'ed, untagged (their common window, 3.6 V
+    /// alone, fits no real rail) or tagged with their modes: a 4.75..5.25 V
+    /// rail, a 3.3 V one and a 4.0 V one each fit one mode and are silent.
+    /// A 6.0 V rail fits neither: one finding, naming both alternatives;
+    /// 2.9 V likewise, below both.
+    #[test]
+    fn alternative_supply_mode_rows_are_ored_per_pin() {
+        for tagged in [false, true] {
+            let card = alt_card(tagged);
+            let quiet = [("+5V", None), ("VREG", Some(3.3)), ("VREG", Some(4.0))];
+            for (rail, volts) in quiet {
+                let found = alt_findings(&card, rail, volts);
+                assert!(
+                    found.is_empty(),
+                    "tagged {tagged}, {rail} {volts:?}: {found:#?}"
+                );
+            }
+            for volts in [6.0, 2.9] {
+                let found = alt_findings(&card, "VREG", Some(volts));
+                assert_eq!(found.len(), 1, "tagged {tagged}, {volts} V: {found:#?}");
+                let msg = &found[0].message;
+                assert!(
+                    msg.contains("3.6..5.5 V") && msg.contains("3..3.6 V"),
+                    "{msg}"
+                );
+                assert!(msg.contains("neither"), "{msg}");
+                assert_ne!(found[0].severity, Severity::Low, "{msg}");
+            }
+        }
+        let tagged = alt_findings(&alt_card(true), "VREG", Some(6.0));
+        let msg = &tagged[0].message;
+        assert!(
+            msg.contains("(5 V input)") && msg.contains("(3.3 V input)"),
+            "{msg}"
+        );
+    }
+
+    /// The absolute maximum of alternatives is the loosest one states: 4.5 V
+    /// is past the 3.3 V mode's 4 V but inside the 5 V mode, so it is silent;
+    /// 6.5 V is past the 5 V mode's 6 V and is reported as such.
+    #[test]
+    fn alternatives_are_judged_against_the_loosest_absolute_maximum() {
+        for tagged in [false, true] {
+            let card = alt_card(tagged);
+            let found = alt_findings(&card, "VREG", Some(4.5));
+            assert!(found.is_empty(), "tagged {tagged}: {found:#?}");
+            let found = alt_findings(&card, "VREG", Some(6.5));
+            assert_eq!(found.len(), 1, "tagged {tagged}: {found:#?}");
+            let msg = &found[0].message;
+            assert!(
+                msg.contains("absolute maximum") && msg.contains("6 V"),
+                "{msg}"
+            );
+            assert_ne!(found[0].severity, Severity::Low, "{msg}");
+        }
+    }
+
+    /// A tagged mode holds only when the rail fits every row of it: the 5 V
+    /// mode here has a room-temperature row (3.6 to 5.5 V) and a full-range
+    /// one (4.0 to 5.5 V). 3.8 V fits the first only, and no mode whole, so
+    /// it is reported; 4.5 V fits the 5 V mode and 3.3 V the 3.3 V mode.
+    #[test]
+    fn a_mode_holds_only_when_every_one_of_its_rows_does() {
+        let card = r#"
+[[models]]
+id = "alt_rows"
+kind = "digital"
+description = "two rows per mode fixture"
+[models.match]
+value_re = "^ALT_ROWS$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vregin"
+"2" = "gnd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 3.6
+max_v = 5.5
+mode = "5 V input"
+conditions = "TA = 25 °C"
+basis = "Recommended Operating Conditions, VREGIN, 5 V input"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 4.0
+max_v = 5.5
+mode = "5 V input"
+conditions = "TA = -40 °C to 85 °C"
+basis = "Recommended Operating Conditions, VREGIN, 5 V input, full range"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vregin"
+min_v = 3.0
+max_v = 3.6
+mode = "3.3 V input"
+basis = "Recommended Operating Conditions, VREGIN, 3.3 V input"
+"#;
+        for volts in [4.5, 3.3] {
+            let found = alt_findings(card, "VREG", Some(volts));
+            assert!(found.is_empty(), "{volts} V: {found:#?}");
+        }
+        let found = alt_findings(card, "VREG", Some(3.8));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("4..5.5 V"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    /// Rows that are no alternatives stay joint limits. Overlapping untagged
+    /// rows (1.9 to 5.5 V and 2.5 to 5.5 V): 2.2 V breaks the second. Disjoint
+    /// untagged rows printed for different temperatures: 4.0 V breaks the
+    /// room-temperature one. An untagged row beside a tagged one binds in
+    /// every mode: 4.0 V breaks it although it fits the tagged row.
+    #[test]
+    fn rows_that_are_no_alternatives_are_still_all_held() {
+        let card = |rows: &[(f64, f64, &str)]| {
+            let mut text = String::from(
+                r#"
+[[models]]
+id = "alt_rows"
+kind = "digital"
+description = "joint rows fixture"
+[models.match]
+value_re = "^ALT_ROWS$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vregin"
+"2" = "gnd"
+"#,
+            );
+            text.extend(rows.iter().map(|(lo, hi, extra)| {
+                format!(
+                    "[[models.envelope]]\nkind = \"supply_range\"\npin = \"vregin\"\nmin_v = {lo:?}\nmax_v = {hi:?}\n{extra}\nbasis = \"Recommended Operating Conditions, VREGIN {lo} to {hi} V\"\n"
+                )
+            }));
+            text
+        };
+        let overlapping = card(&[(1.9, 5.5, ""), (2.5, 5.5, "")]);
+        assert_eq!(alt_findings(&overlapping, "VREG", Some(2.2)).len(), 1);
+        assert!(alt_findings(&overlapping, "VREG", Some(5.36)).is_empty());
+        let temperatures = card(&[
+            (3.0, 3.6, "conditions = \"TA = 25 °C\""),
+            (3.6, 5.5, "conditions = \"TA = -40 °C to 85 °C\""),
+        ]);
+        let found = alt_findings(&temperatures, "VREG", Some(4.0));
+        assert!(
+            found.iter().any(|f| f.message.contains("3..3.6 V")),
+            "{found:#?}"
+        );
+        let mixed = card(&[(3.0, 3.6, ""), (3.6, 5.5, "mode = \"5 V input\"")]);
+        let found = alt_findings(&mixed, "VREG", Some(4.0));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("outside the 3..3.6 V"),
+            "{}",
+            found[0].message
+        );
     }
 }
