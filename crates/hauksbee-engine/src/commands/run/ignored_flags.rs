@@ -60,6 +60,11 @@ const SURFACE_FLAGS: &[SurfaceFlag] = &[
             SelectedSurface::Serial,
             SelectedSurface::CheckThenCosim,
             SelectedSurface::Default,
+            // The static suite reads its interrupt vectors (see
+            // `reports::firmware_intent`).
+            SelectedSurface::Check,
+            SelectedSurface::Lint,
+            SelectedSurface::BareJson,
         ],
     },
 ];

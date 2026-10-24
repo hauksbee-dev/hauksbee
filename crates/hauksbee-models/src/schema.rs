@@ -347,6 +347,14 @@ pub struct PinCapability {
     /// `[models.pin_capability.pwm]`: the pads a timer's PWM output can use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pwm: Option<FunctionPads>,
+    /// `[models.pin_capability.timer_capture]`: the pads a hardware timer's
+    /// input-capture channel can latch (an AVR `ICPn`, an STM32 `TIMx_CHy` pad).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer_capture: Option<FunctionPads>,
+    /// `[models.pin_capability.routed]`: the functions the part routes to any
+    /// pad through a matrix, so no pad list exists for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routed: Option<RoutedFunctions>,
 }
 
 impl PinCapability {
@@ -365,7 +373,20 @@ impl PinCapability {
             && self.uart_tx.is_none()
             && self.uart_rx.is_none()
             && self.pwm.is_none()
+            && self.timer_capture.is_none()
+            && self.routed.is_none()
             && self.xtal_int_caps.is_empty()
+    }
+
+    /// Whether the card states where `function` can go: a pad table, or the
+    /// statement that the part routes it to any pad.
+    #[must_use]
+    pub fn declares(&self, function: PeripheralFunction) -> bool {
+        self.table(function).is_some()
+            || self
+                .routed
+                .as_ref()
+                .is_some_and(|r| r.functions.contains(function.key()))
     }
 
     /// The table for `function`, when the card declares one.
@@ -380,6 +401,7 @@ impl PinCapability {
             PeripheralFunction::UartTx => self.uart_tx.as_ref(),
             PeripheralFunction::UartRx => self.uart_rx.as_ref(),
             PeripheralFunction::Pwm => self.pwm.as_ref(),
+            PeripheralFunction::TimerCapture => self.timer_capture.as_ref(),
         }
     }
 }
@@ -408,6 +430,23 @@ pub struct FunctionPads {
     /// bus whose master is another part never uses one.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub master_only: BTreeSet<String>,
+}
+
+/// The peripheral functions a part routes to ANY pad through a matrix.
+///
+/// An `ESP32` GPIO matrix or an `nRF52` `PSEL` register does this; see
+/// [`PinCapability::routed`]. A function listed here has no pad table: no pad
+/// is excluded, so a check that reads the tables abstains on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutedFunctions {
+    /// The datasheet or reference-manual sentence and page that says any pad
+    /// can be selected.
+    pub basis: String,
+    /// The keys of the functions that are routed (`spi_sck`, `uart_tx`...),
+    /// each one a [`PeripheralFunction::key`].
+    #[serde(default)]
+    pub functions: BTreeSet<String>,
 }
 
 /// One crystal oscillator of an MCU whose load capacitors are on the die.
@@ -491,11 +530,103 @@ pub struct AdcPins {
     pub pads: BTreeMap<String, String>,
 }
 
+/// A peripheral a card can name and so owes a `pin_capability` table for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NamedPeripheral {
+    /// An ADC input (`[models.pin_capability.adc]`).
+    Adc,
+    /// A fixed-pad peripheral function (`[models.pin_capability.<key>]`).
+    Function(PeripheralFunction),
+}
+
+impl NamedPeripheral {
+    /// The table key on a card.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Adc => "adc",
+            Self::Function(f) => f.key(),
+        }
+    }
+
+    /// Every peripheral a complete MCU card states: the ADC and each function.
+    #[must_use]
+    pub fn all() -> Vec<Self> {
+        std::iter::once(Self::Adc)
+            .chain(PeripheralFunction::ALL.map(Self::Function))
+            .collect()
+    }
+}
+
 impl ModelEntry {
     /// Whether the card says which of its pads are ADC inputs.
     #[must_use]
     pub const fn adc_declared(&self) -> bool {
         self.pin_capability.adc.is_some()
+    }
+
+    /// Whether the card states where `peripheral` can go: a pad table (an
+    /// empty one says the package has none) or a `routed` declaration.
+    #[must_use]
+    pub fn declares(&self, peripheral: NamedPeripheral) -> bool {
+        match peripheral {
+            NamedPeripheral::Adc => self.adc_declared(),
+            NamedPeripheral::Function(f) => self.pin_capability.declares(f),
+        }
+    }
+
+    /// The peripherals this card names, each with the words that name it: a pad
+    /// role that states the function (`pa5_spi1_sck`, `pd1_txd`, `pb0_icp1`,
+    /// `pa0_adc0`) or a `[models.peripherals]` table. A name states that the
+    /// part has the peripheral, so the card owes its table.
+    #[must_use]
+    pub fn named_peripherals(&self) -> BTreeMap<NamedPeripheral, String> {
+        use hauksbee_ir::pin_functions::{peripheral_functions_named, uart_role_direction};
+        let mut named = BTreeMap::new();
+        if self.peripherals.adc.is_some() {
+            named.insert(NamedPeripheral::Adc, "[models.peripherals.adc]".to_owned());
+        }
+        if self.peripherals.uart.is_some() {
+            for f in [PeripheralFunction::UartTx, PeripheralFunction::UartRx] {
+                named.insert(
+                    NamedPeripheral::Function(f),
+                    "[models.peripherals.uart]".to_owned(),
+                );
+            }
+        }
+        for (pad, role) in &self.pins {
+            let r = role.to_ascii_lowercase();
+            let at = || format!("pad {pad} role '{role}'");
+            for f in peripheral_functions_named(&r) {
+                named.entry(NamedPeripheral::Function(f)).or_insert_with(at);
+            }
+            let adc = r.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+                w.strip_prefix("adc")
+                    .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+            });
+            if adc {
+                named.entry(NamedPeripheral::Adc).or_insert_with(at);
+            }
+            if hauksbee_ir::pin_functions::role_names_timer_capture(&r) {
+                named
+                    .entry(NamedPeripheral::Function(PeripheralFunction::TimerCapture))
+                    .or_insert_with(at);
+            }
+            match uart_role_direction(&r) {
+                Some(true) => {
+                    named
+                        .entry(NamedPeripheral::Function(PeripheralFunction::UartTx))
+                        .or_insert_with(at);
+                }
+                Some(false) => {
+                    named
+                        .entry(NamedPeripheral::Function(PeripheralFunction::UartRx))
+                        .or_insert_with(at);
+                }
+                None => {}
+            }
+        }
+        named
     }
 
     /// The `[models.pins]` role of the input that releases the output on `pad`

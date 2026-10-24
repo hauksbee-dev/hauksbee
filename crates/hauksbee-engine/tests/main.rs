@@ -35,6 +35,8 @@ mod binder_gpio_promotion;
 mod binder_pin_map_merge;
 #[path = "bitbang_spi_cosim.rs"]
 mod bitbang_spi_cosim;
+#[path = "board_assembly_cli.rs"]
+mod board_assembly_cli;
 #[path = "bom_identity.rs"]
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]
@@ -128,6 +130,8 @@ mod failed_chunk_reason;
 mod faults;
 #[path = "findings_complete.rs"]
 mod findings_complete;
+#[path = "firmware_intent_cli.rs"]
+mod firmware_intent_cli;
 #[path = "generic_led_corners.rs"]
 mod generic_led_corners;
 #[path = "generic_mosfet_corner_check.rs"]

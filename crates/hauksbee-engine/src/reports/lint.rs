@@ -31,6 +31,9 @@ pub(crate) fn emit_quiet(
     report.findings.extend(
         crate::checks::layout_lint(board, input.geo_text(), Some(input.board_path)).findings,
     );
+    report
+        .findings
+        .extend(super::firmware_intent::findings(board, lib, input.firmware));
     // Without this, a lint finding the board's owner overruled turns
     // `--lint --strict` red on a board that `--check --strict` passes, and the
     // narrower command looks like it lost the waiver.

@@ -386,6 +386,11 @@ pub enum LintCheck {
     /// disagrees with the model card's pin map for that pin number. Produced
     /// by the engine-layer `symbol_card_pins` check.
     SymbolCardPinMismatch,
+    /// An interrupt the firmware handles, such as an AVR timer input capture,
+    /// that fires only from a pad the board leaves unconnected, so the handler
+    /// can never run. Produced by the `firmware_intent` check, which runs only
+    /// when a firmware image is given.
+    FirmwareUnconnectedPad,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -510,7 +515,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -562,6 +567,7 @@ impl LintCheck {
         Self::SwitchShort,
         Self::PinMuxCapability,
         Self::SymbolCardPinMismatch,
+        Self::FirmwareUnconnectedPad,
     ];
 
     #[must_use]
@@ -618,6 +624,7 @@ impl LintCheck {
             Self::SwitchShort => "switch_short",
             Self::PinMuxCapability => "pin_mux_capability",
             Self::SymbolCardPinMismatch => "symbol_card_pin_mismatch",
+            Self::FirmwareUnconnectedPad => "firmware_unconnected_pad",
         }
     }
 }

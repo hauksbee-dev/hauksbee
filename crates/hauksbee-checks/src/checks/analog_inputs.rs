@@ -878,4 +878,73 @@ mod tests {
             "{r:?}"
         );
     }
+
+    const HEADER_FP: &str = "Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical";
+
+    /// A 2x5 header whose pin `n` is on net `nets[n - 1]` (0: unconnected).
+    fn header(reference: &str, nets: &[i64]) -> Component {
+        let mut h = part(reference, "Conn_02x05", &[]);
+        h.footprint = HEADER_FP.into();
+        h.lib_id = "Connector:Conn_02x05".into();
+        h.pins = nets
+            .iter()
+            .enumerate()
+            .map(|(i, &net)| hauksbee_extract::Pin {
+                number: (i + 1).to_string(),
+                net: (net != 0).then_some(net),
+                ..Default::default()
+            })
+            .collect();
+        h
+    }
+
+    /// Two boards mated by a 10-pin header pair: a carrier whose pot wiper is on
+    /// header pin 3, and a breakout whose header pin 3 reaches pad `pad` of an
+    /// `ATmega328P`.
+    fn mated_boards(pad: &str) -> Vec<(String, ExtractedBoard)> {
+        let carrier = board(
+            &[(1, "GND"), (2, "+3V3"), (3, "WIPER")],
+            vec![
+                header("J1", &[1, 2, 3, 0, 0, 0, 0, 0, 0, 0]),
+                part("RV1", "10k", &[("1", 2), ("2", 3), ("3", 1)]),
+            ],
+        );
+        let breakout = board(
+            &[(1, "GND"), (2, "VCC"), (3, "A_IN")],
+            vec![
+                header("J1", &[1, 2, 3, 0, 0, 0, 0, 0, 0, 0]),
+                part(
+                    "U1",
+                    "ATmega328P",
+                    &[("7", 2), ("8", 1), ("20", 2), ("22", 1), (pad, 3)],
+                ),
+            ],
+        );
+        vec![("carrier".into(), carrier), ("breakout".into(), breakout)]
+    }
+
+    // The pot is on one board and the MCU on the other: neither board alone has
+    // an analogue source meeting the MCU's pad. Assembled, the wiper reaches pad
+    // 4 (PD2, no ADC channel) and is flagged; on pad 23 (ADC0) it is silent.
+    #[test]
+    fn a_carrier_wiper_reaching_a_non_adc_pad_of_the_breakout_is_flagged_after_assembly() {
+        let boards = mated_boards("4");
+        for (label, b) in &boards {
+            assert!(no_adc(b).is_empty(), "{label} alone: nothing to judge");
+        }
+        let assembled = hauksbee_extract::mate::assemble(&boards, &[]);
+        assert_eq!(assembled.mates.len(), 1, "{:?}", assembled.notes);
+        let got = no_adc(&assembled.board);
+        assert_eq!(got.len(), 1, "{got:?}");
+        for want in ["U1 pad 4", "PD2_INT0", "WIPER", "PC0_ADC0"] {
+            assert!(got[0].message.contains(want), "{want}: {}", got[0].message);
+        }
+    }
+
+    #[test]
+    fn a_carrier_wiper_reaching_an_adc_pad_of_the_breakout_is_silent_after_assembly() {
+        let assembled = hauksbee_extract::mate::assemble(&mated_boards("23"), &[]);
+        assert_eq!(assembled.mates.len(), 1, "{:?}", assembled.notes);
+        assert!(no_adc(&assembled.board).is_empty());
+    }
 }

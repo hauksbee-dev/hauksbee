@@ -21,12 +21,12 @@ use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, Severity};
 use hauksbee_models::ModelLibrary;
 
 /// `(pad, pin name, electrical type, net)`.
-type Pin<'a> = (&'a str, &'a str, &'a str, &'a str);
+pub type Pin<'a> = (&'a str, &'a str, &'a str, &'a str);
 /// `(reference, value, library part, pins)`.
-type Part<'a> = (&'a str, &'a str, &'a str, &'a [Pin<'a>]);
+pub type Part<'a> = (&'a str, &'a str, &'a str, &'a [Pin<'a>]);
 
 /// The KiCad netlist text of `parts`.
-fn netlist(parts: &[Part<'_>]) -> String {
+pub fn netlist(parts: &[Part<'_>]) -> String {
     let mut nets: Vec<&str> = Vec::new();
     for (.., pins) in parts {
         for (.., net) in *pins {

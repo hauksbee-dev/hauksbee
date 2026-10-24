@@ -2028,6 +2028,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A microcontroller's hardware peripherals (SPI, I2C, UART, PWM) reach only the pins its pin-mux table lists. A net routed to another pin cannot use the hardware block; firmware would have to bit-bang it, slowly, or the board has to be respun.".to_string(),
                 "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it.".to_string(),
             ),
+            LintCheck::FirmwareUnconnectedPad => (
+                format!("The firmware for {parts} handles an interrupt whose pad nothing is wired to. {}", f.message),
+                "An AVR's timer input capture, like its other pin-fed interrupts, fires only from one fixed pad. The firmware's vector table says the program waits for that event; if the pad is connected to nothing, the event never comes and the handler, and the measurement it makes, never runs.".to_string(),
+                "Wire the signal the firmware times to that pad, or remove the interrupt from the firmware if the board measures it another way.".to_string(),
+            ),
             LintCheck::SymbolCardPinMismatch => (
                 format!("The symbol of {parts} names a pin differently from the part's card. {}", f.message),
                 "The schematic symbol and the model card are both meant to describe the same package pin by pin. When they disagree on what a numbered pin is, one of them is wrong: the symbol may be for another package or the card may be mapped to the wrong pins, and every check that reads the card then judges the wrong wiring.".to_string(),

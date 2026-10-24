@@ -706,6 +706,16 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
 
     refuse_eagle_binary(&file_name, &raw)?;
 
+    // An assembly manifest: several boards that mate through connectors, read
+    // as the one product they make.
+    if ext_lower == "toml" {
+        if let Ok(text) = std::str::from_utf8(&raw) {
+            if crate::board_assembly::is_manifest(text) {
+                return crate::board_assembly::from_manifest(path, text);
+            }
+        }
+    }
+
     // An ODB++ ARCHIVE (`.tgz`, `.tar.gz`, `.tar` or `.zip`), before the zip
     // branch below claims every zip as gerbers. Content-sniffed, so a job saved
     // under any extension still reads.

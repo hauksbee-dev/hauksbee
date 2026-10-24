@@ -122,9 +122,9 @@ pub use profile::{LoadProfile, Segment};
 pub use schema::{
     abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, BiasLevel, BiasNeed, CapGrade,
     CapSide, ComponentKind, Doubt, DoubtArea, DriveSelect, EnvelopeSeverity, ModelCoverage,
-    ModelEntry, ModelSourceReference, OperatingEnvelope, OutputDrive, OutputLevel, OutputPoint,
-    Params, PeripheralPower, PeripheralSpec, PinBias, ResetSpec, StrapInternalPull, StrapLevel,
-    StrapPin, SupplyCap,
+    ModelEntry, ModelSourceReference, NamedPeripheral, OperatingEnvelope, OutputDrive, OutputLevel,
+    OutputPoint, Params, PeripheralPower, PeripheralSpec, PinBias, ResetSpec, StrapInternalPull,
+    StrapLevel, StrapPin, SupplyCap,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,

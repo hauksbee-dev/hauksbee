@@ -44,6 +44,7 @@ pub fn emit_selected(
         lib,
         reader_notes,
         inputs,
+        firmware: cfg.firmware.as_deref(),
     };
     let mode = crate::reports::OutputMode::from_flags(cfg.json, cfg.plain);
     let prebound = &mut artifacts.prebound;
