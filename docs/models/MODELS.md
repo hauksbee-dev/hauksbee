@@ -899,6 +899,16 @@ crystal's own figures as params: `cl_f` (specified load capacitance), `c0_f`
 (motional capacitance, when printed). Each figure comes from the crystal's
 datasheet, which the card's `[models.source]` cites with its sha256.
 
+`startup_s` is the crystal's start-up time, enable to usable oscillation, when the
+datasheet prints one. The co-simulation holds the clock the crystal feeds invalid
+that long: a ready flag the oscillator raises itself (STM32 `HSERDY`) waits the
+stated time, and firmware that trusts a fixed delay shorter than it (the RP2040's
+`XOSC_STARTUP.DELAY`) is halted at the switch, with a `clock not ready` finding
+naming the crystal, its start-up and the firmware's wait. Without the field a
+crystal takes a class default marked assumed: 1 ms for an MHz crystal (the figure
+the RP2040 datasheet s2.16.3 gives for its 12 MHz reference-design crystal) and
+1 s for a 32.768 kHz tuning fork.
+
 A ground-referenced adjustable regulator or converter card may state `ifb_a`, the
 feedback pin's own current *into* the pin (signed, as the datasheet prints it). It
 flows on through the divider's top resistor and moves the rail by `ifb_a * Rtop`,

@@ -76,7 +76,8 @@ pub mod soc;
 
 pub use hostserial::{HostSerial, HostSerialStats, HostSerialTransport, PeerEvent};
 pub use traits::{
-    ExecutionProbe, I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent, PC_SAMPLE_DISTINCT_CAP,
+    ClockFault, CrystalStartup, ExecutionProbe, I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent,
+    PC_SAMPLE_DISTINCT_CAP,
 };
 
 use std::path::{Path, PathBuf};

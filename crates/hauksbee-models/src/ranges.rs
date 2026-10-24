@@ -120,6 +120,15 @@ pub const ROWS: &[Row] = &[
         (1e-12, 100e-12),
         "a crystal's specified load capacitance",
     ),
+    // A crystal's start-up time: microseconds for a fast MHz crystal, seconds
+    // for a 32.768 kHz tuning fork.
+    row(
+        "startup_s",
+        "s",
+        NonNegative,
+        (1e-6, 10.0),
+        "a crystal's start-up time",
+    ),
     row(
         "c0_f",
         "F",

@@ -1547,14 +1547,14 @@ impl Scheduler {
                     let backend = binding.backend.clone();
                     let reference = binding.reference.clone();
                     let requested_part = binding.requested_part.clone();
-                    let external_clock = binding.clock.external_present();
+                    let board_clock = binding.clock.clone();
                     let firmware_path = firmware.map(std::path::Path::to_path_buf);
                     let clock = clock.clone();
                     let (core, state) = crate::boot::build_core(&spec, &resolved, move |strap| {
                         instantiate_core(
                             &backend,
                             (&reference, &requested_part),
-                            external_clock,
+                            &board_clock,
                             firmware_path.as_deref(),
                             &clock,
                             strap.as_ref(),
@@ -5648,6 +5648,7 @@ impl Scheduler {
                     supply_v: m.rails.supply_v(),
                     clock: m.binding.clock.clone(),
                     external_clock_modelled: m.core.external_clock_modelled(),
+                    clock_fault: m.core.clock_fault(),
                 };
                 let mut evidence = crate::execution::ExecutionEvidence::with_symbols(
                     &m.binding.reference,
@@ -7716,7 +7717,7 @@ fn instantiate_mcu_with_strap(
     instantiate_core(
         &binding.backend,
         (&binding.reference, &binding.requested_part),
-        binding.clock.external_present(),
+        &binding.clock,
         firmware,
         clock,
         strap,
@@ -7728,7 +7729,7 @@ fn instantiate_mcu_with_strap(
 fn instantiate_core(
     backend: &str,
     (reference, requested_part): (&str, &str),
-    external_clock: bool,
+    board_clock: &hauksbee_bind::mcu_clock::McuClock,
     firmware: Option<&std::path::Path>,
     clock: &AvrClockPlan,
     strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
@@ -7745,7 +7746,7 @@ fn instantiate_core(
     }
 
     let mut core: Box<dyn Mcu + Send> = match BackendId::parse(backend) {
-        Some(BackendId::Renode(part)) => instantiate_renode(part, external_clock)?,
+        Some(BackendId::Renode(part)) => instantiate_renode(part, board_clock)?,
         Some(BackendId::Qemu(part)) => instantiate_qemu(part, firmware, strap)?,
         Some(BackendId::None(family)) => {
             // The binder recognized the MCU family but knows no emulator models
@@ -8540,10 +8541,22 @@ fn normalise_part(s: &str) -> String {
 #[cfg(feature = "renode")]
 fn instantiate_renode(
     part: &str,
-    external_clock_present: bool,
+    board_clock: &hauksbee_bind::mcu_clock::McuClock,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     use hauksbee_mcu::RenodeBackend;
-    let config = resolve_renode_config(part)?.with_external_clock_present(external_clock_present);
+    // The crystal's start-up time (card-stated, or the class default marked
+    // assumed): the readiness model holds the clock invalid that long.
+    let startup = board_clock
+        .crystal_startup
+        .as_ref()
+        .map(|s| hauksbee_mcu::CrystalStartup {
+            reference: s.reference.clone(),
+            startup_us: s.startup_us,
+            stated: !s.assumed,
+        });
+    let config = resolve_renode_config(part)?
+        .with_external_clock_present(board_clock.external_present())
+        .with_crystal_startup(startup);
     Ok(Box::new(RenodeBackend::new(config)?))
 }
 
@@ -8668,7 +8681,7 @@ pub fn backend_reports_drive_direction(backend: &str) -> bool {
 #[cfg(not(feature = "renode"))]
 fn instantiate_renode(
     _part: &str,
-    _external_clock_present: bool,
+    _board_clock: &hauksbee_bind::mcu_clock::McuClock,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `renode` feature; \

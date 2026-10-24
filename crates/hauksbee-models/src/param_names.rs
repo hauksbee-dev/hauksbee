@@ -246,6 +246,9 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "cl_f",
             "c0_f",
             "c1_f",
+            // A crystal's start-up time, from enable to usable oscillation
+            // (the co-sim holds the core clock invalid that long).
+            "startup_s",
         ],
         ComponentKind::Diode => DIODE,
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => BJT,

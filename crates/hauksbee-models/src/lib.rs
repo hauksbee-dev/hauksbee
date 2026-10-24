@@ -60,6 +60,7 @@ mod check;
 pub mod chip_size;
 pub mod companion_docs;
 mod conventions;
+pub mod crystal;
 pub mod datasheet;
 pub mod datasheet_discovery;
 pub mod datasheet_fetch;

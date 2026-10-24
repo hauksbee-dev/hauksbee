@@ -110,6 +110,10 @@ pub struct Stall {
 /// begins; the boot annotation recognises it by this.
 pub const EXTERNAL_CLOCK_STALL_PREFIX: &str = "the board fits no crystal or oscillator";
 
+/// How the blocker for a core switched onto a crystal that had not started
+/// yet begins.
+pub const CLOCK_NOT_READY_PREFIX: &str = "clock not ready";
+
 /// Evidence that the firmware executed on one MCU during the run.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct ExecutionEvidence {
@@ -170,6 +174,12 @@ pub struct ExecutionEvidence {
     #[serde(skip)]
     #[schemars(skip)]
     pub stalled_on_external_clock: bool,
+    /// The firmware took the oscillator as ready before the board's crystal
+    /// had started, and the core was halted there: the bench headline's short
+    /// form. The full sentence is in [`Self::blockers`].
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub clock_not_ready: Option<String>,
 }
 
 /// Board-side readings for one MCU, gathered by the scheduler.
@@ -186,6 +196,9 @@ pub struct BoardReadings {
     /// so a firmware wait on the oscillator stalls on a board without one as on
     /// silicon. Without it a missing crystal is invisible in the run.
     pub external_clock_modelled: bool,
+    /// The firmware read the crystal oscillator as ready before the crystal
+    /// had started ([`hauksbee_mcu::Mcu::clock_fault`]).
+    pub clock_fault: Option<hauksbee_mcu::ClockFault>,
 }
 
 impl ExecutionEvidence {
@@ -307,6 +320,11 @@ impl ExecutionEvidence {
         if stalled_on_external_clock {
             blockers.push(external_clock_blocker(&clock.detail));
         }
+        let clock_not_ready = board.clock_fault.as_ref().map(|f| {
+            let (sentence, headline) = clock_not_ready_blocker(f, &clock);
+            blockers.push(sentence);
+            headline
+        });
         Self {
             mcu_ref: mcu_ref.to_string(),
             backend: backend.to_string(),
@@ -330,8 +348,42 @@ impl ExecutionEvidence {
             blockers,
             boot: None,
             stalled_on_external_clock,
+            clock_not_ready,
         }
     }
+}
+
+/// The blocker sentence and bench headline for firmware that switched onto
+/// a crystal before it had started. Names the oscillator, the firmware's wait,
+/// the crystal and its start-up time with where that came from (its card, or
+/// the class default marked assumed).
+fn clock_not_ready_blocker(fault: &hauksbee_mcu::ClockFault, clock: &McuClock) -> (String, String) {
+    use hauksbee_models::crystal::format_us;
+    // Both are microsecond durations far below 2^53, so rounding is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let us = |v: f64| format_us(v.max(0.0).round() as u64);
+    let waited = us(fault.waited_us);
+    let needed = us(fault.needed_us);
+    let (crystal, basis) = clock.crystal_startup.as_ref().map_or_else(
+        || ("the board's crystal".to_string(), String::new()),
+        |s| {
+            (
+                format!("crystal {}", s.reference),
+                format!(" ({})", s.basis),
+            )
+        },
+    );
+    let sentence = format!(
+        "{CLOCK_NOT_READY_PREFIX}: the firmware took the {osc} oscillator as ready \
+         {waited} after enabling it, but {crystal} needs {needed} to start{basis}; \
+         the clock it switched to was not oscillating yet, so on silicon the core \
+         glitches or stops there, and the run halted it. Make the firmware's \
+         oscillator start-up delay at least {needed}",
+        osc = fault.oscillator,
+    );
+    let headline =
+        format!("{CLOCK_NOT_READY_PREFIX}: {crystal} needs {needed}, the firmware waited {waited}");
+    (sentence, headline)
 }
 
 /// The blocker for a core that never ran because the firmware waits for an
@@ -636,6 +688,7 @@ mod tests {
             supply_v: Some(3.3),
             clock: McuClock::default(),
             external_clock_modelled: false,
+            clock_fault: None,
         }
     }
 
@@ -723,6 +776,57 @@ mod tests {
             ..McuClock::default()
         };
         assert!(!run(false, true, crystal).stalled_on_external_clock);
+    }
+
+    /// A core the backend halted because the firmware switched onto a crystal
+    /// that had not started is not eligible, and the blocker names the
+    /// crystal, its start-up and its basis, and the firmware's wait; with no
+    /// fault the same run stays eligible.
+    #[test]
+    fn a_premature_crystal_switch_blocks_and_names_the_cause() {
+        let crystal = McuClock {
+            kind: ClockKind::Crystal,
+            crystal_startup: Some(hauksbee_models::crystal::CrystalStartup {
+                reference: "Y1".into(),
+                startup_us: 10_000,
+                assumed: false,
+                basis: "card xtal_10ms".into(),
+            }),
+            ..McuClock::default()
+        };
+        let run = |fault: Option<hauksbee_mcu::ClockFault>| {
+            ExecutionEvidence::new(
+                "U1",
+                "renode:rp2040",
+                probe(Some(true), &[]),
+                0,
+                &BTreeMap::new(),
+                BoardReadings {
+                    clock: crystal.clone(),
+                    external_clock_modelled: true,
+                    clock_fault: fault,
+                    ..board(Observed::No, Observed::Yes)
+                },
+            )
+        };
+        let e = run(Some(hauksbee_mcu::ClockFault {
+            oscillator: "xosc".into(),
+            waited_us: 1_003.4,
+            needed_us: 10_000.0,
+        }));
+        assert!(!e.firmware_pass_eligible, "{e:?}");
+        let b = e
+            .blockers
+            .iter()
+            .find(|b| b.starts_with(CLOCK_NOT_READY_PREFIX))
+            .unwrap_or_else(|| panic!("{e:?}"));
+        for needle in ["xosc", "1.003 ms", "crystal Y1", "10 ms", "card xtal_10ms"] {
+            assert!(b.contains(needle), "{needle}: {b}");
+        }
+        assert!(e.clock_not_ready.is_some());
+        let ok = run(None);
+        assert!(ok.firmware_pass_eligible, "{:?}", ok.blockers);
+        assert!(ok.clock_not_ready.is_none());
     }
 
     #[test]

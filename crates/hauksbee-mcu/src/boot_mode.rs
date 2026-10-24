@@ -535,6 +535,10 @@ impl Mcu for DeferredMcu {
         self.core().external_clock_modelled()
     }
 
+    fn clock_fault(&mut self) -> Option<crate::traits::ClockFault> {
+        self.core_mut().clock_fault()
+    }
+
     fn clock_host_paced(&self) -> bool {
         self.core().clock_host_paced()
     }

@@ -270,6 +270,8 @@ mod verdict_contract;
 mod waiver_gate;
 #[path = "watchdog_coverage_surfaces.rs"]
 mod watchdog_coverage_surfaces;
+#[path = "xosc_startup_cosim.rs"]
+mod xosc_startup_cosim;
 #[path = "zero_ohm_jumper.rs"]
 mod zero_ohm_jumper;
 #[path = "zero_ohm_link.rs"]

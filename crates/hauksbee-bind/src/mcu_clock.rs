@@ -49,6 +49,11 @@ pub struct McuClock {
     /// bare part number does not). The AVR co-sim runs a crystal-fused core at
     /// this clock.
     pub crystal_hz: Option<u64>,
+    /// How long the fitted crystal takes to start, from its card or the class
+    /// default marked assumed, when the verdict is [`ClockKind::Crystal`]. The
+    /// co-sim holds the core clock invalid that long after the firmware enables
+    /// the oscillator.
+    pub crystal_startup: Option<hauksbee_models::crystal::CrystalStartup>,
 }
 
 impl McuClock {
@@ -79,6 +84,7 @@ impl McuClock {
                 "module-internal {rate}clock source declared by the module card ({source})"
             ),
             crystal_hz: hz,
+            crystal_startup: None,
         }
     }
 
@@ -87,6 +93,25 @@ impl McuClock {
             kind,
             detail,
             crystal_hz: None,
+            crystal_startup: None,
+        }
+    }
+
+    /// The verdict for crystal `c` fitted across the oscillator pins.
+    fn crystal(cb: &ClockBoard<'_>, c: &Component, detail: String) -> Self {
+        let hz = crystal_hz(&c.value);
+        // The frequency from the value field, a whole-hertz figure far below 2^52.
+        #[allow(clippy::cast_precision_loss)]
+        let startup = hauksbee_models::crystal::crystal_startup(
+            &c.reference,
+            (cb.crystal_card)(c).as_ref(),
+            hz.map(|hz| hz as f64),
+        );
+        Self {
+            kind: ClockKind::Crystal,
+            detail,
+            crystal_hz: hz,
+            crystal_startup: Some(startup),
         }
     }
 }
@@ -104,6 +129,8 @@ pub(crate) struct ClockBoard<'a> {
     /// A two-pad resistor, the series drive-limiting part some oscillators
     /// put between an oscillator pin and the crystal.
     pub is_resistor: &'a dyn Fn(&Component) -> bool,
+    /// The card a fitted crystal binds to, if any (its start-up time).
+    pub crystal_card: &'a dyn Fn(&Component) -> Option<hauksbee_models::ModelEntry>,
 }
 
 /// `(is_output, is_low_speed)` for a pin whose role/name marks an oscillator pin.
@@ -185,7 +212,7 @@ pub(crate) fn classify(
     pad_roles: &HashMap<String, String>,
     internal: Option<&str>,
 ) -> McuClock {
-    use ClockKind::{Broken, Crystal, External, Unknown};
+    use ClockKind::{Broken, External, Unknown};
     let (inputs, outputs) = main_oscillator_pins(mcu, pad_roles, cb.node_of);
     let Some(input) = inputs.first() else {
         return McuClock::of(Unknown, "no core oscillator pins identified".to_string());
@@ -236,16 +263,14 @@ pub(crate) fn classify(
         .iter()
         .find(|c| touches(c, in_node) && touches(c, out_node))
     {
-        return McuClock {
-            crystal_hz: crystal_hz(&c.value),
-            ..McuClock::of(
-                Crystal,
-                format!(
-                    "{} {} across {} and {out_label}",
-                    c.reference, c.value, input.label
-                ),
-            )
-        };
+        return McuClock::crystal(
+            cb,
+            c,
+            format!(
+                "{} {} across {} and {out_label}",
+                c.reference, c.value, input.label
+            ),
+        );
     }
     if let Some(clock) = crystal_through_series(
         cb,
@@ -352,16 +377,14 @@ fn crystal_through_series(
             let c = crystals
                 .iter()
                 .find(|c| touches(c, near) && touches(c, Some(far)))?;
-            Some(McuClock {
-                crystal_hz: crystal_hz(&c.value),
-                ..McuClock::of(
-                    ClockKind::Crystal,
-                    format!(
-                        "{} {} across {near_label} and {far_label} (through series {} {})",
-                        c.reference, c.value, r.reference, r.value
-                    ),
-                )
-            })
+            Some(McuClock::crystal(
+                cb,
+                c,
+                format!(
+                    "{} {} across {near_label} and {far_label} (through series {} {})",
+                    c.reference, c.value, r.reference, r.value
+                ),
+            ))
         })
 }
 

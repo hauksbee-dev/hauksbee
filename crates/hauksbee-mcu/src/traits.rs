@@ -122,6 +122,37 @@ pub struct ExecutionProbe {
     pub boot_rom_console: bool,
 }
 
+/// The bound board's crystal and how long it takes to start, handed to a
+/// backend that models oscillator readiness so the clock it feeds stays
+/// invalid until the crystal has really started.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CrystalStartup {
+    /// Board reference of the crystal (`Y1`).
+    pub reference: String,
+    /// Enable-to-usable-oscillation time, in microseconds.
+    pub startup_us: u64,
+    /// Whether the crystal's card states the time. A stated time replaces the
+    /// part descriptor's typical start-up for a ready flag the oscillator
+    /// raises itself (STM32 `HSERDY`); an assumed class default does not, so
+    /// it never makes a board slower than the descriptor already models.
+    pub stated: bool,
+}
+
+/// Firmware took an oscillator as ready before its crystal had started.
+///
+/// It trusted a fixed delay (the RP2040 `XOSC_STARTUP.DELAY` counter) shorter
+/// than the crystal's start-up time, and switched a clock onto it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClockFault {
+    /// The descriptor's name for the oscillator (`xosc`).
+    pub oscillator: String,
+    /// How long the oscillator had been enabled when the firmware read it as
+    /// ready, in microseconds: the firmware's effective wait.
+    pub waited_us: f64,
+    /// The crystal's start-up time, in microseconds.
+    pub needed_us: f64,
+}
+
 /// Cap on distinct program counters a backend remembers for
 /// [`ExecutionProbe::distinct_pcs`]; enough to tell a loop from a stuck core.
 pub const PC_SAMPLE_DISTINCT_CAP: usize = 256;
@@ -657,6 +688,14 @@ pub trait Mcu {
     /// does.
     fn external_clock_modelled(&self) -> bool {
         false
+    }
+
+    /// The first time the firmware read an oscillator as ready before its
+    /// crystal had started, or `None`. A backend that models it halts the core
+    /// there: the clock it switched to is not oscillating yet, so on silicon
+    /// the core glitches or stops instead of running on. Read at report time.
+    fn clock_fault(&mut self) -> Option<ClockFault> {
+        None
     }
 
     /// Whether this core's simulated time is credited from HOST wall-clock

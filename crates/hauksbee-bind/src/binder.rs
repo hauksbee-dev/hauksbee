@@ -786,6 +786,11 @@ pub fn bind_board_driven(
     let fitted = |c: &Component| AssemblyState::of(c).is_present();
     let is_crystal = |c: &Component| fitted_crystal(c, lib);
     let is_resistor = |c: &Component| c.pins.len() == 2 && passive_letter(c) == Some('R');
+    let crystal_card = |c: &Component| {
+        AssemblyState::of(c)
+            .fitted()
+            .and_then(|part| resolve(lib, part).model)
+    };
     let clock_board = ClockBoard {
         board,
         node_of: &node_of,
@@ -794,6 +799,7 @@ pub fn bind_board_driven(
         fitted: &fitted,
         is_crystal: &is_crystal,
         is_resistor: &is_resistor,
+        crystal_card: &crystal_card,
     };
     for mcu in &mut mcus {
         let Some(comp) = board
