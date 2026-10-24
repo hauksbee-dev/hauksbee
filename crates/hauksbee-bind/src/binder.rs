@@ -3361,12 +3361,7 @@ const ATMEGA328P_DIP28_PINS: [(&str, &str); 28] = [
 /// `Manufacturer_No` is no evidence and must not hide it.
 #[must_use]
 pub fn component_mpn(comp: &Component) -> Option<String> {
-    (comp.properties.iter())
-        .find(|(k, v)| k == hauksbee_extract::bom::MPN_PROPERTY && !v.trim().is_empty())
-        .map(|(_, v)| v.trim())
-        .or_else(|| mpn_properties(comp).next())
-        .map(str::to_string)
-        .or_else(|| non_empty(&comp.value))
+    hauksbee_extract::bom::component_mpn(comp)
 }
 
 /// The component's non-empty manufacturer-part-number fields, in board order.

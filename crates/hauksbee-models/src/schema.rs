@@ -442,6 +442,15 @@ pub struct XtalIntCap {
     /// Largest on-die capacitance on each pad (farads), when the datasheet gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_f: Option<f64>,
+    /// Whether the datasheet's figure already contains the chip's own pin
+    /// capacitance, so that only the board's trace remains to be assumed on top
+    /// of it. The crystal check adds a 3 to 5 pF stray for the pin and the trace
+    /// of a discrete oscillator; a datasheet that states the whole load as one
+    /// figure and allows only a few pF more from the board (the Si5351's 6 to
+    /// 10 pF) would be counted twice, so such a card sets this and the check
+    /// assumes a trace-only stray instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub includes_pin_capacitance: bool,
     /// The datasheet table and page this is read from.
     pub basis: String,
 }

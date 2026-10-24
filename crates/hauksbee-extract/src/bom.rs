@@ -1095,6 +1095,30 @@ pub fn is_mpn_property_key(key: &str) -> bool {
     answer
 }
 
+/// A component's likely manufacturer part number, as model matching uses it.
+///
+/// A part number a BOM supplied (the reserved [`MPN_PROPERTY`] key) wins over the
+/// heuristic scan, because the scan cannot tell a manufacturer part number from a
+/// distributor code; the scan takes the first NON-EMPTY MPN field (an empty `MPN`
+/// ahead of a filled `Manufacturer_No` is no evidence). With no field at all it
+/// falls back to the value, which is what most `mpn_re` rules are written for.
+/// The binder and the card-less checks both ask this, so they read one part
+/// number.
+#[must_use]
+pub fn component_mpn(comp: &crate::Component) -> Option<String> {
+    let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+    (comp.properties.iter())
+        .find(|(k, v)| k == MPN_PROPERTY && !v.trim().is_empty())
+        .and_then(|(_, v)| non_empty(v))
+        .or_else(|| {
+            comp.properties
+                .iter()
+                .filter(|(k, _)| is_mpn_property_key(k))
+                .find_map(|(_, v)| non_empty(v))
+        })
+        .or_else(|| (!comp.value.trim().is_empty()).then(|| comp.value.clone()))
+}
+
 /// [`is_mpn_property_key`] without the memo.
 fn mpn_property_key_uncached(key: &str) -> bool {
     let key = normalise_header(&key.replace('#', " no "));

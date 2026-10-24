@@ -325,42 +325,149 @@ mod tests {
     /// crystal needs the 2 pF of external capacitance the datasheet allows.
     #[test]
     fn a_si5351s_programmable_crystal_load_is_read_from_its_card() {
-        let on_xa_xb = |value: &str, part_no: &str, cap: &str| {
-            let mut y1 = part("Y1", value, &[("1", 1), ("2", 2)]);
-            y1.footprint = "Crystal:Crystal_SMD_3215-2Pin".into();
-            board(
-                &[(1, "XA"), (2, "XB"), (3, "GND")],
-                vec![
-                    part("U19", part_no, &[("1", 1), ("2", 2)]),
-                    y1,
-                    part("C1", cap, &[("1", 1), ("2", 3)]),
-                    part("C2", cap, &[("1", 2), ("2", 3)]),
-                ],
-            )
+        let qfn20 = "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.6x2.6mm";
+        let driver_caps = |b: &ExtractedBoard| {
+            crystal_cards(b, &ModelLibrary::builtin())
+                .get("Y1")
+                .and_then(|f| f.driver_caps.clone())
         };
-        let lib = ModelLibrary::builtin();
-        let b = on_xa_xb("25MHz 10pF", "SI5351C", "2p");
-        match crystal_cards(&b, &lib)["Y1"].driver_caps.clone() {
+        let b = si5351_board("25MHz 10pF", "SI5351C", qfn20, ["1", "2"], Some("2p"));
+        match driver_caps(&b) {
             Some(IntegratedCaps::Range {
                 lo_pf,
                 hi_pf,
+                pin_cap_included,
                 basis,
             }) => {
                 assert!((lo_pf - 12.0).abs() < 1e-9 && (hi_pf - 20.0).abs() < 1e-9);
+                assert!(
+                    pin_cap_included,
+                    "the 6-10 pF CL contains the pin capacitance"
+                );
                 assert!(basis.contains("AN619") && basis.contains("p.60"), "{basis}");
+                // The data sheet and AN619 disagree about a 0 pF setting; the card says so.
+                assert!(basis.contains("NOT AGREED"), "{basis}");
             }
             other => panic!("Si5351 range expected, got {other:?}"),
         }
         assert!(engine_findings(&b).is_empty(), "{:?}", engine_findings(&b));
-        // Each version of the 20-pin QFN carries the same oscillator.
-        for part_no in ["SI5351A-B-GM", "SI5351B-B-GM", "Si5351C-B-GM"] {
-            let b = on_xa_xb("25MHz 10pF", part_no, "2p");
+        // Each version of the 20-pin QFN carries the same oscillator, whether the
+        // variant is in the value or the part number.
+        for part_no in [
+            "SI5351A-B-GM",
+            "SI5351B-B-GM",
+            "Si5351C-B-GM",
+            "Si5351C-B-GMR",
+        ] {
+            let b = si5351_board("25MHz 10pF", part_no, qfn20, ["1", "2"], Some("2p"));
             assert!(engine_findings(&b).is_empty(), "{part_no}");
         }
-        assert!(engine_findings(&on_xa_xb("25MHz 12pF", "SI5351C", "4p")).is_empty());
-        let heavy = engine_findings(&on_xa_xb("25MHz 6pF", "SI5351C", "22p"));
+        assert!(engine_findings(&si5351_board(
+            "25MHz 12pF",
+            "SI5351C",
+            qfn20,
+            ["1", "2"],
+            Some("4p")
+        ))
+        .is_empty());
+        let heavy = engine_findings(&si5351_board(
+            "25MHz 6pF",
+            "SI5351C",
+            qfn20,
+            ["1", "2"],
+            Some("22p"),
+        ));
         assert_eq!(heavy.len(), 1, "{heavy:?}");
         assert!(heavy[0].message.contains("on-chip per pin"));
+        // A 6 pF crystal with no external caps is the supported setup (Table 8
+        // note 1): the chip's own 6 pF setting is the load.
+        assert!(engine_findings(&si5351_board(
+            "25MHz 6pF",
+            "SI5351C",
+            qfn20,
+            ["1", "2"],
+            None
+        ))
+        .is_empty());
+    }
+
+    /// The Si5351 comes in three packages whose pad maps differ, so a card speaks
+    /// only where the footprint and the ordering code agree: XA/XB are pads 2/3 on
+    /// the 10-MSOP (pad 1 is VDD), 1/2 on both QFNs; a bare value with no footprint,
+    /// or an ordering code naming another package, gets no card rather than a
+    /// guessed pad map.
+    #[test]
+    fn a_si5351_card_speaks_only_for_the_package_it_describes() {
+        let driver_caps = |b: &ExtractedBoard| {
+            crystal_cards(b, &ModelLibrary::builtin())
+                .get("Y1")
+                .and_then(|f| f.driver_caps.clone())
+        };
+        let range = |b: &ExtractedBoard| matches!(driver_caps(b), Some(IntegratedCaps::Range { lo_pf, hi_pf, .. }) if (lo_pf - 12.0).abs() < 1e-9 && (hi_pf - 20.0).abs() < 1e-9);
+        let (qfn20, qfn16, msop10) = (
+            "Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.6x2.6mm",
+            "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm",
+            "Package_SO:MSOP-10_3x3mm_P0.5mm",
+        );
+        let on = |part_no: &str, footprint: &str, pads: [&str; 2]| {
+            si5351_board("25MHz 10pF", part_no, footprint, pads, Some("2p"))
+        };
+        // 10-MSOP: XA/XB on pads 2 and 3, and pad 1 (VDD) is no crystal pad.
+        assert!(range(&on("SI5351A", msop10, ["2", "3"])));
+        assert!(range(&on("Si5351A-B-GT", msop10, ["2", "3"])));
+        assert!(
+            !range(&on("SI5351A", msop10, ["1", "4"])),
+            "pads 1 and 4 are VDD and SCL"
+        );
+        // The MSOP exists in the A variant only.
+        assert!(!range(&on("SI5351B", msop10, ["2", "3"])));
+        assert!(!range(&on("SI5351C", msop10, ["2", "3"])));
+        // 16-QFN: ordering code -GM1, XA/XB on pads 1 and 2.
+        for part_no in ["SI5351A", "SI5351B-B-GM1", "Si5351C-B-GM1"] {
+            assert!(range(&on(part_no, qfn16, ["1", "2"])), "{part_no}");
+        }
+        // A code that names another package than the footprint matches neither card.
+        assert!(
+            !range(&on("Si5351A-B-GM", qfn16, ["1", "2"])),
+            "-GM is the 20-QFN"
+        );
+        assert!(
+            !range(&on("Si5351A-B-GM1", qfn20, ["1", "2"])),
+            "-GM1 is the 16-QFN"
+        );
+        assert!(
+            !range(&on("Si5351A-B-GT", qfn20, ["1", "2"])),
+            "-GT is the 10-MSOP"
+        );
+        assert!(!range(&on("Si5351A-B-GM", msop10, ["2", "3"])));
+        // A bare value on a footprint that does not say the package: no card.
+        assert!(!range(&on("SI5351A", "Package_SO:Generic", ["1", "2"])));
+        assert!(!range(&on("SI5351A", "", ["1", "2"])));
+        // The 20-pin QFN pad map is the 20-pin one: OEB is pad 7 there and pad 6 on
+        // the 16-QFN, so no crystal pad on the 16 may land on pad 7.
+        assert!(driver_caps(&on("SI5351C", qfn20, ["6", "7"])).is_none());
+    }
+
+    /// A Si5351 crystal board: `U19` of `part_no` in `footprint` with its XA/XB
+    /// on `pads`, a crystal `Y1` and `cap` to ground on each terminal (none when
+    /// `None`).
+    fn si5351_board(
+        crystal: &str,
+        part_no: &str,
+        footprint: &str,
+        pads: [&str; 2],
+        cap: Option<&str>,
+    ) -> ExtractedBoard {
+        let mut y1 = part("Y1", crystal, &[("1", 1), ("2", 2)]);
+        y1.footprint = "Crystal:Crystal_SMD_3215-2Pin".into();
+        let mut u19 = part("U19", part_no, &[(pads[0], 1), (pads[1], 2)]);
+        u19.footprint = footprint.into();
+        let mut parts = vec![u19, y1];
+        if let Some(cap) = cap {
+            parts.push(part("C1", cap, &[("1", 1), ("2", 3)]));
+            parts.push(part("C2", cap, &[("1", 2), ("2", 3)]));
+        }
+        board(&[(1, "XA"), (2, "XB"), (3, "GND")], parts)
     }
 
     /// An EFM32PG22 whose LFXO pads carry the 32.768 kHz crystal: the card says

@@ -914,8 +914,15 @@ oscillator = "LFXO"              # the oscillator's name in the datasheet
 pads = ["39", "40"]              # exactly two pads of [models.pins]: its XI and XO
 min_f = 4.0e-12                  # capacitance each pad has to ground, farads
 max_f = 24.5e-12
+includes_pin_capacitance = false # optional; true when the figure already counts the IC pin
 basis = "Datasheet <part> <version>, Table <n> (PDF p.<n>): <what the row says>"
 ```
+
+`includes_pin_capacitance = true` (needs a `min_f`/`max_f` range) says the printed
+load is the whole capacitance the IC puts on the pad, pin included. The check then
+assumes only 0-1 pF of trace stray instead of 3-5 pF, so the pin is not counted
+twice. The Si5351 cards set it (data sheet 4.1.1, p.15: under 2 pF of additional
+external load).
 
 `min_f`/`max_f` are the per-pad range the datasheet prints (give both or neither).
 Leave them out when the bank is software-tuned and the datasheet prints no range:
@@ -924,6 +931,14 @@ distinct pads that exist in `[models.pins]` and are not supply or ground roles, 
 `0.5 pF <= min_f <= max_f <= 100 pF`. When the datasheet gives the load across the
 pair rather than per pad (the Si5351's 6/8/10 pF CL), `min_f`/`max_f` are twice it:
 two equal pads in series present half of each.
+
+The Si5351 has one card per package and variant, because the pad numbers differ:
+`si5351{a,b,c}_qfn20` (20-QFN, data sheet Tables 14-16, pp.27-29),
+`si5351{a,b,c}_qfn16` (16-QFN, Tables 17-19, pp.30-32) and `si5351a_msop10`
+(10-MSOP, Table 20, p.33; A only). Each is matched on the ordering code (`-GM`,
+`-GM1`, `-GT`, Figure 24 p.34) and on a footprint that names its package, so a bare
+`SI5351A` value binds a card only where the footprint says which package it is;
+otherwise it binds none rather than a pin map that may be the wrong package's.
 
 A crystal card (`passive_class = "crystal"`, matched by `mpn_re`) carries the
 crystal's own figures as params: `cl_f` (specified load capacitance), `c0_f`
